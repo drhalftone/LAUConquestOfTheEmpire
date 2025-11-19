@@ -1,0 +1,137 @@
+#include "troopselectiondialog.h"
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QFrame>
+#include <QFont>
+
+TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
+                                           const QList<GamePiece*> &availableTroops,
+                                           const QList<int> &currentLegion,
+                                           QWidget *parent)
+    : QDialog(parent)
+    , m_troops(availableTroops)
+{
+    setWindowTitle(QString("Select Troops for %1").arg(leaderName));
+    setModal(true);
+    resize(400, 500);
+
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+
+    // Title
+    QLabel *titleLabel = new QLabel(QString("%1 - Select troops to move together:").arg(leaderName));
+    QFont titleFont = titleLabel->font();
+    titleFont.setPointSize(12);
+    titleFont.setBold(true);
+    titleLabel->setFont(titleFont);
+    mainLayout->addWidget(titleLabel);
+
+    // Instruction
+    QLabel *instructionLabel = new QLabel("Check the troops you want to move with this leader.\nTroops with 0 moves cannot move.");
+    instructionLabel->setWordWrap(true);
+    mainLayout->addWidget(instructionLabel);
+
+    mainLayout->addSpacing(10);
+
+    // Scroll area for checkboxes
+    QScrollArea *scrollArea = new QScrollArea();
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setMinimumHeight(300);
+
+    QWidget *scrollWidget = new QWidget();
+    QVBoxLayout *scrollLayout = new QVBoxLayout(scrollWidget);
+    scrollLayout->setSpacing(5);
+
+    // Create checkbox for each troop
+    for (GamePiece *piece : availableTroops) {
+        QString typeName;
+        switch (piece->getType()) {
+            case GamePiece::Type::Infantry:
+                typeName = "Infantry";
+                break;
+            case GamePiece::Type::Cavalry:
+                typeName = "Cavalry";
+                break;
+            case GamePiece::Type::Catapult:
+                typeName = "Catapult";
+                break;
+            case GamePiece::Type::Galley:
+                typeName = "Galley";
+                break;
+            case GamePiece::Type::General:
+                typeName = QString("General #%1").arg(static_cast<GeneralPiece*>(piece)->getNumber());
+                break;
+            case GamePiece::Type::Caesar:
+                typeName = "Caesar";
+                break;
+        }
+
+        int moves = piece->getMovesRemaining();
+        QString label = QString("%1 - ID:%2 (%3 move%4 left)")
+                            .arg(typeName)
+                            .arg(piece->getUniqueId())
+                            .arg(moves)
+                            .arg(moves == 1 ? "" : "s");
+
+        QCheckBox *checkbox = new QCheckBox(label);
+
+        // Pre-check if this piece is in the current legion
+        if (currentLegion.contains(piece->getUniqueId())) {
+            checkbox->setChecked(true);
+        }
+
+        // Disable checkbox if no moves remaining (but still show it)
+        if (moves == 0) {
+            checkbox->setStyleSheet("color: gray;");
+        }
+
+        m_checkboxes[piece->getUniqueId()] = checkbox;
+        scrollLayout->addWidget(checkbox);
+    }
+
+    scrollLayout->addStretch();
+    scrollWidget->setLayout(scrollLayout);
+    scrollArea->setWidget(scrollWidget);
+    mainLayout->addWidget(scrollArea);
+
+    // Separator
+    QFrame *separator = new QFrame();
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    mainLayout->addWidget(separator);
+
+    // Buttons
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    buttonLayout->addStretch();
+
+    QPushButton *okButton = new QPushButton("OK");
+    QPushButton *cancelButton = new QPushButton("Cancel");
+
+    okButton->setDefault(true);
+    okButton->setMinimumWidth(80);
+    cancelButton->setMinimumWidth(80);
+
+    connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+
+    buttonLayout->addWidget(okButton);
+    buttonLayout->addWidget(cancelButton);
+    buttonLayout->addStretch();
+
+    mainLayout->addLayout(buttonLayout);
+}
+
+QList<int> TroopSelectionDialog::getSelectedTroopIds() const
+{
+    QList<int> selectedIds;
+
+    for (auto it = m_checkboxes.begin(); it != m_checkboxes.end(); ++it) {
+        if (it.value()->isChecked()) {
+            selectedIds.append(it.key());
+        }
+    }
+
+    return selectedIds;
+}
