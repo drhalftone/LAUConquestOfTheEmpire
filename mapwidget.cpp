@@ -1,4 +1,5 @@
 #include "mapwidget.h"
+#include "mapgraph.h"
 #include "gamepiece.h"
 #include "player.h"
 #include <QPainter>
@@ -40,6 +41,7 @@ MapWidget::MapWidget(QWidget *parent)
     , m_highestWallet(0)
     , m_currentPlayerIndex(0)
     , m_isAtStartOfTurn(true)
+    , m_graph(nullptr)
 {
     // Create menu bar
     createMenuBar();
@@ -78,6 +80,15 @@ MapWidget::MapWidget(QWidget *parent)
 
     // Assign names and values to territories
     assignTerritoryNames();
+
+    // Build graph representation from grid (Phase 2: Dual system)
+    m_graph = new MapGraph();
+    buildGraphFromGrid();
+
+    // Debug: Verify graph was built correctly
+    qDebug() << "Graph built with" << m_graph->territoryCount() << "territories";
+    qDebug() << "Land territories:" << m_graph->countByType(TerritoryType::Land);
+    qDebug() << "Sea territories:" << m_graph->countByType(TerritoryType::Sea);
 
     // Place caesars on land tiles
     placeCaesars();
@@ -1803,4 +1814,108 @@ void MapWidget::updateRoads()
     }
 
     update();  // Redraw map to show roads
+}
+
+// === Graph-based Map System (Phase 2) ===
+
+void MapWidget::buildGraphFromGrid()
+{
+    if (!m_graph) {
+        return;
+    }
+
+    // Clear any existing graph data
+    m_graph->clear();
+
+    // Create a territory for each grid cell
+    for (int row = 0; row < ROWS; ++row) {
+        for (int col = 0; col < COLUMNS; ++col) {
+            // Generate territory name from grid position (format: "T_row_col")
+            QString territoryName = QString("T_%1_%2").arg(row).arg(col);
+
+            // Create territory
+            Territory territory;
+            territory.name = territoryName;
+
+            // Calculate centroid (center of the grid cell in pixel coordinates)
+            qreal centerX = (col + 0.5) * m_tileWidth;
+            qreal centerY = (row + 0.5) * m_tileHeight;
+            territory.centroid = QPointF(centerX, centerY);
+            territory.labelPosition = territory.centroid;
+
+            // Create rectangular boundary polygon for this cell
+            qreal left = col * m_tileWidth;
+            qreal right = (col + 1) * m_tileWidth;
+            qreal top = row * m_tileHeight;
+            qreal bottom = (row + 1) * m_tileHeight;
+
+            territory.boundary = QPolygonF()
+                << QPointF(left, top)
+                << QPointF(right, top)
+                << QPointF(right, bottom)
+                << QPointF(left, bottom);
+
+            // Set territory type based on grid tile type
+            if (row < m_tiles.size() && col < m_tiles[row].size()) {
+                territory.type = (m_tiles[row][col] == TileType::Sea)
+                    ? TerritoryType::Sea
+                    : TerritoryType::Land;
+            } else {
+                territory.type = TerritoryType::Land;
+            }
+
+            // Add optional color based on type
+            territory.color = (territory.type == TerritoryType::Sea)
+                ? QColor(100, 150, 200)  // Blue for sea
+                : QColor(200, 180, 150);  // Tan for land
+
+            // Add territory to graph
+            m_graph->addTerritory(territory);
+        }
+    }
+
+    // Now add edges between adjacent cells (4-directional: up, down, left, right)
+    for (int row = 0; row < ROWS; ++row) {
+        for (int col = 0; col < COLUMNS; ++col) {
+            QString currentTerritory = QString("T_%1_%2").arg(row).arg(col);
+
+            // Check right neighbor
+            if (col + 1 < COLUMNS) {
+                QString rightNeighbor = QString("T_%1_%2").arg(row).arg(col + 1);
+                m_graph->addEdge(currentTerritory, rightNeighbor);
+            }
+
+            // Check down neighbor
+            if (row + 1 < ROWS) {
+                QString downNeighbor = QString("T_%1_%2").arg(row + 1).arg(col);
+                m_graph->addEdge(currentTerritory, downNeighbor);
+            }
+        }
+    }
+}
+
+QString MapWidget::positionToTerritoryName(const Position &pos) const
+{
+    // Convert grid Position to territory name
+    if (pos.row >= 0 && pos.row < ROWS && pos.col >= 0 && pos.col < COLUMNS) {
+        return QString("T_%1_%2").arg(pos.row).arg(pos.col);
+    }
+    return QString();  // Invalid position
+}
+
+Position MapWidget::territoryNameToPosition(const QString &territoryName) const
+{
+    // Parse territory name format "T_row_col"
+    if (territoryName.startsWith("T_")) {
+        QStringList parts = territoryName.mid(2).split("_");
+        if (parts.size() == 2) {
+            bool ok1, ok2;
+            int row = parts[0].toInt(&ok1);
+            int col = parts[1].toInt(&ok2);
+            if (ok1 && ok2 && row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+                return Position{row, col};
+            }
+        }
+    }
+    return Position{-1, -1};  // Invalid territory name
 }

@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QMenuBar>
 #include "common.h"
+#include "mapgraph.h"
 
 // Forward declarations
 class Player;
@@ -102,6 +103,15 @@ public:
     bool isAtStartOfTurn() const { return m_isAtStartOfTurn; }
     void setAtStartOfTurn(bool atStart) { m_isAtStartOfTurn = atStart; }
 
+    // === Graph-based Map System (Phase 2) ===
+    // Converters between grid Position and graph territory names
+    QString positionToTerritoryName(const Position &pos) const;
+    Position territoryNameToPosition(const QString &territoryName) const;
+
+    // Access to graph (for future migration)
+    MapGraph* getGraph() { return m_graph; }
+    const MapGraph* getGraph() const { return m_graph; }
+
 public slots:
     void saveGame();
     void loadGame();
@@ -137,6 +147,9 @@ private:
     Piece* getPieceAt(const QPoint &pos, QChar player);
     QVector<Piece*> getPiecesAtPosition(const Position &pos, QChar player);
     void createMenuBar();
+
+    // Graph-based map system
+    void buildGraphFromGrid();  // Convert grid to graph representation
 
     QMenuBar *m_menuBar;
     QVector<QVector<TileType>> m_tiles;
@@ -174,6 +187,9 @@ private:
         int galley = 0;
     };
     QMap<QChar, QVector<QVector<TroopCounts>>> m_playerTroops;  // Maps player to 2D grid of troop counts
+
+    // Graph-based map system
+    MapGraph *m_graph;  // Graph representation of the map (coexists with grid during migration)
 };
 
 #endif // MAPWIDGET_H
