@@ -12,6 +12,7 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     mapwidget.cpp \
+    mapgraph.cpp \
     scorewindow.cpp \
     walletwindow.cpp \
     purchasedialog.cpp \
@@ -27,6 +28,7 @@ SOURCES += \
 HEADERS += \
     mainwindow.h \
     mapwidget.h \
+    mapgraph.h \
     scorewindow.h \
     walletwindow.h \
     purchasedialog.h \
