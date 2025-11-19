@@ -2037,29 +2037,15 @@ void PlayerInfoWidget::onEndTurnClicked()
     delete destructionDialog;
 
     // Calculate maximum cities player can purchase
-    // Count owned territories that are land and don't already have cities
+    // Count owned territories that don't already have cities
+    // Note: Owned territories are always land (sea territories can't be owned)
     int availableTerritoriesForCities = 0;
     const QList<QString> &ownedTerritories = currentPlayer->getOwnedTerritories();
     for (const QString &territoryName : ownedTerritories) {
         // Check if this territory already has a city
         QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
         if (citiesInTerritory.isEmpty()) {
-            // Find the position of this territory to check if it's a sea territory
-            bool isSea = false;
-            for (int row = 0; row < 8; ++row) {
-                for (int col = 0; col < 12; ++col) {
-                    if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                        isSea = m_mapWidget->isSeaTerritory(row, col);
-                        goto foundTerritoryForCityCount;
-                    }
-                }
-            }
-            foundTerritoryForCityCount:
-
-            // Only count land territories without cities
-            if (!isSea) {
-                availableTerritoriesForCities++;
-            }
+            availableTerritoriesForCities++;
         }
     }
     int maxCities = availableTerritoriesForCities;
@@ -2111,6 +2097,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         // Place cities one at a time
         for (int i = 0; i < citiesPurchased; ++i) {
             // Get list of owned territories without cities
+            // Note: Owned territories are always land (sea territories can't be owned)
             QStringList availableTerritories;
             const QList<QString> &ownedTerritories = currentPlayer->getOwnedTerritories();
 
@@ -2118,22 +2105,7 @@ void PlayerInfoWidget::onEndTurnClicked()
                 // Check if this territory already has a city
                 QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
                 if (citiesInTerritory.isEmpty()) {
-                    // Find the position of this territory to check if it's a sea territory
-                    bool isSea = false;
-                    for (int row = 0; row < 8; ++row) {
-                        for (int col = 0; col < 12; ++col) {
-                            if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                                isSea = m_mapWidget->isSeaTerritory(row, col);
-                                goto foundTerritory;  // Break out of nested loops
-                            }
-                        }
-                    }
-                    foundTerritory:
-
-                    // Only add land territories to the available list
-                    if (!isSea) {
-                        availableTerritories.append(territoryName);
-                    }
+                    availableTerritories.append(territoryName);
                 }
             }
 
@@ -2172,16 +2144,8 @@ void PlayerInfoWidget::onEndTurnClicked()
                 }
 
                 if (foundPosition) {
-                    // Validate that this is not a sea territory
-                    if (m_mapWidget->isSeaTerritory(cityPosition.row, cityPosition.col)) {
-                        QMessageBox::warning(this, "Cannot Place City",
-                            QString("Cannot place city in sea territory: %1").arg(selectedTerritory));
-                        // Don't break, let player try again with another territory
-                        i--; // Decrement to retry this city placement
-                        continue;
-                    }
-
                     // Create and add the city
+                    // Note: No need to check for sea territory - owned territories are always land
                     City *newCity = new City(currentPlayer->getId(), cityPosition, selectedTerritory, false, currentPlayer);
                     currentPlayer->addCity(newCity);
                     qDebug() << "Player" << currentPlayer->getId() << "placed city at" << selectedTerritory;
