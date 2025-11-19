@@ -15,6 +15,10 @@ PurchaseDialog::PurchaseDialog(QChar player,
                                const QList<FortificationOption> &fortificationOptions,
                                const QList<GalleyPlacementOption> &galleyOptions,
                                int currentGalleyCount,
+                               int availableInfantry,
+                               int availableCavalry,
+                               int availableCatapults,
+                               int availableGalleys,
                                QWidget *parent)
     : QDialog(parent)
     , m_player(player)
@@ -22,6 +26,10 @@ PurchaseDialog::PurchaseDialog(QChar player,
     , m_inflationMultiplier(inflationMultiplier)
     , m_totalSpent(0)
     , m_currentGalleyCount(currentGalleyCount)
+    , m_availableInfantry(availableInfantry)
+    , m_availableCavalry(availableCavalry)
+    , m_availableCatapults(availableCatapults)
+    , m_availableGalleys(availableGalleys)
     , m_cityOptions(cityOptions)
     , m_fortificationOptions(fortificationOptions)
     , m_galleyOptions(galleyOptions)
@@ -72,10 +80,15 @@ void PurchaseDialog::setupUI()
     troopsLayout->addWidget(new QLabel("Infantry:"), row, 0);
     m_infantrySpinBox = new QSpinBox();
     m_infantrySpinBox->setMinimum(0);
-    m_infantrySpinBox->setMaximum(999);
+    m_infantrySpinBox->setMaximum(m_availableInfantry);
     m_infantrySpinBox->setValue(0);
+    if (m_availableInfantry == 0) {
+        m_infantrySpinBox->setEnabled(false);
+        m_infantrySpinBox->setToolTip("No infantry pieces available in the game box");
+    }
     troopsLayout->addWidget(m_infantrySpinBox, row, 1);
     troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(INFANTRY_BASE_COST))), row, 2);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableInfantry)), row, 3);
     connect(m_infantrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
@@ -83,10 +96,15 @@ void PurchaseDialog::setupUI()
     troopsLayout->addWidget(new QLabel("Cavalry:"), row, 0);
     m_cavalrySpinBox = new QSpinBox();
     m_cavalrySpinBox->setMinimum(0);
-    m_cavalrySpinBox->setMaximum(999);
+    m_cavalrySpinBox->setMaximum(m_availableCavalry);
     m_cavalrySpinBox->setValue(0);
+    if (m_availableCavalry == 0) {
+        m_cavalrySpinBox->setEnabled(false);
+        m_cavalrySpinBox->setToolTip("No cavalry pieces available in the game box");
+    }
     troopsLayout->addWidget(m_cavalrySpinBox, row, 1);
     troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CAVALRY_BASE_COST))), row, 2);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCavalry)), row, 3);
     connect(m_cavalrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
@@ -94,10 +112,15 @@ void PurchaseDialog::setupUI()
     troopsLayout->addWidget(new QLabel("Catapults:"), row, 0);
     m_catapultSpinBox = new QSpinBox();
     m_catapultSpinBox->setMinimum(0);
-    m_catapultSpinBox->setMaximum(999);
+    m_catapultSpinBox->setMaximum(m_availableCatapults);
     m_catapultSpinBox->setValue(0);
+    if (m_availableCatapults == 0) {
+        m_catapultSpinBox->setEnabled(false);
+        m_catapultSpinBox->setToolTip("No catapult pieces available in the game box");
+    }
     troopsLayout->addWidget(m_catapultSpinBox, row, 1);
     troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CATAPULT_BASE_COST))), row, 2);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCatapults)), row, 3);
     connect(m_catapultSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
@@ -172,23 +195,32 @@ void PurchaseDialog::setupUI()
     // ===== GALLEYS SECTION =====
     if (!m_galleyOptions.isEmpty()) {
         QGroupBox *galleysGroup = new QGroupBox(
-            QString("Galleys (Naval Units) - You own %1/%2")
+            QString("Galleys (Naval Units) - You own %1/%2, %3 available in box")
             .arg(m_currentGalleyCount)
             .arg(MAX_GALLEYS)
+            .arg(m_availableGalleys)
         );
         QGridLayout *galleysLayout = new QGridLayout();
 
         // Calculate how many more galleys can be purchased
-        int maxPurchasable = qMax(0, MAX_GALLEYS - m_currentGalleyCount);
+        // Limited by both: player's max (6) and pieces available in the game box
+        int maxByPlayerLimit = qMax(0, MAX_GALLEYS - m_currentGalleyCount);
+        int maxPurchasable = qMin(maxByPlayerLimit, m_availableGalleys);
 
-        // Add info label if already at max
+        // Add info label if can't buy any
         if (maxPurchasable == 0) {
-            QLabel *maxLabel = new QLabel("You already have the maximum number of galleys (6).");
+            QString reason;
+            if (maxByPlayerLimit == 0) {
+                reason = "You already have the maximum number of galleys (6).";
+            } else if (m_availableGalleys == 0) {
+                reason = "No galley pieces available in the game box.";
+            }
+            QLabel *maxLabel = new QLabel(reason);
             QFont font = maxLabel->font();
             font.setBold(true);
             maxLabel->setFont(font);
             maxLabel->setStyleSheet("color: red;");
-            galleysLayout->addWidget(maxLabel, 0, 0, 1, 3);
+            galleysLayout->addWidget(maxLabel, 0, 0, 1, 4);
         }
 
         int galleyRow = (maxPurchasable == 0) ? 1 : 0;
@@ -205,7 +237,11 @@ void PurchaseDialog::setupUI()
             galleySpinBox->setValue(0);
             if (maxPurchasable == 0) {
                 galleySpinBox->setEnabled(false);
-                galleySpinBox->setToolTip("Maximum galley limit (6) already reached");
+                if (maxByPlayerLimit == 0) {
+                    galleySpinBox->setToolTip("Maximum galley limit (6) already reached");
+                } else {
+                    galleySpinBox->setToolTip("No galley pieces available in the game box");
+                }
             }
             connect(galleySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
             m_galleySpinboxes[galleySpinBox] = option;

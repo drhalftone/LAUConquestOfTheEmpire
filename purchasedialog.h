@@ -69,6 +69,10 @@ public:
                            const QList<FortificationOption> &fortificationOptions,
                            const QList<GalleyPlacementOption> &galleyOptions,
                            int currentGalleyCount,
+                           int availableInfantry,
+                           int availableCavalry,
+                           int availableCatapults,
+                           int availableGalleys,
                            QWidget *parent = nullptr);
 
     // Get the purchase result
@@ -87,6 +91,12 @@ private:
     int m_inflationMultiplier;
     int m_totalSpent;
     int m_currentGalleyCount;
+
+    // Available pieces in the game box
+    int m_availableInfantry;
+    int m_availableCavalry;
+    int m_availableCatapults;
+    int m_availableGalleys;
 
     // Base prices
     static const int MAX_GALLEYS = 6;

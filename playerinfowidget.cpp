@@ -2094,6 +2094,32 @@ void PlayerInfoWidget::onEndTurnClicked()
     // Get current galley count
     int currentGalleyCount = currentPlayer->getGalleys().size();
 
+    // Calculate available pieces in the game box
+    // Count how many pieces are currently in use across all players
+    int totalInfantry = 0;
+    int totalCavalry = 0;
+    int totalCatapults = 0;
+    int totalGalleys = 0;
+
+    for (Player *player : m_players) {
+        totalInfantry += player->getInfantry().size();
+        totalCavalry += player->getCavalry().size();
+        totalCatapults += player->getCatapults().size();
+        totalGalleys += player->getGalleys().size();
+    }
+
+    // Define total pieces available in the physical game (1984 Milton Bradley edition)
+    const int TOTAL_INFANTRY_PIECES = 60;    // Silver/generic infantry units
+    const int TOTAL_CAVALRY_PIECES = 30;     // Gold cavalry units
+    const int TOTAL_CATAPULT_PIECES = 20;    // Catapult pieces
+    const int TOTAL_GALLEY_PIECES = 36;      // Galley/ship pieces
+
+    // Calculate available pieces
+    int availableInfantry = qMax(0, TOTAL_INFANTRY_PIECES - totalInfantry);
+    int availableCavalry = qMax(0, TOTAL_CAVALRY_PIECES - totalCavalry);
+    int availableCatapults = qMax(0, TOTAL_CATAPULT_PIECES - totalCatapults);
+    int availableGalleys = qMax(0, TOTAL_GALLEY_PIECES - totalGalleys);
+
     // Open purchase dialog
     PurchaseDialog *purchaseDialog = new PurchaseDialog(
         currentPlayer->getId(),
@@ -2103,6 +2129,10 @@ void PlayerInfoWidget::onEndTurnClicked()
         fortificationOptions,
         galleyOptions,
         currentGalleyCount,
+        availableInfantry,
+        availableCavalry,
+        availableCatapults,
+        availableGalleys,
         this
     );
 
