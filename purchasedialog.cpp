@@ -178,15 +178,15 @@ void PurchaseDialog::setupUI()
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
 
-    QPushButton *doneButton = new QPushButton("Done - End Purchase Phase");
-    doneButton->setMinimumHeight(40);
-    QFont buttonFont = doneButton->font();
+    m_doneButton = new QPushButton("Done - End Purchase Phase");
+    m_doneButton->setMinimumHeight(40);
+    QFont buttonFont = m_doneButton->font();
     buttonFont.setPointSize(11);
     buttonFont.setBold(true);
-    doneButton->setFont(buttonFont);
-    connect(doneButton, &QPushButton::clicked, this, &QDialog::accept);
+    m_doneButton->setFont(buttonFont);
+    connect(m_doneButton, &QPushButton::clicked, this, &QDialog::accept);
 
-    buttonLayout->addWidget(doneButton);
+    buttonLayout->addWidget(m_doneButton);
     buttonLayout->addStretch();
 
     mainLayout->addLayout(buttonLayout);
@@ -220,13 +220,17 @@ void PurchaseDialog::updateTotals()
     m_spendingLabel->setText(QString("%1 talents").arg(m_totalSpent));
     m_remainingLabel->setText(QString("%1 talents").arg(remaining));
 
-    // Update colors
+    // Update colors and disable Done button if over budget
     if (remaining < 0) {
         m_remainingLabel->setStyleSheet("color: red; font-weight: bold;");
         m_spendingLabel->setStyleSheet("color: red; font-weight: bold;");
+        m_doneButton->setEnabled(false);
+        m_doneButton->setToolTip("Cannot complete purchase - spending exceeds available money!");
     } else {
         m_remainingLabel->setStyleSheet("color: green; font-weight: bold;");
         m_spendingLabel->setStyleSheet("color: blue; font-weight: bold;");
+        m_doneButton->setEnabled(true);
+        m_doneButton->setToolTip("");
     }
 
     // Update maximum values for all spinboxes based on remaining budget
@@ -236,8 +240,15 @@ void PurchaseDialog::updateTotals()
         if (price > 0) {
             int availableForThis = m_availableMoney - currentCostExcludingThis;
             int maxAffordable = availableForThis / price;
+            int currentValue = spinBox->value();
+
             spinBox->setMinimum(0);  // Ensure minimum stays at 0
             spinBox->setMaximum(qMax(0, maxAffordable));
+
+            // If current value exceeds new max, adjust it down
+            if (currentValue > maxAffordable) {
+                spinBox->setValue(qMax(0, maxAffordable));
+            }
         }
     };
 

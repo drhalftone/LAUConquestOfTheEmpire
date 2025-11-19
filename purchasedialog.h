@@ -5,6 +5,7 @@
 #include <QSpinBox>
 #include <QLabel>
 #include <QMap>
+#include <QPushButton>
 
 class PurchaseDialog : public QDialog
 {
@@ -66,6 +67,9 @@ private:
     QLabel *m_availableLabel;
     QLabel *m_spendingLabel;
     QLabel *m_remainingLabel;
+
+    // Done button (need access to enable/disable based on budget)
+    QPushButton *m_doneButton;
 
     int getCurrentPrice(int basePrice) const;
     void setupUI();
