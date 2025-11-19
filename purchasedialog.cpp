@@ -235,7 +235,9 @@ void PurchaseDialog::updateTotals()
 
     // Update maximum values for all spinboxes based on remaining budget
     // This prevents user from going over budget in the first place
-    auto updateSpinBoxMax = [this](QSpinBox *spinBox, int basePrice, int currentCostExcludingThis) {
+    bool anyValueAdjusted = false;
+
+    auto updateSpinBoxMax = [this, &anyValueAdjusted](QSpinBox *spinBox, int basePrice, int currentCostExcludingThis) {
         int price = getCurrentPrice(basePrice);
         if (price > 0) {
             int availableForThis = m_availableMoney - currentCostExcludingThis;
@@ -248,6 +250,7 @@ void PurchaseDialog::updateTotals()
             // If current value exceeds new max, adjust it down
             if (currentValue > maxAffordable) {
                 spinBox->setValue(qMax(0, maxAffordable));
+                anyValueAdjusted = true;
             }
         }
     };
@@ -275,4 +278,9 @@ void PurchaseDialog::updateTotals()
     m_galleySpinBox->blockSignals(false);
     m_citySpinBox->blockSignals(false);
     m_fortificationSpinBox->blockSignals(false);
+
+    // If any value was adjusted while signals were blocked, recalculate totals
+    if (anyValueAdjusted) {
+        updateTotals();
+    }
 }
