@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QFrame>
 #include <QFont>
+#include <QMessageBox>
 
 PurchaseDialog::PurchaseDialog(QChar player, int availableMoney, int inflationMultiplier,
                              int maxCities, int maxFortifications, bool canPurchaseGalleys, QWidget *parent)
@@ -184,7 +185,76 @@ void PurchaseDialog::setupUI()
     buttonFont.setPointSize(11);
     buttonFont.setBold(true);
     m_doneButton->setFont(buttonFont);
-    connect(m_doneButton, &QPushButton::clicked, this, &QDialog::accept);
+    connect(m_doneButton, &QPushButton::clicked, this, [this]() {
+        // Get all purchase quantities
+        int infantry = m_infantrySpinBox->value();
+        int cavalry = m_cavalrySpinBox->value();
+        int catapult = m_catapultSpinBox->value();
+        int galley = m_galleySpinBox->value();
+        int city = m_citySpinBox->value();
+        int fortification = m_fortificationSpinBox->value();
+
+        // Check if anything is being purchased
+        bool hasPurchases = (infantry > 0 || cavalry > 0 || catapult > 0 ||
+                            galley > 0 || city > 0 || fortification > 0);
+
+        if (!hasPurchases) {
+            // No purchases, just accept
+            accept();
+            return;
+        }
+
+        // Build summary message
+        QString summary = QString("Player %1 - Purchase Summary:\n\n").arg(m_player);
+
+        if (infantry > 0) {
+            summary += QString("  • Infantry: %1 (Cost: %2 talents)\n")
+                .arg(infantry)
+                .arg(infantry * getCurrentPrice(INFANTRY_BASE_COST));
+        }
+        if (cavalry > 0) {
+            summary += QString("  • Cavalry: %1 (Cost: %2 talents)\n")
+                .arg(cavalry)
+                .arg(cavalry * getCurrentPrice(CAVALRY_BASE_COST));
+        }
+        if (catapult > 0) {
+            summary += QString("  • Catapults: %1 (Cost: %2 talents)\n")
+                .arg(catapult)
+                .arg(catapult * getCurrentPrice(CATAPULT_BASE_COST));
+        }
+        if (galley > 0) {
+            summary += QString("  • Galleys: %1 (Cost: %2 talents)\n")
+                .arg(galley)
+                .arg(galley * getCurrentPrice(GALLEY_BASE_COST));
+        }
+        if (city > 0) {
+            summary += QString("  • Cities: %1 (Cost: %2 talents)\n")
+                .arg(city)
+                .arg(city * getCurrentPrice(CITY_BASE_COST));
+        }
+        if (fortification > 0) {
+            summary += QString("  • Fortifications: %1 (Cost: %2 talents)\n")
+                .arg(fortification)
+                .arg(fortification * getCurrentPrice(FORTIFICATION_BASE_COST));
+        }
+
+        summary += QString("\nTotal Cost: %1 talents\n").arg(m_totalSpent);
+        summary += QString("Remaining: %1 talents\n\n").arg(m_availableMoney - m_totalSpent);
+        summary += "Confirm these purchases?";
+
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this,
+            "Confirm Purchases",
+            summary,
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::Yes  // Default to Yes since they clicked Done
+        );
+
+        if (reply == QMessageBox::Yes) {
+            accept();
+        }
+        // If No, do nothing - dialog stays open
+    });
 
     buttonLayout->addWidget(m_doneButton);
     buttonLayout->addStretch();
