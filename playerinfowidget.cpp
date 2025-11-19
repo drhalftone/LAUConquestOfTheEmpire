@@ -2036,9 +2036,33 @@ void PlayerInfoWidget::onEndTurnClicked()
 
     delete destructionDialog;
 
-    // Calculate maximum cities and fortifications player can purchase
-    // Ensure maxCities is never negative (can happen if player has more cities than territories)
-    int maxCities = qMax(0, currentPlayer->getOwnedTerritoryCount() - currentPlayer->getCityCount());
+    // Calculate maximum cities player can purchase
+    // Count owned territories that are land and don't already have cities
+    int availableTerritoriesForCities = 0;
+    const QList<QString> &ownedTerritories = currentPlayer->getOwnedTerritories();
+    for (const QString &territoryName : ownedTerritories) {
+        // Check if this territory already has a city
+        QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
+        if (citiesInTerritory.isEmpty()) {
+            // Find the position of this territory to check if it's a sea territory
+            bool isSea = false;
+            for (int row = 0; row < 8; ++row) {
+                for (int col = 0; col < 12; ++col) {
+                    if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
+                        isSea = m_mapWidget->isSeaTerritory(row, col);
+                        goto foundTerritoryForCityCount;
+                    }
+                }
+            }
+            foundTerritoryForCityCount:
+
+            // Only count land territories without cities
+            if (!isSea) {
+                availableTerritoriesForCities++;
+            }
+        }
+    }
+    int maxCities = availableTerritoriesForCities;
 
     // Count unfortified cities
     int unfortifiedCities = 0;
