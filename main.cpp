@@ -164,67 +164,6 @@ int main(int argc, char *argv[])
     }
     */
 
-    // FOR TESTING ROADS: Create a chain of cities for Player A to test road movement
-    // ENABLED - comment out to disable road testing setup
-    if (players.size() >= 1) {
-        Player *playerA = players[0];
-        Position playerAHome = playerA->getHomeProvince();
-
-        // Define a chain of territories to the right of Player A's home
-        QVector<Position> cityChain;
-
-        // Start from Player A's home and create a horizontal chain of 4 cities
-        for (int i = 0; i < 4; ++i) {
-            Position cityPos = playerAHome;
-            cityPos.col = (playerAHome.col + i) % 12;  // Wrap around if needed
-            cityChain.append(cityPos);
-        }
-
-        // Add cities and claim territories for Player A
-        for (int i = 0; i < cityChain.size(); ++i) {
-            Position pos = cityChain[i];
-            QString territoryName = mapWidget->getTerritoryNameAt(pos.row, pos.col);
-
-            // Claim the territory
-            if (!territoryName.isEmpty() && !playerA->ownsTerritory(territoryName)) {
-                playerA->claimTerritory(territoryName);
-            }
-
-            // Add a city building at this position
-            City *city = new City(playerA->getId(), pos, territoryName);
-            playerA->addCity(city);
-
-            qDebug() << "Added city for Player A at" << pos.row << pos.col << territoryName;
-        }
-
-        // Also create a vertical branch from the second city to test road network
-        Position branchPos1 = cityChain[1];
-        branchPos1.row = (branchPos1.row + 1) % 8;  // One tile down
-        QString branchName1 = mapWidget->getTerritoryNameAt(branchPos1.row, branchPos1.col);
-        if (!branchName1.isEmpty() && !playerA->ownsTerritory(branchName1)) {
-            playerA->claimTerritory(branchName1);
-        }
-        City *branchCity1 = new City(playerA->getId(), branchPos1, branchName1);
-        playerA->addCity(branchCity1);
-        qDebug() << "Added branch city for Player A at" << branchPos1.row << branchPos1.col << branchName1;
-
-        Position branchPos2 = branchPos1;
-        branchPos2.row = (branchPos2.row + 1) % 8;  // One more tile down
-        QString branchName2 = mapWidget->getTerritoryNameAt(branchPos2.row, branchPos2.col);
-        if (!branchName2.isEmpty() && !playerA->ownsTerritory(branchName2)) {
-            playerA->claimTerritory(branchName2);
-        }
-        City *branchCity2 = new City(playerA->getId(), branchPos2, branchName2);
-        playerA->addCity(branchCity2);
-        qDebug() << "Added branch city for Player A at" << branchPos2.row << branchPos2.col << branchName2;
-
-        // Update roads to connect all the cities
-        mapWidget->updateRoads();
-
-        qDebug() << "Road testing setup complete! Player A now has a network of 6 cities connected by roads.";
-        qDebug() << "Right-click on Player A's Caesar or General to see road movement options.";
-    }
-
     // Update the map to show initial territory ownership
     mapWidget->update();
 
