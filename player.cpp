@@ -5,7 +5,7 @@ Player::Player(QChar id, const Position &homeProvince, const QString &homeProvin
     : QObject(parent)
     , m_id(id)
     , m_color(getColorForPlayer(id))
-    , m_wallet(0)
+    , m_wallet(100)  // Start each player with 100 talents
     , m_homeProvince(homeProvince)
     , m_homeProvinceName(homeProvinceName)
     , m_hasHomeFortifiedCity(true)  // Every player starts with a fortified city
