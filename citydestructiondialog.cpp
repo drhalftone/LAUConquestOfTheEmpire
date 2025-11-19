@@ -7,6 +7,7 @@
 #include <QFrame>
 #include <QScrollArea>
 #include <QGroupBox>
+#include <QMessageBox>
 
 CityDestructionDialog::CityDestructionDialog(QChar player, const QList<City*> &cities, QWidget *parent)
     : QDialog(parent)
@@ -148,7 +149,42 @@ void CityDestructionDialog::setupUI()
     confirmFont.setBold(true);
     confirmButton->setFont(confirmFont);
     confirmButton->setStyleSheet("background-color: #d9534f; color: white;");  // Red button for destructive action
-    connect(confirmButton, &QPushButton::clicked, this, &QDialog::accept);
+    connect(confirmButton, &QPushButton::clicked, this, [this]() {
+        // Count how many cities are selected for destruction
+        int selectedCount = 0;
+        for (QCheckBox *checkbox : m_cityCheckboxes.values()) {
+            if (checkbox->isChecked()) {
+                selectedCount++;
+            }
+        }
+
+        // If no cities selected, just accept without confirmation
+        if (selectedCount == 0) {
+            accept();
+            return;
+        }
+
+        // Show confirmation dialog
+        QString message;
+        if (selectedCount == 1) {
+            message = "Are you sure you want to destroy 1 city?\n\nThis action cannot be undone!";
+        } else {
+            message = QString("Are you sure you want to destroy %1 cities?\n\nThis action cannot be undone!").arg(selectedCount);
+        }
+
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this,
+            "Confirm City Destruction",
+            message,
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No  // Default to No for safety
+        );
+
+        if (reply == QMessageBox::Yes) {
+            accept();
+        }
+        // If No, do nothing - dialog stays open
+    });
 
     // Only enable confirm button if player has cities
     confirmButton->setEnabled(!m_cities.isEmpty());
