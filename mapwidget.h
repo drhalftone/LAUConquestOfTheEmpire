@@ -112,6 +112,10 @@ public:
     MapGraph* getGraph() { return m_graph; }
     const MapGraph* getGraph() const { return m_graph; }
 
+    // Debug visualization
+    void setGraphDebugMode(bool enabled) { m_graphDebugMode = enabled; update(); }
+    bool isGraphDebugMode() const { return m_graphDebugMode; }
+
 public slots:
     void saveGame();
     void loadGame();
@@ -190,6 +194,7 @@ private:
 
     // Graph-based map system
     MapGraph *m_graph;  // Graph representation of the map (coexists with grid during migration)
+    bool m_graphDebugMode;  // Show graph visualization overlay
 };
 
 #endif // MAPWIDGET_H

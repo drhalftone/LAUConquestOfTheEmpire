@@ -42,6 +42,7 @@ MapWidget::MapWidget(QWidget *parent)
     , m_currentPlayerIndex(0)
     , m_isAtStartOfTurn(true)
     , m_graph(nullptr)
+    , m_graphDebugMode(false)
 {
     // Create menu bar
     createMenuBar();
@@ -496,6 +497,98 @@ void MapWidget::paintEvent(QPaintEvent *event)
         painter.setPen(Qt::black);
         QRect scoreRect(x + 5, y + cellHeight / 2, cellWidth - 10, cellHeight / 2);
         painter.drawText(scoreRect, Qt::AlignCenter, QString::number(m_scores[player]));
+    }
+
+    // === Graph Debug Visualization (Phase 2) ===
+    if (m_graphDebugMode && m_graph) {
+        painter.save();
+
+        // Draw territory boundaries (polygons)
+        painter.setPen(QPen(QColor(255, 0, 255), 2));  // Magenta borders
+        painter.setBrush(Qt::NoBrush);
+
+        QList<QString> territoryNames = m_graph->getTerritoryNames();
+        for (const QString &name : territoryNames) {
+            QPolygonF boundary = m_graph->getBoundary(name);
+            if (!boundary.isEmpty()) {
+                // Offset by menu bar
+                QPolygonF offsetBoundary;
+                for (const QPointF &point : boundary) {
+                    offsetBoundary << QPointF(point.x(), point.y() + menuBarHeight);
+                }
+                painter.drawPolygon(offsetBoundary);
+            }
+        }
+
+        // Draw neighbor connections (lines between centroids)
+        painter.setPen(QPen(QColor(255, 165, 0), 1));  // Orange lines
+        QSet<QString> drawnConnections;  // Avoid drawing each edge twice
+
+        for (const QString &name : territoryNames) {
+            QPointF centroid = m_graph->getCentroid(name);
+            QPointF offsetCentroid(centroid.x(), centroid.y() + menuBarHeight);
+
+            QList<QString> neighbors = m_graph->getNeighbors(name);
+            for (const QString &neighbor : neighbors) {
+                // Create unique key for this edge (alphabetically sorted)
+                QString edgeKey = (name < neighbor)
+                    ? name + "_" + neighbor
+                    : neighbor + "_" + name;
+
+                if (!drawnConnections.contains(edgeKey)) {
+                    drawnConnections.insert(edgeKey);
+
+                    QPointF neighborCentroid = m_graph->getCentroid(neighbor);
+                    QPointF offsetNeighborCentroid(neighborCentroid.x(), neighborCentroid.y() + menuBarHeight);
+                    painter.drawLine(offsetCentroid, offsetNeighborCentroid);
+                }
+            }
+        }
+
+        // Draw centroids (small circles)
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(255, 0, 0));  // Red dots
+        for (const QString &name : territoryNames) {
+            QPointF centroid = m_graph->getCentroid(name);
+            QPointF offsetCentroid(centroid.x(), centroid.y() + menuBarHeight);
+            painter.drawEllipse(offsetCentroid, 3, 3);
+        }
+
+        // Draw territory names from graph (in small yellow text)
+        painter.setPen(QColor(255, 255, 0));  // Yellow text
+        QFont debugFont = painter.font();
+        debugFont.setPointSize(7);
+        painter.setFont(debugFont);
+
+        for (const QString &name : territoryNames) {
+            QPointF centroid = m_graph->getCentroid(name);
+            QPointF offsetCentroid(centroid.x(), centroid.y() + menuBarHeight);
+
+            // Draw name slightly offset from centroid
+            painter.drawText(QPointF(offsetCentroid.x() + 5, offsetCentroid.y() - 5), name);
+        }
+
+        // Draw debug info in corner
+        painter.setPen(Qt::white);
+        painter.setBrush(QColor(0, 0, 0, 180));  // Semi-transparent black background
+        QRect infoBox(10, menuBarHeight + 10, 250, 80);
+        painter.drawRect(infoBox);
+
+        painter.setPen(Qt::yellow);
+        QFont infoFont = painter.font();
+        infoFont.setPointSize(9);
+        painter.setFont(infoFont);
+
+        QString debugInfo = QString("GRAPH DEBUG MODE\n"
+                                    "Territories: %1\n"
+                                    "Land: %2\n"
+                                    "Sea: %3")
+            .arg(m_graph->territoryCount())
+            .arg(m_graph->countByType(TerritoryType::Land))
+            .arg(m_graph->countByType(TerritoryType::Sea));
+        painter.drawText(infoBox.adjusted(5, 5, -5, -5), Qt::AlignLeft | Qt::AlignVCenter, debugInfo);
+
+        painter.restore();
     }
 }
 
@@ -1238,6 +1331,15 @@ void MapWidget::createMenuBar()
         "E&xit"
     );
     connect(exitAction, &QAction::triggered, qApp, &QApplication::quit);
+
+    // View menu (for debug options)
+    QMenu *viewMenu = m_menuBar->addMenu("&View");
+
+    QAction *graphDebugAction = viewMenu->addAction("Show &Graph Debug Overlay");
+    graphDebugAction->setCheckable(true);
+    graphDebugAction->setChecked(false);
+    graphDebugAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_G));
+    connect(graphDebugAction, &QAction::toggled, this, &MapWidget::setGraphDebugMode);
 
     // Help menu
     QMenu *helpMenu = m_menuBar->addMenu("&Help");
