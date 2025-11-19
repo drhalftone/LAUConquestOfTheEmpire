@@ -968,6 +968,30 @@ bool MapWidget::isSeaTerritory(int row, int col) const
     return m_tiles[row][col] == TileType::Sea;
 }
 
+QList<Position> MapWidget::getAdjacentSeaTerritories(const Position &pos) const
+{
+    QList<Position> seaTerritories;
+
+    // Check all 4 adjacent positions (up, down, left, right)
+    QVector<Position> adjacentPositions = {
+        {pos.row - 1, pos.col},     // up
+        {pos.row + 1, pos.col},     // down
+        {pos.row, pos.col - 1},     // left
+        {pos.row, pos.col + 1}      // right
+    };
+
+    for (const Position &adjPos : adjacentPositions) {
+        // Check if position is valid and is a sea territory
+        if (adjPos.row >= 0 && adjPos.row < ROWS &&
+            adjPos.col >= 0 && adjPos.col < COLUMNS &&
+            isSeaTerritory(adjPos.row, adjPos.col)) {
+            seaTerritories.append(adjPos);
+        }
+    }
+
+    return seaTerritories;
+}
+
 QVector<MapWidget::HomeProvinceInfo> MapWidget::getRandomHomeProvinces()
 {
     QVector<HomeProvinceInfo> homeProvinces;

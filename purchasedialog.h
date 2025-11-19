@@ -12,7 +12,7 @@ class PurchaseDialog : public QDialog
 
 public:
     explicit PurchaseDialog(QChar player, int availableMoney, int inflationMultiplier,
-                          int maxCities, int maxFortifications, QWidget *parent = nullptr);
+                          int maxCities, int maxFortifications, bool canPurchaseGalleys = true, QWidget *parent = nullptr);
 
     // Get the quantities of items purchased
     int getInfantryCount() const { return m_infantrySpinBox->value(); }

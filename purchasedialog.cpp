@@ -7,7 +7,7 @@
 #include <QFont>
 
 PurchaseDialog::PurchaseDialog(QChar player, int availableMoney, int inflationMultiplier,
-                             int maxCities, int maxFortifications, QWidget *parent)
+                             int maxCities, int maxFortifications, bool canPurchaseGalleys, QWidget *parent)
     : QDialog(parent)
     , m_player(player)
     , m_availableMoney(availableMoney)
@@ -28,6 +28,12 @@ PurchaseDialog::PurchaseDialog(QChar player, int availableMoney, int inflationMu
     // Ensure they are never negative to prevent spinbox issues
     m_citySpinBox->setMaximum(qMax(0, maxCities));
     m_fortificationSpinBox->setMaximum(qMax(0, maxFortifications));
+
+    // Disable galley purchases if not allowed (home territory not adjacent to sea)
+    if (!canPurchaseGalleys) {
+        m_galleySpinBox->setEnabled(false);
+        m_galleySpinBox->setToolTip("Galleys can only be purchased if your home territory is adjacent to a sea territory");
+    }
 }
 
 int PurchaseDialog::getCurrentPrice(int basePrice) const

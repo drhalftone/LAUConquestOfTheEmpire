@@ -2050,6 +2050,11 @@ void PlayerInfoWidget::onEndTurnClicked()
     // Max fortifications = unfortified cities + cities being purchased (we'll update this dynamically)
     int maxFortifications = unfortifiedCities + maxCities;
 
+    // Check if player's home territory is adjacent to sea (required for galley purchases)
+    Position homePosition = currentPlayer->getHomeProvince();
+    QList<Position> adjacentSeaTerritories = m_mapWidget->getAdjacentSeaTerritories(homePosition);
+    bool canPurchaseGalleys = !adjacentSeaTerritories.isEmpty();
+
     // SECOND: Open purchase dialog to allow player to buy items
     // Note: Inflation multiplier is fixed at 1 for now (can be enhanced later)
     PurchaseDialog *purchaseDialog = new PurchaseDialog(
@@ -2058,6 +2063,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         1,  // inflation multiplier (1 = no inflation)
         maxCities,
         maxFortifications,
+        canPurchaseGalleys,
         this
     );
 
@@ -2241,13 +2247,67 @@ void PlayerInfoWidget::onEndTurnClicked()
             qDebug() << "Player" << currentPlayer->getId() << "created" << catapultsPurchased << "catapults at" << homeProvince;
         }
 
-        // Create galleys
-        for (int i = 0; i < galleysPurchased; ++i) {
-            GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosition, currentPlayer);
-            currentPlayer->addGalley(galley);
-        }
+        // Create galleys - they must be placed on the border with a sea territory
         if (galleysPurchased > 0) {
-            qDebug() << "Player" << currentPlayer->getId() << "created" << galleysPurchased << "galleys at" << homeProvince;
+            // We already checked adjacentSeaTerritories earlier, but recalculate for safety
+            QList<Position> seaBorders = m_mapWidget->getAdjacentSeaTerritories(homePosition);
+
+            if (seaBorders.isEmpty()) {
+                QMessageBox::warning(this, "Cannot Place Galleys",
+                    QString("Player %1's home territory is not adjacent to any sea territories. Galleys cannot be placed.").arg(currentPlayer->getId()));
+            } else {
+                Position selectedSeaBorder = homePosition;  // Default to home position
+
+                // If multiple sea borders exist, ask the player which one to use
+                if (seaBorders.size() > 1) {
+                    QStringList seaBorderOptions;
+                    for (const Position &seaPos : seaBorders) {
+                        QString direction;
+                        if (seaPos.row < homePosition.row) direction = "North";
+                        else if (seaPos.row > homePosition.row) direction = "South";
+                        else if (seaPos.col < homePosition.col) direction = "West";
+                        else if (seaPos.col > homePosition.col) direction = "East";
+
+                        QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(seaPos.row, seaPos.col);
+                        seaBorderOptions.append(QString("%1 (%2 at %3,%4)").arg(direction).arg(seaTerritoryName).arg(seaPos.row).arg(seaPos.col));
+                    }
+
+                    bool ok;
+                    QString selectedOption = QInputDialog::getItem(
+                        this,
+                        QString("Place Galleys - Player %1").arg(currentPlayer->getId()),
+                        QString("Your home territory borders multiple sea territories.\nSelect which sea border to place your %1 galley(s) at:").arg(galleysPurchased),
+                        seaBorderOptions,
+                        0,
+                        false,
+                        &ok
+                    );
+
+                    if (ok && !selectedOption.isEmpty()) {
+                        int selectedIndex = seaBorderOptions.indexOf(selectedOption);
+                        if (selectedIndex >= 0 && selectedIndex < seaBorders.size()) {
+                            selectedSeaBorder = seaBorders[selectedIndex];
+                        }
+                    } else {
+                        // User cancelled, don't create galleys
+                        QMessageBox::information(this, "Galleys Not Placed",
+                            QString("Galley placement cancelled. Player %1 did not receive %2 galley(s), but money was already spent.").arg(currentPlayer->getId()).arg(galleysPurchased));
+                        galleysPurchased = 0;  // Set to 0 so we don't create them
+                    }
+                }
+
+                // Create the galleys at home position (which represents the border with the selected sea territory)
+                for (int i = 0; i < galleysPurchased; ++i) {
+                    GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosition, currentPlayer);
+                    currentPlayer->addGalley(galley);
+                }
+
+                if (galleysPurchased > 0) {
+                    QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(selectedSeaBorder.row, selectedSeaBorder.col);
+                    qDebug() << "Player" << currentPlayer->getId() << "created" << galleysPurchased
+                             << "galleys at" << homeProvince << "bordering sea territory" << seaTerritoryName;
+                }
+            }
         }
     }
 

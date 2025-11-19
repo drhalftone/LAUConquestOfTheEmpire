@@ -58,6 +58,9 @@ public:
     // Check if a tile is sea
     bool isSeaTerritory(int row, int col) const;
 
+    // Get adjacent sea territories for a given position
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+
     // Check if there are enemy pieces at position
     bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
 
