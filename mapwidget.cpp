@@ -997,26 +997,40 @@ QVector<MapWidget::HomeProvinceInfo> MapWidget::getRandomHomeProvinces()
     QVector<HomeProvinceInfo> homeProvinces;
     QRandomGenerator *random = QRandomGenerator::global();
 
-    // Collect all land tiles
-    QVector<Position> landTiles;
+    // Collect all land tiles that are adjacent to at least one sea territory
+    QVector<Position> coastalLandTiles;
     for (int row = 0; row < ROWS; ++row) {
         for (int col = 0; col < COLUMNS; ++col) {
             if (m_tiles[row][col] == TileType::Land) {
-                landTiles.append({row, col});
+                Position pos = {row, col};
+                // Check if this land tile is adjacent to any sea territory
+                QList<Position> adjacentSeas = getAdjacentSeaTerritories(pos);
+                if (!adjacentSeas.isEmpty()) {
+                    coastalLandTiles.append(pos);
+                }
             }
         }
     }
 
     // Shuffle and select first 6 as home provinces
-    std::shuffle(landTiles.begin(), landTiles.end(), *random);
+    std::shuffle(coastalLandTiles.begin(), coastalLandTiles.end(), *random);
 
-    for (int i = 0; i < 6 && i < landTiles.size(); ++i) {
+    for (int i = 0; i < 6 && i < coastalLandTiles.size(); ++i) {
         HomeProvinceInfo info;
         // Use Position from common.h
-        info.position.row = landTiles[i].row;
-        info.position.col = landTiles[i].col;
-        info.name = m_territories[landTiles[i].row][landTiles[i].col].name;
+        info.position.row = coastalLandTiles[i].row;
+        info.position.col = coastalLandTiles[i].col;
+        info.name = m_territories[coastalLandTiles[i].row][coastalLandTiles[i].col].name;
         homeProvinces.append(info);
+
+        qDebug() << "Selected home province for player" << (char)('A' + i) << "at"
+                 << info.name << "(" << info.position.row << "," << info.position.col << ")"
+                 << "- adjacent to sea";
+    }
+
+    if (coastalLandTiles.size() < 6) {
+        qWarning() << "Warning: Only found" << coastalLandTiles.size()
+                   << "coastal land tiles for home provinces. Need 6 for all players!";
     }
 
     return homeProvinces;
