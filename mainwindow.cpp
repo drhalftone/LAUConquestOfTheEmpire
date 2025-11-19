@@ -5,6 +5,7 @@
 #include "purchasedialog.h"
 #include "placementdialog.h"
 #include <QTimer>
+#include <QDebug>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -38,53 +39,23 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     // Connect purchase phase
+    // NOTE: Purchase phase is now handled by PlayerInfoWidget, not here
+    // This old handler is kept for backward compatibility but is not used
     connect(m_mapWidget, &MapWidget::purchasePhaseNeeded, this, [this](QChar player, int availableMoney, int inflationMultiplier) {
-        // Note: This old purchase flow is no longer used - PlayerInfoWidget handles purchases now
-        // Setting default limits for backward compatibility
-        PurchaseDialog *dialog = new PurchaseDialog(player, availableMoney, inflationMultiplier, 10, 10, this);
-
-        if (dialog->exec() == QDialog::Accepted) {
-            int amountSpent = dialog->getTotalSpent();
-
-            // Deduct from wallet window
-            m_walletWindow->addToWallet(player, -amountSpent);
-
-            // Turn management now handled by PlayerInfoWidget, not MapWidget
-            // m_mapWidget->handlePurchaseComplete(amountSpent);
-        }
-
-        delete dialog;
+        // Old purchase flow - disabled, PlayerInfoWidget handles purchases now
+        qDebug() << "purchasePhaseNeeded signal received, but PlayerInfoWidget handles purchases now";
     });
 
     // Initialize scores with starting values
     m_scoreWindow->updateScores(m_mapWidget->calculateScores());
 
-    // TEST MODE: Open purchase dialog immediately with 100 credits
+    // TEST MODE: DISABLED - Purchase dialog is now handled by PlayerInfoWidget
+    // The new purchase flow is integrated into the turn-based gameplay
+    /*
     QTimer::singleShot(500, this, [this]() {
-        PurchaseDialog *testDialog = new PurchaseDialog('A', 100, 1, 5, 5, this);
-
-        if (testDialog->exec() == QDialog::Accepted) {
-            // Show placement dialog with purchased items
-            PlacementDialog *placementDialog = new PlacementDialog(
-                'A',
-                testDialog->getInfantryCount(),
-                testDialog->getCavalryCount(),
-                testDialog->getCatapultCount(),
-                testDialog->getGalleyCount(),
-                testDialog->getCityCount(),
-                testDialog->getFortificationCount(),
-                testDialog->getRoadCount(),
-                this
-            );
-
-            // Connect map widget's itemPlaced signal to placement dialog's decrement slot
-            connect(m_mapWidget, &MapWidget::itemPlaced, placementDialog, &PlacementDialog::decrementItemCount);
-
-            placementDialog->show();
-        }
-
-        delete testDialog;
+        // Old test code removed - use PlayerInfoWidget for purchases
     });
+    */
 }
 
 MainWindow::~MainWindow()

@@ -15,7 +15,6 @@ SOURCES += \
     scorewindow.cpp \
     walletwindow.cpp \
     purchasedialog.cpp \
-    purchasedialog_new.cpp \
     placementdialog.cpp \
     gamepiece.cpp \
     player.cpp \
@@ -31,7 +30,6 @@ HEADERS += \
     scorewindow.h \
     walletwindow.h \
     purchasedialog.h \
-    purchasedialog_new.h \
     placementdialog.h \
     gamepiece.h \
     player.h \

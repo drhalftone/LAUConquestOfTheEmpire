@@ -2,39 +2,36 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
-#include <QPushButton>
+#include <QGroupBox>
+#include <QScrollArea>
 #include <QFrame>
 #include <QFont>
 #include <QMessageBox>
 
-PurchaseDialog::PurchaseDialog(QChar player, int availableMoney, int inflationMultiplier,
-                             int maxCities, int maxFortifications, bool canPurchaseGalleys, QWidget *parent)
+PurchaseDialog::PurchaseDialog(QChar player,
+                               int availableMoney,
+                               int inflationMultiplier,
+                               const QList<CityPlacementOption> &cityOptions,
+                               const QList<FortificationOption> &fortificationOptions,
+                               const QList<GalleyPlacementOption> &galleyOptions,
+                               int currentGalleyCount,
+                               QWidget *parent)
     : QDialog(parent)
     , m_player(player)
     , m_availableMoney(availableMoney)
     , m_inflationMultiplier(inflationMultiplier)
     , m_totalSpent(0)
+    , m_currentGalleyCount(currentGalleyCount)
+    , m_cityOptions(cityOptions)
+    , m_fortificationOptions(fortificationOptions)
+    , m_galleyOptions(galleyOptions)
 {
     setWindowTitle(QString("Purchase Phase - Player %1").arg(player));
     setModal(true);
-
-    // Disable the close (X) button - force user to click "Done" button
     setWindowFlags(windowFlags() & ~Qt::WindowCloseButtonHint);
-
-    resize(600, 500);
+    resize(700, 600);
 
     setupUI();
-
-    // Set maximum values for cities and fortifications
-    // Ensure they are never negative to prevent spinbox issues
-    m_citySpinBox->setMaximum(qMax(0, maxCities));
-    m_fortificationSpinBox->setMaximum(qMax(0, maxFortifications));
-
-    // Disable galley purchases if not allowed (home territory not adjacent to sea)
-    if (!canPurchaseGalleys) {
-        m_galleySpinBox->setEnabled(false);
-        m_galleySpinBox->setToolTip("Galleys can only be purchased if your home territory is adjacent to a sea territory");
-    }
 }
 
 int PurchaseDialog::getCurrentPrice(int basePrice) const
@@ -55,233 +52,432 @@ void PurchaseDialog::setupUI()
     titleLabel->setAlignment(Qt::AlignCenter);
     mainLayout->addWidget(titleLabel);
 
-    // Inflation notice
-    if (m_inflationMultiplier > 1) {
-        QLabel *inflationLabel = new QLabel(QString("Inflation Active: Prices ×%1").arg(m_inflationMultiplier));
-        QFont inflationFont = inflationLabel->font();
-        inflationFont.setPointSize(12);
-        inflationFont.setBold(true);
-        inflationLabel->setFont(inflationFont);
-        inflationLabel->setAlignment(Qt::AlignCenter);
-        inflationLabel->setStyleSheet("color: red;");
-        mainLayout->addWidget(inflationLabel);
-    }
-
     mainLayout->addSpacing(10);
 
-    // Create table grid
-    QGridLayout *tableLayout = new QGridLayout();
-    tableLayout->setSpacing(10);
+    // Scroll area for all options
+    QScrollArea *scrollArea = new QScrollArea();
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::StyledPanel);
 
-    // Header row
-    QLabel *itemHeader = new QLabel("Item");
-    QLabel *priceHeader = new QLabel("Unit Price");
-    QLabel *quantityHeader = new QLabel("Quantity");
-    QLabel *totalHeader = new QLabel("Total Cost");
+    QWidget *scrollWidget = new QWidget();
+    QVBoxLayout *scrollLayout = new QVBoxLayout(scrollWidget);
 
-    QFont headerFont;
-    headerFont.setBold(true);
-    headerFont.setPointSize(11);
-    itemHeader->setFont(headerFont);
-    priceHeader->setFont(headerFont);
-    quantityHeader->setFont(headerFont);
-    totalHeader->setFont(headerFont);
+    // ===== TROOPS SECTION =====
+    QGroupBox *troopsGroup = new QGroupBox("Military Units (Placed at Home Province)");
+    QGridLayout *troopsLayout = new QGridLayout();
 
-    tableLayout->addWidget(itemHeader, 0, 0);
-    tableLayout->addWidget(priceHeader, 0, 1, Qt::AlignCenter);
-    tableLayout->addWidget(quantityHeader, 0, 2, Qt::AlignCenter);
-    tableLayout->addWidget(totalHeader, 0, 3, Qt::AlignCenter);
+    int row = 0;
 
-    int row = 1;
+    // Infantry
+    troopsLayout->addWidget(new QLabel("Infantry:"), row, 0);
+    m_infantrySpinBox = new QSpinBox();
+    m_infantrySpinBox->setMinimum(0);
+    m_infantrySpinBox->setMaximum(999);
+    m_infantrySpinBox->setValue(0);
+    troopsLayout->addWidget(m_infantrySpinBox, row, 1);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(INFANTRY_BASE_COST))), row, 2);
+    connect(m_infantrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
+    row++;
 
-    // Helper lambda to create row
-    auto createRow = [&](const QString &itemName, int basePrice, QSpinBox *&spinBox, QLabel *&costLabel) {
-        int currentPrice = getCurrentPrice(basePrice);
+    // Cavalry
+    troopsLayout->addWidget(new QLabel("Cavalry:"), row, 0);
+    m_cavalrySpinBox = new QSpinBox();
+    m_cavalrySpinBox->setMinimum(0);
+    m_cavalrySpinBox->setMaximum(999);
+    m_cavalrySpinBox->setValue(0);
+    troopsLayout->addWidget(m_cavalrySpinBox, row, 1);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CAVALRY_BASE_COST))), row, 2);
+    connect(m_cavalrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
+    row++;
 
-        QLabel *nameLabel = new QLabel(itemName);
-        QLabel *priceLabel = new QLabel(QString("%1 talents").arg(currentPrice));
-        spinBox = new QSpinBox();
-        spinBox->setMinimum(0);
-        spinBox->setMaximum(999);
-        spinBox->setValue(0);
-        spinBox->setAlignment(Qt::AlignCenter);
-        costLabel = new QLabel("0 talents");
-        costLabel->setAlignment(Qt::AlignCenter);
+    // Catapults
+    troopsLayout->addWidget(new QLabel("Catapults:"), row, 0);
+    m_catapultSpinBox = new QSpinBox();
+    m_catapultSpinBox->setMinimum(0);
+    m_catapultSpinBox->setMaximum(999);
+    m_catapultSpinBox->setValue(0);
+    troopsLayout->addWidget(m_catapultSpinBox, row, 1);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CATAPULT_BASE_COST))), row, 2);
+    connect(m_catapultSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
+    row++;
 
-        tableLayout->addWidget(nameLabel, row, 0);
-        tableLayout->addWidget(priceLabel, row, 1, Qt::AlignCenter);
-        tableLayout->addWidget(spinBox, row, 2);
-        tableLayout->addWidget(costLabel, row, 3, Qt::AlignCenter);
+    troopsGroup->setLayout(troopsLayout);
+    scrollLayout->addWidget(troopsGroup);
 
-        connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
+    // ===== CITIES SECTION =====
+    if (!m_cityOptions.isEmpty()) {
+        QGroupBox *citiesGroup = new QGroupBox("New Cities");
+        QVBoxLayout *citiesLayout = new QVBoxLayout();
 
-        row++;
-    };
+        for (const CityPlacementOption &option : m_cityOptions) {
+            QHBoxLayout *cityRow = new QHBoxLayout();
 
-    // Create all rows
-    createRow("Infantry", INFANTRY_BASE_COST, m_infantrySpinBox, m_infantryCostLabel);
-    createRow("Cavalry", CAVALRY_BASE_COST, m_cavalrySpinBox, m_cavalryCostLabel);
-    createRow("Catapult", CATAPULT_BASE_COST, m_catapultSpinBox, m_catapultCostLabel);
-    createRow("Galley (Ship)", GALLEY_BASE_COST, m_galleySpinBox, m_galleyCostLabel);
-    createRow("City", CITY_BASE_COST, m_citySpinBox, m_cityCostLabel);
-    createRow("Fortification (Wall)", FORTIFICATION_BASE_COST, m_fortificationSpinBox, m_fortificationCostLabel);
-    // Roads are generated automatically and for free - no purchase needed
-    // Initialize road spinbox to nullptr to indicate it's not used
-    m_roadSpinBox = nullptr;
-    m_roadCostLabel = nullptr;
+            // Regular city checkbox
+            QCheckBox *cityCheckbox = new QCheckBox(QString("City at %1").arg(option.territoryName));
+            connect(cityCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
+            m_cityCheckboxes[cityCheckbox] = option;
+            cityRow->addWidget(cityCheckbox);
+            cityRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST))));
 
-    mainLayout->addLayout(tableLayout);
+            // Fortified city checkbox
+            QCheckBox *fortifiedCheckbox = new QCheckBox(QString("Fortified City at %1").arg(option.territoryName));
+            connect(fortifiedCheckbox, &QCheckBox::toggled, this, [this, cityCheckbox, fortifiedCheckbox]() {
+                // If fortified is checked, uncheck regular
+                if (fortifiedCheckbox->isChecked()) {
+                    cityCheckbox->setChecked(false);
+                }
+                updateTotals();
+            });
+            // If regular city is checked, uncheck fortified
+            connect(cityCheckbox, &QCheckBox::toggled, this, [fortifiedCheckbox](bool checked) {
+                if (checked) {
+                    fortifiedCheckbox->setChecked(false);
+                }
+            });
+            m_fortifiedCityCheckboxes[fortifiedCheckbox] = option;
+            cityRow->addWidget(fortifiedCheckbox);
+            cityRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST))));
 
-    // Separator
+            cityRow->addStretch();
+            citiesLayout->addLayout(cityRow);
+        }
+
+        citiesGroup->setLayout(citiesLayout);
+        scrollLayout->addWidget(citiesGroup);
+    }
+
+    // ===== FORTIFICATIONS SECTION (for existing cities) =====
+    if (!m_fortificationOptions.isEmpty()) {
+        QGroupBox *fortificationsGroup = new QGroupBox("Fortify Existing Cities");
+        QVBoxLayout *fortificationsLayout = new QVBoxLayout();
+
+        for (const FortificationOption &option : m_fortificationOptions) {
+            QHBoxLayout *fortRow = new QHBoxLayout();
+
+            QCheckBox *fortCheckbox = new QCheckBox(QString("Add walls to city at %1").arg(option.territoryName));
+            connect(fortCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
+            m_fortificationCheckboxes[fortCheckbox] = option;
+
+            fortRow->addWidget(fortCheckbox);
+            fortRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(FORTIFICATION_BASE_COST))));
+            fortRow->addStretch();
+
+            fortificationsLayout->addLayout(fortRow);
+        }
+
+        fortificationsGroup->setLayout(fortificationsLayout);
+        scrollLayout->addWidget(fortificationsGroup);
+    }
+
+    // ===== GALLEYS SECTION =====
+    if (!m_galleyOptions.isEmpty()) {
+        QGroupBox *galleysGroup = new QGroupBox(
+            QString("Galleys (Naval Units) - You own %1/%2")
+            .arg(m_currentGalleyCount)
+            .arg(MAX_GALLEYS)
+        );
+        QGridLayout *galleysLayout = new QGridLayout();
+
+        // Calculate how many more galleys can be purchased
+        int maxPurchasable = qMax(0, MAX_GALLEYS - m_currentGalleyCount);
+
+        // Add info label if already at max
+        if (maxPurchasable == 0) {
+            QLabel *maxLabel = new QLabel("You already have the maximum number of galleys (6).");
+            QFont font = maxLabel->font();
+            font.setBold(true);
+            maxLabel->setFont(font);
+            maxLabel->setStyleSheet("color: red;");
+            galleysLayout->addWidget(maxLabel, 0, 0, 1, 3);
+        }
+
+        int galleyRow = (maxPurchasable == 0) ? 1 : 0;
+        for (const GalleyPlacementOption &option : m_galleyOptions) {
+            QString label = QString("Galleys at %1 border (%2)")
+                .arg(option.direction)
+                .arg(option.seaTerritoryName);
+
+            galleysLayout->addWidget(new QLabel(label + ":"), galleyRow, 0);
+
+            QSpinBox *galleySpinBox = new QSpinBox();
+            galleySpinBox->setMinimum(0);
+            galleySpinBox->setMaximum(maxPurchasable);
+            galleySpinBox->setValue(0);
+            if (maxPurchasable == 0) {
+                galleySpinBox->setEnabled(false);
+                galleySpinBox->setToolTip("Maximum galley limit (6) already reached");
+            }
+            connect(galleySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
+            m_galleySpinboxes[galleySpinBox] = option;
+
+            galleysLayout->addWidget(galleySpinBox, galleyRow, 1);
+            galleysLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(GALLEY_BASE_COST))), galleyRow, 2);
+
+            galleyRow++;
+        }
+
+        galleysGroup->setLayout(galleysLayout);
+        scrollLayout->addWidget(galleysGroup);
+    }
+
+    scrollLayout->addStretch();
+    scrollWidget->setLayout(scrollLayout);
+    scrollArea->setWidget(scrollWidget);
+    mainLayout->addWidget(scrollArea);
+
+    // ===== SUMMARY SECTION =====
     QFrame *separator = new QFrame();
     separator->setFrameShape(QFrame::HLine);
     separator->setFrameShadow(QFrame::Sunken);
     mainLayout->addWidget(separator);
 
-    // Bottom summary section
-    QGridLayout *summaryLayout = new QGridLayout();
-    summaryLayout->setSpacing(10);
+    QHBoxLayout *summaryLayout = new QHBoxLayout();
+    m_availableLabel = new QLabel(QString("Available: %1 talents").arg(m_availableMoney));
+    m_spendingLabel = new QLabel("Spending: 0 talents");
+    m_remainingLabel = new QLabel(QString("Remaining: %1 talents").arg(m_availableMoney));
 
-    QFont summaryFont;
-    summaryFont.setPointSize(12);
-    summaryFont.setBold(true);
-
-    QLabel *availableTextLabel = new QLabel("Available Money:");
-    availableTextLabel->setFont(summaryFont);
-    m_availableLabel = new QLabel(QString("%1 talents").arg(m_availableMoney));
-    m_availableLabel->setFont(summaryFont);
-    m_availableLabel->setStyleSheet("color: green;");
-
-    QLabel *spendingTextLabel = new QLabel("Total Spending:");
-    spendingTextLabel->setFont(summaryFont);
-    m_spendingLabel = new QLabel("0 talents");
-    m_spendingLabel->setFont(summaryFont);
-    m_spendingLabel->setStyleSheet("color: blue;");
-
-    QLabel *remainingTextLabel = new QLabel("Remaining:");
-    remainingTextLabel->setFont(summaryFont);
-    m_remainingLabel = new QLabel(QString("%1 talents").arg(m_availableMoney));
-    m_remainingLabel->setFont(summaryFont);
-    m_remainingLabel->setStyleSheet("color: green;");
-
-    summaryLayout->addWidget(availableTextLabel, 0, 0, Qt::AlignRight);
-    summaryLayout->addWidget(m_availableLabel, 0, 1, Qt::AlignLeft);
-    summaryLayout->addWidget(spendingTextLabel, 1, 0, Qt::AlignRight);
-    summaryLayout->addWidget(m_spendingLabel, 1, 1, Qt::AlignLeft);
-    summaryLayout->addWidget(remainingTextLabel, 2, 0, Qt::AlignRight);
-    summaryLayout->addWidget(m_remainingLabel, 2, 1, Qt::AlignLeft);
+    summaryLayout->addWidget(m_availableLabel);
+    summaryLayout->addStretch();
+    summaryLayout->addWidget(m_spendingLabel);
+    summaryLayout->addStretch();
+    summaryLayout->addWidget(m_remainingLabel);
 
     mainLayout->addLayout(summaryLayout);
 
-    mainLayout->addSpacing(10);
-
-    // Buttons
+    // ===== BUTTONS =====
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
 
-    m_doneButton = new QPushButton("Done - End Purchase Phase");
-    m_doneButton->setMinimumHeight(40);
-    QFont buttonFont = m_doneButton->font();
+    m_purchaseButton = new QPushButton("Complete Purchase");
+    m_purchaseButton->setMinimumHeight(40);
+    QFont buttonFont = m_purchaseButton->font();
     buttonFont.setPointSize(11);
     buttonFont.setBold(true);
-    m_doneButton->setFont(buttonFont);
-    connect(m_doneButton, &QPushButton::clicked, this, &QDialog::accept);
+    m_purchaseButton->setFont(buttonFont);
+    connect(m_purchaseButton, &QPushButton::clicked, this, &PurchaseDialog::onPurchaseClicked);
 
-    buttonLayout->addWidget(m_doneButton);
+    buttonLayout->addWidget(m_purchaseButton);
     buttonLayout->addStretch();
 
     mainLayout->addLayout(buttonLayout);
+
+    // Initial update
+    updateTotals();
 }
 
 void PurchaseDialog::updateTotals()
 {
-    // Calculate individual costs
-    int infantryCost = m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST);
-    int cavalryCost = m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST);
-    int catapultCost = m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST);
-    int galleyCost = m_galleySpinBox->value() * getCurrentPrice(GALLEY_BASE_COST);
-    int cityCost = m_citySpinBox->value() * getCurrentPrice(CITY_BASE_COST);
-    int fortificationCost = m_fortificationSpinBox->value() * getCurrentPrice(FORTIFICATION_BASE_COST);
+    int totalCost = 0;
 
-    // Update row cost labels
-    m_infantryCostLabel->setText(QString("%1 talents").arg(infantryCost));
-    m_cavalryCostLabel->setText(QString("%1 talents").arg(cavalryCost));
-    m_catapultCostLabel->setText(QString("%1 talents").arg(catapultCost));
-    m_galleyCostLabel->setText(QString("%1 talents").arg(galleyCost));
-    m_cityCostLabel->setText(QString("%1 talents").arg(cityCost));
-    m_fortificationCostLabel->setText(QString("%1 talents").arg(fortificationCost));
+    // Calculate troop costs
+    totalCost += m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST);
+    totalCost += m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST);
+    totalCost += m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST);
 
-    // Calculate total (roads are free, so not included)
-    m_totalSpent = infantryCost + cavalryCost + catapultCost + galleyCost +
-                   cityCost + fortificationCost;
+    // Calculate city costs
+    for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            totalCost += getCurrentPrice(CITY_BASE_COST);
+        }
+    }
 
+    // Calculate fortified city costs
+    for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            totalCost += getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST);
+        }
+    }
+
+    // Calculate fortification costs
+    for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            totalCost += getCurrentPrice(FORTIFICATION_BASE_COST);
+        }
+    }
+
+    // Calculate galley costs and check total galley count
+    int totalGalleysPurchasing = 0;
+    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+        int count = it.key()->value();
+        totalCost += count * getCurrentPrice(GALLEY_BASE_COST);
+        totalGalleysPurchasing += count;
+    }
+
+    m_totalSpent = totalCost;
     int remaining = m_availableMoney - m_totalSpent;
+    int totalGalleysAfterPurchase = m_currentGalleyCount + totalGalleysPurchasing;
 
-    // Update summary labels
-    m_spendingLabel->setText(QString("%1 talents").arg(m_totalSpent));
-    m_remainingLabel->setText(QString("%1 talents").arg(remaining));
+    // Update labels
+    m_spendingLabel->setText(QString("Spending: %1 talents").arg(m_totalSpent));
+    m_remainingLabel->setText(QString("Remaining: %1 talents").arg(remaining));
 
-    // Update colors and disable Done button if over budget
-    if (remaining < 0) {
+    // Update colors and button state
+    bool overBudget = remaining < 0;
+    bool tooManyGalleys = totalGalleysAfterPurchase > MAX_GALLEYS;
+
+    if (overBudget) {
         m_remainingLabel->setStyleSheet("color: red; font-weight: bold;");
         m_spendingLabel->setStyleSheet("color: red; font-weight: bold;");
-        m_doneButton->setEnabled(false);
-        m_doneButton->setToolTip("Cannot complete purchase - spending exceeds available money!");
+        m_purchaseButton->setEnabled(false);
+        m_purchaseButton->setToolTip("Cannot complete purchase - spending exceeds available money!");
+    } else if (tooManyGalleys) {
+        m_remainingLabel->setStyleSheet("color: green; font-weight: bold;");
+        m_spendingLabel->setStyleSheet("color: blue; font-weight: bold;");
+        m_purchaseButton->setEnabled(false);
+        m_purchaseButton->setToolTip(QString("Cannot complete purchase - too many galleys! (%1/%2)").arg(totalGalleysAfterPurchase).arg(MAX_GALLEYS));
     } else {
         m_remainingLabel->setStyleSheet("color: green; font-weight: bold;");
         m_spendingLabel->setStyleSheet("color: blue; font-weight: bold;");
-        m_doneButton->setEnabled(true);
-        m_doneButton->setToolTip("");
+        m_purchaseButton->setEnabled(true);
+        m_purchaseButton->setToolTip("");
+    }
+}
+
+PurchaseResult PurchaseDialog::getPurchaseResult() const
+{
+    PurchaseResult result;
+    result.totalCost = m_totalSpent;
+
+    // Get troops
+    result.infantry = m_infantrySpinBox->value();
+    result.cavalry = m_cavalrySpinBox->value();
+    result.catapults = m_catapultSpinBox->value();
+
+    // Get cities
+    for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            PurchaseResult::CityPurchase city;
+            city.territoryName = it.value().territoryName;
+            city.position = it.value().position;
+            city.fortified = false;
+            result.cities.append(city);
+        }
     }
 
-    // Update maximum values for all spinboxes based on remaining budget
-    // This prevents user from going over budget in the first place
-    bool anyValueAdjusted = false;
-
-    auto updateSpinBoxMax = [this, &anyValueAdjusted](QSpinBox *spinBox, int basePrice, int currentCostExcludingThis) {
-        int price = getCurrentPrice(basePrice);
-        if (price > 0) {
-            int availableForThis = m_availableMoney - currentCostExcludingThis;
-            int maxAffordable = availableForThis / price;
-            int currentValue = spinBox->value();
-
-            spinBox->setMinimum(0);  // Ensure minimum stays at 0
-            spinBox->setMaximum(qMax(0, maxAffordable));
-
-            // If current value exceeds new max, adjust it down
-            if (currentValue > maxAffordable) {
-                spinBox->setValue(qMax(0, maxAffordable));
-                anyValueAdjusted = true;
-            }
+    // Get fortified cities
+    for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            PurchaseResult::CityPurchase city;
+            city.territoryName = it.value().territoryName;
+            city.position = it.value().position;
+            city.fortified = true;
+            result.cities.append(city);
         }
-    };
+    }
 
-    // Temporarily block signals to prevent recursive updates
-    m_infantrySpinBox->blockSignals(true);
-    m_cavalrySpinBox->blockSignals(true);
-    m_catapultSpinBox->blockSignals(true);
-    m_galleySpinBox->blockSignals(true);
-    m_citySpinBox->blockSignals(true);
-    m_fortificationSpinBox->blockSignals(true);
+    // Get fortifications
+    for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            result.fortifications.append(it.value().territoryName);
+        }
+    }
 
-    // Update each spinbox max based on cost of everything else
-    updateSpinBoxMax(m_infantrySpinBox, INFANTRY_BASE_COST, m_totalSpent - infantryCost);
-    updateSpinBoxMax(m_cavalrySpinBox, CAVALRY_BASE_COST, m_totalSpent - cavalryCost);
-    updateSpinBoxMax(m_catapultSpinBox, CATAPULT_BASE_COST, m_totalSpent - catapultCost);
-    updateSpinBoxMax(m_galleySpinBox, GALLEY_BASE_COST, m_totalSpent - galleyCost);
-    updateSpinBoxMax(m_citySpinBox, CITY_BASE_COST, m_totalSpent - cityCost);
-    updateSpinBoxMax(m_fortificationSpinBox, FORTIFICATION_BASE_COST, m_totalSpent - fortificationCost);
+    // Get galleys
+    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+        int count = it.key()->value();
+        if (count > 0) {
+            PurchaseResult::GalleyPurchase galley;
+            galley.seaBorder = it.value().seaPosition;
+            galley.count = count;
+            result.galleys.append(galley);
+        }
+    }
 
-    // Unblock signals
-    m_infantrySpinBox->blockSignals(false);
-    m_cavalrySpinBox->blockSignals(false);
-    m_catapultSpinBox->blockSignals(false);
-    m_galleySpinBox->blockSignals(false);
-    m_citySpinBox->blockSignals(false);
-    m_fortificationSpinBox->blockSignals(false);
+    return result;
+}
 
-    // If any value was adjusted while signals were blocked, recalculate totals
-    if (anyValueAdjusted) {
-        updateTotals();
+void PurchaseDialog::onPurchaseClicked()
+{
+    // If nothing was purchased, just accept
+    if (m_totalSpent == 0) {
+        accept();
+        return;
+    }
+
+    // Build summary of purchases
+    QStringList items;
+
+    // Add troops
+    if (m_infantrySpinBox->value() > 0) {
+        items.append(QString("%1 Infantry (%2 talents)")
+            .arg(m_infantrySpinBox->value())
+            .arg(m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST)));
+    }
+    if (m_cavalrySpinBox->value() > 0) {
+        items.append(QString("%1 Cavalry (%2 talents)")
+            .arg(m_cavalrySpinBox->value())
+            .arg(m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST)));
+    }
+    if (m_catapultSpinBox->value() > 0) {
+        items.append(QString("%1 Catapults (%2 talents)")
+            .arg(m_catapultSpinBox->value())
+            .arg(m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST)));
+    }
+
+    // Add regular cities
+    for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            items.append(QString("City at %1 (%2 talents)")
+                .arg(it.value().territoryName)
+                .arg(getCurrentPrice(CITY_BASE_COST)));
+        }
+    }
+
+    // Add fortified cities
+    for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            items.append(QString("Fortified City at %1 (%2 talents)")
+                .arg(it.value().territoryName)
+                .arg(getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST)));
+        }
+    }
+
+    // Add fortifications
+    for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            items.append(QString("Fortify city at %1 (%2 talents)")
+                .arg(it.value().territoryName)
+                .arg(getCurrentPrice(FORTIFICATION_BASE_COST)));
+        }
+    }
+
+    // Add galleys
+    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+        int count = it.key()->value();
+        if (count > 0) {
+            items.append(QString("%1 Galleys at %2 border (%3) - %4 talents")
+                .arg(count)
+                .arg(it.value().direction)
+                .arg(it.value().seaTerritoryName)
+                .arg(count * getCurrentPrice(GALLEY_BASE_COST)));
+        }
+    }
+
+    // Build confirmation message
+    QString message = QString("Player %1 - Purchase Summary:\n\n").arg(m_player);
+
+    if (items.isEmpty()) {
+        message += "No items selected.\n";
+    } else {
+        for (const QString &item : items) {
+            message += "• " + item + "\n";
+        }
+    }
+
+    message += QString("\nTotal Cost: %1 talents\n").arg(m_totalSpent);
+    message += QString("Remaining: %1 talents\n\n").arg(m_availableMoney - m_totalSpent);
+    message += "Are you sure you want to complete this purchase?";
+
+    // Show confirmation dialog
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this,
+        "Confirm Purchase",
+        message,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No
+    );
+
+    if (reply == QMessageBox::Yes) {
+        accept();
     }
 }

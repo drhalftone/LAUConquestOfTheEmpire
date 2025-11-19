@@ -3,76 +3,127 @@
 
 #include <QDialog>
 #include <QSpinBox>
+#include <QCheckBox>
 #include <QLabel>
-#include <QMap>
 #include <QPushButton>
+#include <QMap>
+#include <QString>
+#include "common.h"
+
+// Structure to hold information about territories available for city placement
+struct CityPlacementOption {
+    QString territoryName;
+    Position position;
+};
+
+// Structure to hold information about existing cities that can be fortified
+struct FortificationOption {
+    QString territoryName;
+    Position position;
+};
+
+// Structure to hold information about sea borders for galley placement
+struct GalleyPlacementOption {
+    Position seaPosition;
+    QString seaTerritoryName;
+    QString direction;  // "North", "South", "East", "West"
+};
+
+// Structure to return what was purchased
+struct PurchaseResult {
+    // Troops (go to home province)
+    int infantry;
+    int cavalry;
+    int catapults;
+
+    // Cities with their locations
+    struct CityPurchase {
+        QString territoryName;
+        Position position;
+        bool fortified;
+    };
+    QList<CityPurchase> cities;
+
+    // Fortifications for existing cities
+    QStringList fortifications;  // List of territory names to fortify
+
+    // Galleys with their sea border
+    struct GalleyPurchase {
+        Position seaBorder;
+        int count;
+    };
+    QList<GalleyPurchase> galleys;
+
+    int totalCost;
+};
 
 class PurchaseDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit PurchaseDialog(QChar player, int availableMoney, int inflationMultiplier,
-                          int maxCities, int maxFortifications, bool canPurchaseGalleys = true, QWidget *parent = nullptr);
+    explicit PurchaseDialog(QChar player,
+                           int availableMoney,
+                           int inflationMultiplier,
+                           const QList<CityPlacementOption> &cityOptions,
+                           const QList<FortificationOption> &fortificationOptions,
+                           const QList<GalleyPlacementOption> &galleyOptions,
+                           int currentGalleyCount,
+                           QWidget *parent = nullptr);
 
-    // Get the quantities of items purchased
-    int getInfantryCount() const { return m_infantrySpinBox->value(); }
-    int getCavalryCount() const { return m_cavalrySpinBox->value(); }
-    int getCatapultCount() const { return m_catapultSpinBox->value(); }
-    int getGalleyCount() const { return m_galleySpinBox->value(); }
-    int getCityCount() const { return m_citySpinBox->value(); }
-    int getFortificationCount() const { return m_fortificationSpinBox->value(); }
-    int getRoadCount() const { return 0; }  // Roads are generated automatically, not purchased
-
-    // Get total spent
-    int getTotalSpent() const { return m_totalSpent; }
+    // Get the purchase result
+    PurchaseResult getPurchaseResult() const;
 
 private slots:
     void updateTotals();
+    void onPurchaseClicked();
 
 private:
+    void setupUI();
+    int getCurrentPrice(int basePrice) const;
+
     QChar m_player;
     int m_availableMoney;
     int m_inflationMultiplier;
     int m_totalSpent;
+    int m_currentGalleyCount;
 
-    // Base prices (before inflation)
+    // Base prices
+    static const int MAX_GALLEYS = 6;
     static const int INFANTRY_BASE_COST = 10;
     static const int CAVALRY_BASE_COST = 20;
     static const int CATAPULT_BASE_COST = 30;
     static const int GALLEY_BASE_COST = 20;
     static const int CITY_BASE_COST = 30;
     static const int FORTIFICATION_BASE_COST = 20;
-    static const int ROAD_BASE_COST = 10;
 
-    // Spinboxes for quantities
+    // Input data
+    QList<CityPlacementOption> m_cityOptions;
+    QList<FortificationOption> m_fortificationOptions;
+    QList<GalleyPlacementOption> m_galleyOptions;
+
+    // Troop spinboxes
     QSpinBox *m_infantrySpinBox;
     QSpinBox *m_cavalrySpinBox;
     QSpinBox *m_catapultSpinBox;
-    QSpinBox *m_galleySpinBox;
-    QSpinBox *m_citySpinBox;
-    QSpinBox *m_fortificationSpinBox;
-    QSpinBox *m_roadSpinBox;
 
-    // Labels for costs per row
-    QLabel *m_infantryCostLabel;
-    QLabel *m_cavalryCostLabel;
-    QLabel *m_catapultCostLabel;
-    QLabel *m_galleyCostLabel;
-    QLabel *m_cityCostLabel;
-    QLabel *m_fortificationCostLabel;
-    QLabel *m_roadCostLabel;
+    // City checkboxes (maps checkbox to territory option)
+    QMap<QCheckBox*, CityPlacementOption> m_cityCheckboxes;
+    QMap<QCheckBox*, CityPlacementOption> m_fortifiedCityCheckboxes;
 
-    // Bottom summary labels
+    // Fortification checkboxes (for existing cities)
+    QMap<QCheckBox*, FortificationOption> m_fortificationCheckboxes;
+
+    // Galley spinboxes (maps spinbox to sea border option)
+    QMap<QSpinBox*, GalleyPlacementOption> m_galleySpinboxes;
+
+    // Summary labels
     QLabel *m_availableLabel;
     QLabel *m_spendingLabel;
     QLabel *m_remainingLabel;
 
-    // Done button (need access to enable/disable based on budget)
-    QPushButton *m_doneButton;
-
-    int getCurrentPrice(int basePrice) const;
-    void setupUI();
+    // Purchase button
+    QPushButton *m_purchaseButton;
 };
 
 #endif // PURCHASEDIALOG_H

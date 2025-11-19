@@ -2036,266 +2036,159 @@ void PlayerInfoWidget::onEndTurnClicked()
 
     delete destructionDialog;
 
-    // Calculate maximum cities player can purchase
-    // Count owned territories that don't already have cities
-    // Note: Owned territories are always land (sea territories can't be owned)
-    int availableTerritoriesForCities = 0;
+    // SECOND: Build options for PurchaseDialog2
+    Position homePosition = currentPlayer->getHomeProvince();
+
+    // Build list of territories available for city placement
+    QList<CityPlacementOption> cityOptions;
     const QList<QString> &ownedTerritories = currentPlayer->getOwnedTerritories();
     for (const QString &territoryName : ownedTerritories) {
         // Check if this territory already has a city
         QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
         if (citiesInTerritory.isEmpty()) {
-            availableTerritoriesForCities++;
+            // Find position for this territory
+            for (int row = 0; row < 8; ++row) {
+                for (int col = 0; col < 12; ++col) {
+                    if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
+                        CityPlacementOption option;
+                        option.territoryName = territoryName;
+                        option.position = {row, col};
+                        cityOptions.append(option);
+                        goto next_territory;  // Break out of nested loops
+                    }
+                }
+            }
+            next_territory:;
         }
     }
-    int maxCities = availableTerritoriesForCities;
 
-    // Count unfortified cities
-    int unfortifiedCities = 0;
-    for (City *city : currentPlayer->getCities()) {
+    // Build list of existing cities that can be fortified
+    QList<FortificationOption> fortificationOptions;
+    const QList<City*> &cities = currentPlayer->getCities();
+    for (City *city : cities) {
         if (!city->isFortified()) {
-            unfortifiedCities++;
+            FortificationOption option;
+            option.territoryName = city->getTerritoryName();
+            option.position = city->getPosition();
+            fortificationOptions.append(option);
         }
     }
-    // Max fortifications = unfortified cities + cities being purchased (we'll update this dynamically)
-    int maxFortifications = unfortifiedCities + maxCities;
 
-    // Check if player's home territory is adjacent to sea (required for galley purchases)
-    Position homePosition = currentPlayer->getHomeProvince();
+    // Build list of sea borders for galley placement
+    QList<GalleyPlacementOption> galleyOptions;
     QList<Position> adjacentSeaTerritories = m_mapWidget->getAdjacentSeaTerritories(homePosition);
-    bool canPurchaseGalleys = !adjacentSeaTerritories.isEmpty();
+    for (const Position &seaPos : adjacentSeaTerritories) {
+        QString direction;
+        if (seaPos.row < homePosition.row) direction = "North";
+        else if (seaPos.row > homePosition.row) direction = "South";
+        else if (seaPos.col < homePosition.col) direction = "West";
+        else if (seaPos.col > homePosition.col) direction = "East";
 
-    // SECOND: Open purchase dialog to allow player to buy items
-    // Note: Inflation multiplier is fixed at 1 for now (can be enhanced later)
+        GalleyPlacementOption option;
+        option.seaPosition = seaPos;
+        option.seaTerritoryName = m_mapWidget->getTerritoryNameAt(seaPos.row, seaPos.col);
+        option.direction = direction;
+        galleyOptions.append(option);
+    }
+
+    // Get current galley count
+    int currentGalleyCount = currentPlayer->getGalleys().size();
+
+    // Open purchase dialog
     PurchaseDialog *purchaseDialog = new PurchaseDialog(
         currentPlayer->getId(),
         currentPlayer->getWallet(),
         1,  // inflation multiplier (1 = no inflation)
-        maxCities,
-        maxFortifications,
-        canPurchaseGalleys,
+        cityOptions,
+        fortificationOptions,
+        galleyOptions,
+        currentGalleyCount,
         this
     );
 
     if (purchaseDialog->exec() == QDialog::Accepted) {
-        int totalSpent = purchaseDialog->getTotalSpent();
+        // Get purchase result
+        PurchaseResult result = purchaseDialog->getPurchaseResult();
 
         // Deduct money from player's wallet
-        if (totalSpent > 0) {
-            currentPlayer->spendMoney(totalSpent);
-            qDebug() << "Player" << currentPlayer->getId() << "spent" << totalSpent << "talents";
+        if (result.totalCost > 0) {
+            currentPlayer->spendMoney(result.totalCost);
+            qDebug() << "Player" << currentPlayer->getId() << "spent" << result.totalCost << "talents";
         }
 
-        // Get purchased quantities
-        int citiesPurchased = purchaseDialog->getCityCount();
-        int fortificationsPurchased = purchaseDialog->getFortificationCount();
-        int infantryPurchased = purchaseDialog->getInfantryCount();
-        int cavalryPurchased = purchaseDialog->getCavalryCount();
-        int catapultsPurchased = purchaseDialog->getCatapultCount();
-        int galleysPurchased = purchaseDialog->getGalleyCount();
-
-        // Place cities one at a time
-        for (int i = 0; i < citiesPurchased; ++i) {
-            // Get list of owned territories without cities
-            // Note: Owned territories are always land (sea territories can't be owned)
-            QStringList availableTerritories;
-            const QList<QString> &ownedTerritories = currentPlayer->getOwnedTerritories();
-
-            for (const QString &territoryName : ownedTerritories) {
-                // Check if this territory already has a city
-                QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
-                if (citiesInTerritory.isEmpty()) {
-                    availableTerritories.append(territoryName);
-                }
-            }
-
-            if (availableTerritories.isEmpty()) {
-                QMessageBox::warning(this, "Cannot Place City",
-                    QString("Player %1 has no territories available for city placement.").arg(currentPlayer->getId()));
-                break;
-            }
-
-            // Show dialog to select territory
-            bool ok;
-            QString selectedTerritory = QInputDialog::getItem(
-                this,
-                QString("Place City %1/%2").arg(i + 1).arg(citiesPurchased),
-                QString("Player %1: Select territory for new city:").arg(currentPlayer->getId()),
-                availableTerritories,
-                0,
-                false,
-                &ok
+        // Create purchased cities
+        for (const PurchaseResult::CityPurchase &cityPurchase : result.cities) {
+            City *newCity = new City(
+                currentPlayer->getId(),
+                cityPurchase.position,
+                cityPurchase.territoryName,
+                cityPurchase.fortified,
+                currentPlayer
             );
+            currentPlayer->addCity(newCity);
 
-            if (ok && !selectedTerritory.isEmpty()) {
-                // Find the position for this territory
-                Position cityPosition = {-1, -1};
-                bool foundPosition = false;
-
-                for (int row = 0; row < 8; ++row) {
-                    for (int col = 0; col < 12; ++col) {
-                        if (m_mapWidget->getTerritoryNameAt(row, col) == selectedTerritory) {
-                            cityPosition = {row, col};
-                            foundPosition = true;
-                            break;
-                        }
-                    }
-                    if (foundPosition) break;
-                }
-
-                if (foundPosition) {
-                    // Create and add the city
-                    // Note: No need to check for sea territory - owned territories are always land
-                    City *newCity = new City(currentPlayer->getId(), cityPosition, selectedTerritory, false, currentPlayer);
-                    currentPlayer->addCity(newCity);
-                    qDebug() << "Player" << currentPlayer->getId() << "placed city at" << selectedTerritory;
-                } else {
-                    QMessageBox::warning(this, "Error",
-                        QString("Could not find position for territory: %1").arg(selectedTerritory));
-                }
+            if (cityPurchase.fortified) {
+                qDebug() << "Player" << currentPlayer->getId() << "placed fortified city at" << cityPurchase.territoryName;
             } else {
-                // User cancelled
-                break;
+                qDebug() << "Player" << currentPlayer->getId() << "placed city at" << cityPurchase.territoryName;
             }
         }
 
-        // Place fortifications one at a time
-        for (int i = 0; i < fortificationsPurchased; ++i) {
-            // Get list of cities without fortifications
-            QStringList availableCities;
-            const QList<City*> &cities = currentPlayer->getCities();
-
-            for (City *city : cities) {
-                if (!city->isFortified()) {
-                    availableCities.append(city->getTerritoryName());
+        // Add fortifications to existing cities
+        for (const QString &territoryName : result.fortifications) {
+            // Find the city and add fortification
+            const QList<City*> &playerCities = currentPlayer->getCities();
+            for (City *city : playerCities) {
+                if (city->getTerritoryName() == territoryName && !city->isFortified()) {
+                    city->addFortification();
+                    qDebug() << "Player" << currentPlayer->getId() << "fortified city at" << territoryName;
+                    break;
                 }
-            }
-
-            if (availableCities.isEmpty()) {
-                QMessageBox::warning(this, "Cannot Place Fortification",
-                    QString("Player %1 has no cities available for fortification.").arg(currentPlayer->getId()));
-                break;
-            }
-
-            // Show dialog to select city
-            bool ok;
-            QString selectedCity = QInputDialog::getItem(
-                this,
-                QString("Place Fortification %1/%2").arg(i + 1).arg(fortificationsPurchased),
-                QString("Player %1: Select city to fortify:").arg(currentPlayer->getId()),
-                availableCities,
-                0,
-                false,
-                &ok
-            );
-
-            if (ok && !selectedCity.isEmpty()) {
-                // Find the city and add fortification
-                for (City *city : cities) {
-                    if (city->getTerritoryName() == selectedCity && !city->isFortified()) {
-                        city->addFortification();
-                        qDebug() << "Player" << currentPlayer->getId() << "fortified city at" << selectedCity;
-                        break;
-                    }
-                }
-            } else {
-                // User cancelled
-                break;
             }
         }
 
         // Create military units at home province
         QString homeProvince = currentPlayer->getHomeProvinceName();
-        Position homePosition = currentPlayer->getHomeProvince();
+        Position homePosForTroops = currentPlayer->getHomeProvince();
 
         // Create infantry
-        for (int i = 0; i < infantryPurchased; ++i) {
-            InfantryPiece *infantry = new InfantryPiece(currentPlayer->getId(), homePosition, currentPlayer);
+        for (int i = 0; i < result.infantry; ++i) {
+            InfantryPiece *infantry = new InfantryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
             currentPlayer->addInfantry(infantry);
         }
-        if (infantryPurchased > 0) {
-            qDebug() << "Player" << currentPlayer->getId() << "created" << infantryPurchased << "infantry at" << homeProvince;
+        if (result.infantry > 0) {
+            qDebug() << "Player" << currentPlayer->getId() << "created" << result.infantry << "infantry at" << homeProvince;
         }
 
         // Create cavalry
-        for (int i = 0; i < cavalryPurchased; ++i) {
-            CavalryPiece *cavalry = new CavalryPiece(currentPlayer->getId(), homePosition, currentPlayer);
+        for (int i = 0; i < result.cavalry; ++i) {
+            CavalryPiece *cavalry = new CavalryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
             currentPlayer->addCavalry(cavalry);
         }
-        if (cavalryPurchased > 0) {
-            qDebug() << "Player" << currentPlayer->getId() << "created" << cavalryPurchased << "cavalry at" << homeProvince;
+        if (result.cavalry > 0) {
+            qDebug() << "Player" << currentPlayer->getId() << "created" << result.cavalry << "cavalry at" << homeProvince;
         }
 
         // Create catapults
-        for (int i = 0; i < catapultsPurchased; ++i) {
-            CatapultPiece *catapult = new CatapultPiece(currentPlayer->getId(), homePosition, currentPlayer);
+        for (int i = 0; i < result.catapults; ++i) {
+            CatapultPiece *catapult = new CatapultPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
             currentPlayer->addCatapult(catapult);
         }
-        if (catapultsPurchased > 0) {
-            qDebug() << "Player" << currentPlayer->getId() << "created" << catapultsPurchased << "catapults at" << homeProvince;
+        if (result.catapults > 0) {
+            qDebug() << "Player" << currentPlayer->getId() << "created" << result.catapults << "catapults at" << homeProvince;
         }
 
-        // Create galleys - they must be placed on the border with a sea territory
-        if (galleysPurchased > 0) {
-            // We already checked adjacentSeaTerritories earlier, but recalculate for safety
-            QList<Position> seaBorders = m_mapWidget->getAdjacentSeaTerritories(homePosition);
-
-            if (seaBorders.isEmpty()) {
-                QMessageBox::warning(this, "Cannot Place Galleys",
-                    QString("Player %1's home territory is not adjacent to any sea territories. Galleys cannot be placed.").arg(currentPlayer->getId()));
-            } else {
-                Position selectedSeaBorder = homePosition;  // Default to home position
-
-                // If multiple sea borders exist, ask the player which one to use
-                if (seaBorders.size() > 1) {
-                    QStringList seaBorderOptions;
-                    for (const Position &seaPos : seaBorders) {
-                        QString direction;
-                        if (seaPos.row < homePosition.row) direction = "North";
-                        else if (seaPos.row > homePosition.row) direction = "South";
-                        else if (seaPos.col < homePosition.col) direction = "West";
-                        else if (seaPos.col > homePosition.col) direction = "East";
-
-                        QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(seaPos.row, seaPos.col);
-                        seaBorderOptions.append(QString("%1 (%2 at %3,%4)").arg(direction).arg(seaTerritoryName).arg(seaPos.row).arg(seaPos.col));
-                    }
-
-                    bool ok;
-                    QString selectedOption = QInputDialog::getItem(
-                        this,
-                        QString("Place Galleys - Player %1").arg(currentPlayer->getId()),
-                        QString("Your home territory borders multiple sea territories.\nSelect which sea border to place your %1 galley(s) at:").arg(galleysPurchased),
-                        seaBorderOptions,
-                        0,
-                        false,
-                        &ok
-                    );
-
-                    if (ok && !selectedOption.isEmpty()) {
-                        int selectedIndex = seaBorderOptions.indexOf(selectedOption);
-                        if (selectedIndex >= 0 && selectedIndex < seaBorders.size()) {
-                            selectedSeaBorder = seaBorders[selectedIndex];
-                        }
-                    } else {
-                        // User cancelled, don't create galleys
-                        QMessageBox::information(this, "Galleys Not Placed",
-                            QString("Galley placement cancelled. Player %1 did not receive %2 galley(s), but money was already spent.").arg(currentPlayer->getId()).arg(galleysPurchased));
-                        galleysPurchased = 0;  // Set to 0 so we don't create them
-                    }
-                }
-
-                // Create the galleys at home position (which represents the border with the selected sea territory)
-                for (int i = 0; i < galleysPurchased; ++i) {
-                    GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosition, currentPlayer);
-                    currentPlayer->addGalley(galley);
-                }
-
-                if (galleysPurchased > 0) {
-                    QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(selectedSeaBorder.row, selectedSeaBorder.col);
-                    qDebug() << "Player" << currentPlayer->getId() << "created" << galleysPurchased
-                             << "galleys at" << homeProvince << "bordering sea territory" << seaTerritoryName;
-                }
+        // Create galleys at specified sea borders
+        for (const PurchaseResult::GalleyPurchase &galleyPurchase : result.galleys) {
+            // Create the galleys at home position (they're on the border with the sea)
+            for (int i = 0; i < galleyPurchase.count; ++i) {
+                GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+                currentPlayer->addGalley(galley);
             }
+
+            QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col);
+            qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
+                     << "galleys at" << homeProvince << "bordering sea territory" << seaTerritoryName;
         }
     }
 
