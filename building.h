@@ -56,8 +56,13 @@ public:
     void addFortification() { m_isFortified = true; }
     void removeFortification() { m_isFortified = false; }
 
+    // Mark for destruction
+    bool isMarkedForDestruction() const { return m_markedForDestruction; }
+    void setMarkedForDestruction(bool marked) { m_markedForDestruction = marked; }
+
 private:
     bool m_isFortified;  // Does this city have walls/fortification?
+    bool m_markedForDestruction;  // Is this city marked for destruction at end of turn?
 };
 
 // Road class - connects territories

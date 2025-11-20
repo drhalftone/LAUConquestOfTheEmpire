@@ -21,6 +21,9 @@
 #include <QDebug>
 #include <QInputDialog>
 #include <QMessageBox>
+#include <QDialog>
+#include <QCheckBox>
+#include <QLabel>
 
 PlayerInfoWidget::PlayerInfoWidget(QWidget *parent)
     : QWidget(parent)
@@ -69,9 +72,18 @@ void PlayerInfoWidget::addPlayer(Player *player)
     QWidget *playerTab = createPlayerTab(player);
     m_playerTabs[player] = playerTab;
 
-    // Add tab with player ID as label
+    // Add tab with player ID as label and flag icon
     QString tabLabel = QString("Player %1").arg(player->getId());
-    m_tabWidget->addTab(playerTab, tabLabel);
+    QIcon flagIcon;
+    switch (player->getId().toLatin1()) {
+        case 'A': flagIcon = QIcon(":/images/redFlag.png"); break;
+        case 'B': flagIcon = QIcon(":/images/greenFlag.png"); break;
+        case 'C': flagIcon = QIcon(":/images/blueFlag.png"); break;
+        case 'D': flagIcon = QIcon(":/images/yellowFlag.png"); break;
+        case 'E': flagIcon = QIcon(":/images/blackFlag.png"); break;
+        case 'F': flagIcon = QIcon(":/images/orangeFlag.png"); break;
+    }
+    m_tabWidget->addTab(playerTab, flagIcon, tabLabel);
 }
 
 void PlayerInfoWidget::setPlayers(const QList<Player*> &players)
@@ -137,9 +149,10 @@ QGroupBox* PlayerInfoWidget::createBasicInfoSection(Player *player)
 
     // Home Province
     layout->addWidget(new QLabel("<b>Home Province:</b>"), 2, 0);
-    Position homePos = player->getHomeProvince();
+    QString homeName = player->getHomeProvinceName();
+    Position homePos = m_mapWidget->territoryNameToPosition(homeName);  // Convert for display
     QString homeText = QString("%1 [Row: %2, Col: %3]")
-                       .arg(player->getHomeProvinceName())
+                       .arg(homeName)
                        .arg(homePos.row)
                        .arg(homePos.col);
     layout->addWidget(new QLabel(homeText), 2, 1);
@@ -182,6 +195,10 @@ QGroupBox* PlayerInfoWidget::createEconomicsSection(Player *player)
             }
         }
     }
+
+    // Add 5 talents for each city owned (cities are worth 5 each)
+    int cityTaxes = player->getCities().size() * 5;
+    totalTaxValue += cityTaxes;
 
     layout->addWidget(new QLabel("<b>Total Tax Value:</b>"), 2, 0);
     layout->addWidget(new QLabel(QString("%1 talents").arg(totalTaxValue)), 2, 1);
@@ -249,6 +266,11 @@ QGroupBox* PlayerInfoWidget::createTerritoriesSection(Player *player)
                 } else {
                     itemText += " - [City]";
                 }
+
+                // Mark cities marked for destruction
+                if (city->isMarkedForDestruction()) {
+                    itemText += " (MARKED FOR DESTRUCTION)";
+                }
             }
 
             // Add roads if any
@@ -261,7 +283,23 @@ QGroupBox* PlayerInfoWidget::createTerritoriesSection(Player *player)
             QLabel *territoryLabel = new QLabel(itemText);
             territoryLabel->setWordWrap(true);
             territoryLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            territoryLabel->setStyleSheet("padding: 5px; background-color: transparent;");
+
+            // Style differently if city is marked for destruction
+            QString labelStyle = "padding: 5px; background-color: transparent;";
+            if (city && city->isMarkedForDestruction()) {
+                labelStyle = "padding: 5px; background-color: #ffcccc; color: #cc0000; font-weight: bold;";
+            }
+            territoryLabel->setStyleSheet(labelStyle);
+            territoryLabel->setContextMenuPolicy(Qt::CustomContextMenu);
+
+            // Store territory name as property for context menu
+            territoryLabel->setProperty("territoryName", territoryName);
+            territoryLabel->setProperty("playerId", player->getId());
+
+            // Connect context menu for marking cities for destruction
+            connect(territoryLabel, &QLabel::customContextMenuRequested, [this, player, territoryName, territoryLabel](const QPoint &pos) {
+                showTerritoryContextMenu(player, territoryName, territoryLabel->mapToGlobal(pos));
+            });
 
             // Add to grid
             gridLayout->addWidget(territoryLabel, row, col);
@@ -402,20 +440,21 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
         row++;
     }
     // Resize infantry table to fit content (max 10 rows visible)
+    infantryTable->resizeRowsToContents();
     if (player->getInfantryCount() > 0) {
-        infantryTable->resizeRowsToContents();
         int visibleRows = qMin(player->getInfantryCount(), 10);
         int estimatedRowHeight = 25;
         int tableHeight = 30 + (visibleRows * estimatedRowHeight);
         infantryTable->setMaximumHeight(tableHeight);
+    } else {
+        // Minimal height when empty
+        infantryTable->setMaximumHeight(50);
     }
 
     QVBoxLayout *infantryLayout = new QVBoxLayout();
     infantryLayout->addWidget(infantryTable);
     infantryBox->setLayout(infantryLayout);
-    if (player->getInfantryCount() > 0) {
-        mainLayout->addWidget(infantryBox);
-    }
+    mainLayout->addWidget(infantryBox);  // Always show, even if count is 0
 
     // Cavalry
     QGroupBox *cavalryBox = new QGroupBox(QString("Cavalry (%1)").arg(player->getCavalryCount()));
@@ -585,7 +624,16 @@ void PlayerInfoWidget::updatePlayerInfo(Player *player)
         m_playerTabs[player] = newTab;
 
         QString tabLabel = QString("Player %1").arg(player->getId());
-        m_tabWidget->insertTab(tabIndex, newTab, tabLabel);
+        QIcon flagIcon;
+        switch (player->getId().toLatin1()) {
+            case 'A': flagIcon = QIcon(":/images/redFlag.png"); break;
+            case 'B': flagIcon = QIcon(":/images/greenFlag.png"); break;
+            case 'C': flagIcon = QIcon(":/images/blueFlag.png"); break;
+            case 'D': flagIcon = QIcon(":/images/yellowFlag.png"); break;
+            case 'E': flagIcon = QIcon(":/images/blackFlag.png"); break;
+            case 'F': flagIcon = QIcon(":/images/orangeFlag.png"); break;
+        }
+        m_tabWidget->insertTab(tabIndex, newTab, flagIcon, tabLabel);
 
         // Restore the previously selected tab
         m_tabWidget->setCurrentIndex(currentTabIndex);
@@ -609,242 +657,575 @@ void PlayerInfoWidget::updateAllPlayers()
 
 void PlayerInfoWidget::showCaesarContextMenu(CaesarPiece *piece, const QPoint &pos)
 {
-    if (!piece) return;
+    if (!piece || !m_mapWidget) return;
 
+    // Find the player who owns this piece
+    Player *player = nullptr;
+    for (Player *p : m_players) {
+        if (p->getId() == piece->getPlayer()) {
+            player = p;
+            break;
+        }
+    }
+    if (!player) return;
+
+    QString territoryName = piece->getTerritoryName();
+
+    // Create menu with just this Caesar's movement options
     QMenu menu(this);
-    QIcon moveIcon = style()->standardIcon(QStyle::SP_ArrowForward);
-    QAction *moveAction = menu.addAction(moveIcon, "Move");
+    QIcon caesarIcon(":/images/ceasarIcon.png");
+    QString leaderName = QString("Caesar %1 (%2 moves)").arg(piece->getPlayer()).arg(piece->getMovesRemaining());
 
-    // Disable if no moves remaining
-    moveAction->setEnabled(piece->getMovesRemaining() > 0);
+    // Get neighbors using MapGraph
+    QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
 
-    // Create submenu for directions
-    QMenu *moveSubmenu = new QMenu("Move", this);
-    Position currentPos = piece->getPosition();
+    // Get territories connected by roads
+    QList<QString> roadConnectedTerritories;
+    QSet<QString> visited;
+    QList<QString> toVisit;
 
-    // Up (row - 1)
-    QString upTerritory = (currentPos.row > 0) ? getTerritoryNameAt(currentPos.row - 1, currentPos.col) : "Off Board";
-    int upValue = (currentPos.row > 0) ? m_mapWidget->getTerritoryValueAt(currentPos.row - 1, currentPos.col) : 0;
-    bool upIsSea = (currentPos.row > 0) && m_mapWidget->isSeaTerritory(currentPos.row - 1, currentPos.col);
-    QChar upOwner = (currentPos.row > 0) ? m_mapWidget->getTerritoryOwnerAt(currentPos.row - 1, currentPos.col) : '\0';
-    QString upOwnership = (upOwner == '\0') ? "[Unclaimed]" : (upOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(upOwner);
-    QString upTroops = (currentPos.row > 0) ? getTroopInfoAt(currentPos.row - 1, currentPos.col) : "";
-    QString upText = (upValue > 0) ? QString("%1 (%2) %3%4").arg(upTerritory).arg(upValue).arg(upOwnership).arg(upTroops) : QString("%1 %2%3").arg(upTerritory).arg(upOwnership).arg(upTroops);
-    QIcon upIcon = style()->standardIcon(QStyle::SP_ArrowUp);
+    visited.insert(territoryName);
+    toVisit.append(territoryName);
 
-    // Check if there's a road connection upward
-    Position upPos = {currentPos.row - 1, currentPos.col};
-    QList<Position> upRoadConnections = (currentPos.row > 0) ? m_mapWidget->getTerritoriesConnectedByRoad(upPos, piece->getPlayer()) : QList<Position>();
+    // BFS through road network
+    while (!toVisit.isEmpty()) {
+        QString currentTerritory = toVisit.takeFirst();
 
-    if (upRoadConnections.size() > 1) {
-        // There's a road network - create submenu
-        QMenu *upRoadSubmenu = new QMenu(upText, this);
-        upRoadSubmenu->setIcon(upIcon);
+        for (Road *road : player->getRoads()) {
+            QString territory1 = road->getTerritoryName();
+            Position toPos = road->getToPosition();
+            QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
 
-        // First, add the adjacent territory itself (upPos) as an option
-        QAction *adjacentAction = upRoadSubmenu->addAction(upText);
-        adjacentAction->setEnabled(piece->getMovesRemaining() > 0);
-        connect(adjacentAction, &QAction::triggered, [this, piece, upPos]() { moveLeaderViaRoad(piece, upPos); });
+            QString nextTerritory;
+            if (territory1 == currentTerritory && !visited.contains(territory2)) {
+                nextTerritory = territory2;
+            } else if (territory2 == currentTerritory && !visited.contains(territory1)) {
+                nextTerritory = territory1;
+            }
 
-        // Then add all other territories connected by road (except current position and upPos)
-        for (const Position &roadPos : upRoadConnections) {
-            if (roadPos == currentPos) continue; // Skip current position
-            if (roadPos == upPos) continue; // Skip the adjacent territory (already added above)
-
-            QString roadTerritory = getTerritoryNameAt(roadPos.row, roadPos.col);
-            int roadValue = m_mapWidget->getTerritoryValueAt(roadPos.row, roadPos.col);
-            QChar roadOwner = m_mapWidget->getTerritoryOwnerAt(roadPos.row, roadPos.col);
-            QString roadOwnership = (roadOwner == '\0') ? "[Unclaimed]" : (roadOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(roadOwner);
-            QString roadTroops = getTroopInfoAt(roadPos.row, roadPos.col);
-            QString roadText = (roadValue > 0) ? QString("%1 (%2) %3%4 [Via Road]").arg(roadTerritory).arg(roadValue).arg(roadOwnership).arg(roadTroops) : QString("%1 %2%3 [Via Road]").arg(roadTerritory).arg(roadOwnership).arg(roadTroops);
-
-            QAction *roadAction = upRoadSubmenu->addAction(roadText);
-            roadAction->setEnabled(piece->getMovesRemaining() > 0);
-            connect(roadAction, &QAction::triggered, [this, piece, roadPos]() { moveLeaderViaRoad(piece, roadPos); });
+            if (!nextTerritory.isEmpty()) {
+                visited.insert(nextTerritory);
+                toVisit.append(nextTerritory);
+                if (!neighbors.contains(nextTerritory)) {
+                    roadConnectedTerritories.append(nextTerritory);
+                }
+            }
         }
-
-        moveSubmenu->addMenu(upRoadSubmenu);
-        upRoadSubmenu->setEnabled(currentPos.row > 0 && !upIsSea && piece->getMovesRemaining() > 0);
-    } else {
-        // No road network - regular move
-        QAction *upAction = moveSubmenu->addAction(upIcon, upText);
-        upAction->setEnabled(currentPos.row > 0 && !upIsSea && piece->getMovesRemaining() > 0);
-        connect(upAction, &QAction::triggered, [this, piece]() { moveLeaderWithTroops(piece, -1, 0); });
     }
 
-    // Down (row + 1)
-    QString downTerritory = (currentPos.row < 7) ? getTerritoryNameAt(currentPos.row + 1, currentPos.col) : "Off Board";
-    int downValue = (currentPos.row < 7) ? m_mapWidget->getTerritoryValueAt(currentPos.row + 1, currentPos.col) : 0;
-    bool downIsSea = (currentPos.row < 7) && m_mapWidget->isSeaTerritory(currentPos.row + 1, currentPos.col);
-    QChar downOwner = (currentPos.row < 7) ? m_mapWidget->getTerritoryOwnerAt(currentPos.row + 1, currentPos.col) : '\0';
-    QString downOwnership = (downOwner == '\0') ? "[Unclaimed]" : (downOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(downOwner);
-    QString downTroops = (currentPos.row < 7) ? getTroopInfoAt(currentPos.row + 1, currentPos.col) : "";
-    QString downText = (downValue > 0) ? QString("%1 (%2) %3%4").arg(downTerritory).arg(downValue).arg(downOwnership).arg(downTroops) : QString("%1 %2%3").arg(downTerritory).arg(downOwnership).arg(downTroops);
-    QIcon downIcon = style()->standardIcon(QStyle::SP_ArrowDown);
+    // Combine neighbors and road-connected territories
+    QList<QString> allDestinations = neighbors + roadConnectedTerritories;
 
-    // Check if there's a road connection downward
-    Position downPos = {currentPos.row + 1, currentPos.col};
-    QList<Position> downRoadConnections = (currentPos.row < 7) ? m_mapWidget->getTerritoriesConnectedByRoad(downPos, piece->getPlayer()) : QList<Position>();
+    // Add each destination as a movement option
+    for (const QString &destinationName : allDestinations) {
+        Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
+        int value = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
+        bool isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
+        QChar owner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
 
-    if (downRoadConnections.size() > 1) {
-        // There's a road network - create submenu
-        QMenu *downRoadSubmenu = new QMenu(downText, this);
-        downRoadSubmenu->setIcon(downIcon);
+        // Build display text
+        bool isViaRoad = roadConnectedTerritories.contains(destinationName);
+        QString ownership = (owner == '\0') ? "[Unclaimed]" : (owner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(owner);
+        QString troops = getTroopInfoAt(destPos.row, destPos.col);
+        QString roadIndicator = isViaRoad ? " [via road]" : "";
+        QString displayText = (value > 0) ? QString("%1 (%2) %3%4%5").arg(destinationName).arg(value).arg(ownership).arg(troops).arg(roadIndicator)
+                                          : QString("%1 %2%3%4").arg(destinationName).arg(ownership).arg(troops).arg(roadIndicator);
 
-        // First, add the adjacent territory itself (downPos) as an option
-        QAction *adjacentAction = downRoadSubmenu->addAction(downText);
-        adjacentAction->setEnabled(piece->getMovesRemaining() > 0);
-        connect(adjacentAction, &QAction::triggered, [this, piece, downPos]() { moveLeaderViaRoad(piece, downPos); });
+        // Determine icon
+        QIcon moveIcon;
+        bool hasCombat = false;
+        bool hasCity = false;
 
-        // Then add all other territories connected by road (except current position and downPos)
-        for (const Position &roadPos : downRoadConnections) {
-            if (roadPos == currentPos) continue; // Skip current position
-            if (roadPos == downPos) continue; // Skip the adjacent territory (already added above)
-
-            QString roadTerritory = getTerritoryNameAt(roadPos.row, roadPos.col);
-            int roadValue = m_mapWidget->getTerritoryValueAt(roadPos.row, roadPos.col);
-            QChar roadOwner = m_mapWidget->getTerritoryOwnerAt(roadPos.row, roadPos.col);
-            QString roadOwnership = (roadOwner == '\0') ? "[Unclaimed]" : (roadOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(roadOwner);
-            QString roadTroops = getTroopInfoAt(roadPos.row, roadPos.col);
-            QString roadText = (roadValue > 0) ? QString("%1 (%2) %3%4 [Via Road]").arg(roadTerritory).arg(roadValue).arg(roadOwnership).arg(roadTroops) : QString("%1 %2%3 [Via Road]").arg(roadTerritory).arg(roadOwnership).arg(roadTroops);
-
-            QAction *roadAction = downRoadSubmenu->addAction(roadText);
-            roadAction->setEnabled(piece->getMovesRemaining() > 0);
-            connect(roadAction, &QAction::triggered, [this, piece, roadPos]() { moveLeaderViaRoad(piece, roadPos); });
+        // Check for combat
+        for (Player *p : m_players) {
+            if (p->getId() != player->getId()) {
+                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(destinationName);
+                if (!enemyPieces.isEmpty()) {
+                    hasCombat = true;
+                    break;
+                }
+            }
+        }
+        if (!hasCombat && owner != '\0' && owner != player->getId()) {
+            hasCombat = true;
         }
 
-        moveSubmenu->addMenu(downRoadSubmenu);
-        downRoadSubmenu->setEnabled(currentPos.row < 7 && !downIsSea && piece->getMovesRemaining() > 0);
-    } else {
-        // No road network - regular move
-        QAction *downAction = moveSubmenu->addAction(downIcon, downText);
-        downAction->setEnabled(currentPos.row < 7 && !downIsSea && piece->getMovesRemaining() > 0);
-        connect(downAction, &QAction::triggered, [this, piece]() { moveLeaderWithTroops(piece, 1, 0); });
-    }
-
-    // Left (col - 1)
-    QString leftTerritory = (currentPos.col > 0) ? getTerritoryNameAt(currentPos.row, currentPos.col - 1) : "Off Board";
-    int leftValue = (currentPos.col > 0) ? m_mapWidget->getTerritoryValueAt(currentPos.row, currentPos.col - 1) : 0;
-    bool leftIsSea = (currentPos.col > 0) && m_mapWidget->isSeaTerritory(currentPos.row, currentPos.col - 1);
-    QChar leftOwner = (currentPos.col > 0) ? m_mapWidget->getTerritoryOwnerAt(currentPos.row, currentPos.col - 1) : '\0';
-    QString leftOwnership = (leftOwner == '\0') ? "[Unclaimed]" : (leftOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(leftOwner);
-    QString leftTroops = (currentPos.col > 0) ? getTroopInfoAt(currentPos.row, currentPos.col - 1) : "";
-    QString leftText = (leftValue > 0) ? QString("%1 (%2) %3%4").arg(leftTerritory).arg(leftValue).arg(leftOwnership).arg(leftTroops) : QString("%1 %2%3").arg(leftTerritory).arg(leftOwnership).arg(leftTroops);
-    QIcon leftIcon = style()->standardIcon(QStyle::SP_ArrowBack);
-
-    // Check if there's a road connection leftward
-    Position leftPos = {currentPos.row, currentPos.col - 1};
-    QList<Position> leftRoadConnections = (currentPos.col > 0) ? m_mapWidget->getTerritoriesConnectedByRoad(leftPos, piece->getPlayer()) : QList<Position>();
-
-    if (leftRoadConnections.size() > 1) {
-        // There's a road network - create submenu
-        QMenu *leftRoadSubmenu = new QMenu(leftText, this);
-        leftRoadSubmenu->setIcon(leftIcon);
-
-        // First, add the adjacent territory itself (leftPos) as an option
-        QAction *adjacentAction = leftRoadSubmenu->addAction(leftText);
-        adjacentAction->setEnabled(piece->getMovesRemaining() > 0);
-        connect(adjacentAction, &QAction::triggered, [this, piece, leftPos]() { moveLeaderViaRoad(piece, leftPos); });
-
-        // Then add all other territories connected by road (except current position and leftPos)
-        for (const Position &roadPos : leftRoadConnections) {
-            if (roadPos == currentPos) continue; // Skip current position
-            if (roadPos == leftPos) continue; // Skip the adjacent territory (already added above)
-
-            QString roadTerritory = getTerritoryNameAt(roadPos.row, roadPos.col);
-            int roadValue = m_mapWidget->getTerritoryValueAt(roadPos.row, roadPos.col);
-            QChar roadOwner = m_mapWidget->getTerritoryOwnerAt(roadPos.row, roadPos.col);
-            QString roadOwnership = (roadOwner == '\0') ? "[Unclaimed]" : (roadOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(roadOwner);
-            QString roadTroops = getTroopInfoAt(roadPos.row, roadPos.col);
-            QString roadText = (roadValue > 0) ? QString("%1 (%2) %3%4 [Via Road]").arg(roadTerritory).arg(roadValue).arg(roadOwnership).arg(roadTroops) : QString("%1 %2%3 [Via Road]").arg(roadTerritory).arg(roadOwnership).arg(roadTroops);
-
-            QAction *roadAction = leftRoadSubmenu->addAction(roadText);
-            roadAction->setEnabled(piece->getMovesRemaining() > 0);
-            connect(roadAction, &QAction::triggered, [this, piece, roadPos]() { moveLeaderViaRoad(piece, roadPos); });
+        // Check for city
+        if (!hasCombat) {
+            for (Player *p : m_players) {
+                if (p->getCityAtTerritory(destinationName)) {
+                    hasCity = true;
+                    break;
+                }
+            }
         }
 
-        moveSubmenu->addMenu(leftRoadSubmenu);
-        leftRoadSubmenu->setEnabled(currentPos.col > 0 && !leftIsSea && piece->getMovesRemaining() > 0);
-    } else {
-        // No road network - regular move
-        QAction *leftAction = moveSubmenu->addAction(leftIcon, leftText);
-        leftAction->setEnabled(currentPos.col > 0 && !leftIsSea && piece->getMovesRemaining() > 0);
-        connect(leftAction, &QAction::triggered, [this, piece]() { moveLeaderWithTroops(piece, 0, -1); });
-    }
-
-    // Right (col + 1)
-    QString rightTerritory = (currentPos.col < 11) ? getTerritoryNameAt(currentPos.row, currentPos.col + 1) : "Off Board";
-    int rightValue = (currentPos.col < 11) ? m_mapWidget->getTerritoryValueAt(currentPos.row, currentPos.col + 1) : 0;
-    bool rightIsSea = (currentPos.col < 11) && m_mapWidget->isSeaTerritory(currentPos.row, currentPos.col + 1);
-    QChar rightOwner = (currentPos.col < 11) ? m_mapWidget->getTerritoryOwnerAt(currentPos.row, currentPos.col + 1) : '\0';
-    QString rightOwnership = (rightOwner == '\0') ? "[Unclaimed]" : (rightOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(rightOwner);
-    QString rightTroops = (currentPos.col < 11) ? getTroopInfoAt(currentPos.row, currentPos.col + 1) : "";
-    QString rightText = (rightValue > 0) ? QString("%1 (%2) %3%4").arg(rightTerritory).arg(rightValue).arg(rightOwnership).arg(rightTroops) : QString("%1 %2%3").arg(rightTerritory).arg(rightOwnership).arg(rightTroops);
-    QIcon rightIcon = style()->standardIcon(QStyle::SP_ArrowForward);
-
-    // Check if there's a road connection rightward
-    Position rightPos = {currentPos.row, currentPos.col + 1};
-    QList<Position> rightRoadConnections = (currentPos.col < 11) ? m_mapWidget->getTerritoriesConnectedByRoad(rightPos, piece->getPlayer()) : QList<Position>();
-
-    if (rightRoadConnections.size() > 1) {
-        // There's a road network - create submenu
-        QMenu *rightRoadSubmenu = new QMenu(rightText, this);
-        rightRoadSubmenu->setIcon(rightIcon);
-
-        // First, add the adjacent territory itself (rightPos) as an option
-        QAction *adjacentAction = rightRoadSubmenu->addAction(rightText);
-        adjacentAction->setEnabled(piece->getMovesRemaining() > 0);
-        connect(adjacentAction, &QAction::triggered, [this, piece, rightPos]() { moveLeaderViaRoad(piece, rightPos); });
-
-        // Then add all other territories connected by road (except current position and rightPos)
-        for (const Position &roadPos : rightRoadConnections) {
-            if (roadPos == currentPos) continue; // Skip current position
-            if (roadPos == rightPos) continue; // Skip the adjacent territory (already added above)
-
-            QString roadTerritory = getTerritoryNameAt(roadPos.row, roadPos.col);
-            int roadValue = m_mapWidget->getTerritoryValueAt(roadPos.row, roadPos.col);
-            QChar roadOwner = m_mapWidget->getTerritoryOwnerAt(roadPos.row, roadPos.col);
-            QString roadOwnership = (roadOwner == '\0') ? "[Unclaimed]" : (roadOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(roadOwner);
-            QString roadTroops = getTroopInfoAt(roadPos.row, roadPos.col);
-            QString roadText = (roadValue > 0) ? QString("%1 (%2) %3%4 [Via Road]").arg(roadTerritory).arg(roadValue).arg(roadOwnership).arg(roadTroops) : QString("%1 %2%3 [Via Road]").arg(roadTerritory).arg(roadOwnership).arg(roadTroops);
-
-            QAction *roadAction = rightRoadSubmenu->addAction(roadText);
-            roadAction->setEnabled(piece->getMovesRemaining() > 0);
-            connect(roadAction, &QAction::triggered, [this, piece, roadPos]() { moveLeaderViaRoad(piece, roadPos); });
+        // Set icon
+        if (hasCombat) {
+            moveIcon = QIcon(":/images/combatIcon.png");
+        } else if (hasCity) {
+            moveIcon = QIcon(":/images/newCityIcon.png");
+        } else if (owner != '\0') {
+            QString flagPath;
+            switch (owner.toLatin1()) {
+                case 'A': flagPath = ":/images/redFlag.png"; break;
+                case 'B': flagPath = ":/images/greenFlag.png"; break;
+                case 'C': flagPath = ":/images/blueFlag.png"; break;
+                case 'D': flagPath = ":/images/yellowFlag.png"; break;
+                case 'E': flagPath = ":/images/blackFlag.png"; break;
+                case 'F': flagPath = ":/images/orangeFlag.png"; break;
+            }
+            if (!flagPath.isEmpty()) {
+                moveIcon = QIcon(flagPath);
+            }
         }
 
-        moveSubmenu->addMenu(rightRoadSubmenu);
-        rightRoadSubmenu->setEnabled(currentPos.col < 11 && !rightIsSea && piece->getMovesRemaining() > 0);
-    } else {
-        // No road network - regular move
-        QAction *rightAction = moveSubmenu->addAction(rightIcon, rightText);
-        rightAction->setEnabled(currentPos.col < 11 && !rightIsSea && piece->getMovesRemaining() > 0);
-        connect(rightAction, &QAction::triggered, [this, piece]() { moveLeaderWithTroops(piece, 0, 1); });
-    }
+        QAction *moveToAction = menu.addAction(moveIcon, displayText);
+        moveToAction->setEnabled(!isSea && piece->getMovesRemaining() > 0);
 
-    moveAction->setMenu(moveSubmenu);
+        connect(moveToAction, &QAction::triggered, [this, piece, destinationName]() {
+            moveLeaderToTerritory(piece, destinationName);
+        });
+    }
 
     menu.exec(pos);
 }
+
 
 void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint &pos)
 {
-    if (!piece) return;
+    if (!piece || !m_mapWidget) return;
+
+    // Find the player who owns this piece
+    Player *player = nullptr;
+    for (Player *p : m_players) {
+        if (p->getId() == piece->getPlayer()) {
+            player = p;
+            break;
+        }
+    }
+    if (!player) return;
+
+    QString territoryName = piece->getTerritoryName();
+
+    // Create menu with just this General's movement options
+    QMenu menu(this);
+    QIcon generalIcon(":/images/generalIcon.png");
+    QString leaderName = QString("General %1 #%2 (%3 moves)").arg(piece->getPlayer()).arg(piece->getNumber()).arg(piece->getMovesRemaining());
+
+    // Get neighbors using MapGraph
+    QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
+
+    // Get territories connected by roads
+    QList<QString> roadConnectedTerritories;
+    QSet<QString> visited;
+    QList<QString> toVisit;
+
+    visited.insert(territoryName);
+    toVisit.append(territoryName);
+
+    // BFS through road network
+    while (!toVisit.isEmpty()) {
+        QString currentTerritory = toVisit.takeFirst();
+
+        for (Road *road : player->getRoads()) {
+            QString territory1 = road->getTerritoryName();
+            Position toPos = road->getToPosition();
+            QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
+
+            QString nextTerritory;
+            if (territory1 == currentTerritory && !visited.contains(territory2)) {
+                nextTerritory = territory2;
+            } else if (territory2 == currentTerritory && !visited.contains(territory1)) {
+                nextTerritory = territory1;
+            }
+
+            if (!nextTerritory.isEmpty()) {
+                visited.insert(nextTerritory);
+                toVisit.append(nextTerritory);
+                if (!neighbors.contains(nextTerritory)) {
+                    roadConnectedTerritories.append(nextTerritory);
+                }
+            }
+        }
+    }
+
+    // Combine neighbors and road-connected territories
+    QList<QString> allDestinations = neighbors + roadConnectedTerritories;
+
+    // Add each destination as a movement option
+    for (const QString &destinationName : allDestinations) {
+        Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
+        int value = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
+        bool isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
+        QChar owner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+
+        // Build display text
+        bool isViaRoad = roadConnectedTerritories.contains(destinationName);
+        QString ownership = (owner == '\0') ? "[Unclaimed]" : (owner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(owner);
+        QString troops = getTroopInfoAt(destPos.row, destPos.col);
+        QString roadIndicator = isViaRoad ? " [via road]" : "";
+        QString displayText = (value > 0) ? QString("%1 (%2) %3%4%5").arg(destinationName).arg(value).arg(ownership).arg(troops).arg(roadIndicator)
+                                          : QString("%1 %2%3%4").arg(destinationName).arg(ownership).arg(troops).arg(roadIndicator);
+
+        // Determine icon
+        QIcon moveIcon;
+        bool hasCombat = false;
+        bool hasCity = false;
+
+        // Check for combat
+        for (Player *p : m_players) {
+            if (p->getId() != player->getId()) {
+                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(destinationName);
+                if (!enemyPieces.isEmpty()) {
+                    hasCombat = true;
+                    break;
+                }
+            }
+        }
+        if (!hasCombat && owner != '\0' && owner != player->getId()) {
+            hasCombat = true;
+        }
+
+        // Check for city
+        if (!hasCombat) {
+            for (Player *p : m_players) {
+                if (p->getCityAtTerritory(destinationName)) {
+                    hasCity = true;
+                    break;
+                }
+            }
+        }
+
+        // Set icon
+        if (hasCombat) {
+            moveIcon = QIcon(":/images/combatIcon.png");
+        } else if (hasCity) {
+            moveIcon = QIcon(":/images/newCityIcon.png");
+        } else if (owner != '\0') {
+            QString flagPath;
+            switch (owner.toLatin1()) {
+                case 'A': flagPath = ":/images/redFlag.png"; break;
+                case 'B': flagPath = ":/images/greenFlag.png"; break;
+                case 'C': flagPath = ":/images/blueFlag.png"; break;
+                case 'D': flagPath = ":/images/yellowFlag.png"; break;
+                case 'E': flagPath = ":/images/blackFlag.png"; break;
+                case 'F': flagPath = ":/images/orangeFlag.png"; break;
+            }
+            if (!flagPath.isEmpty()) {
+                moveIcon = QIcon(flagPath);
+            }
+        }
+
+        QAction *moveToAction = menu.addAction(moveIcon, displayText);
+        moveToAction->setEnabled(!isSea && piece->getMovesRemaining() > 0);
+
+        connect(moveToAction, &QAction::triggered, [this, piece, destinationName]() {
+            moveLeaderToTerritory(piece, destinationName);
+        });
+    }
+
+    menu.exec(pos);
+}
+
+void PlayerInfoWidget::showTerritoryContextMenu(Player *player, const QString &territoryName, const QPoint &pos)
+{
+    if (!player) return;
+
+    // Check if this territory has a city
+    City *city = player->getCityAtTerritory(territoryName);
+
+    if (!city) {
+        // No city, no menu
+        return;
+    }
 
     QMenu menu(this);
-    QIcon moveIcon = style()->standardIcon(QStyle::SP_ArrowForward);
-    QAction *moveAction = menu.addAction(moveIcon, "Move");
 
-    // Disable if no moves remaining
-    moveAction->setEnabled(piece->getMovesRemaining() > 0);
+    // Add checkable action for marking city for destruction
+    QString cityType = city->isFortified() ? "Walled City" : "City";
+    QIcon fireCityIcon(":/images/fireCityIcon.png");
+    QAction *markAction = menu.addAction(fireCityIcon, QString("Mark %1 for Destruction").arg(cityType));
+    markAction->setCheckable(true);
+    markAction->setChecked(city->isMarkedForDestruction());
 
-    // Create submenu for directions
-    QMenu *moveSubmenu = new QMenu("Move", this);
-    Position currentPos = piece->getPosition();
+    connect(markAction, &QAction::triggered, [this, city, player](bool checked) {
+        city->setMarkedForDestruction(checked);
+        qDebug() << "City at" << city->getTerritoryName() << (checked ? "marked" : "unmarked") << "for destruction";
 
-    // Up (row - 1)
-    QString upTerritory = (currentPos.row > 0) ? getTerritoryNameAt(currentPos.row - 1, currentPos.col) : "Off Board";
-    int upValue = (currentPos.row > 0) ? m_mapWidget->getTerritoryValueAt(currentPos.row - 1, currentPos.col) : 0;
+        // Update the display to reflect the change
+        updatePlayerInfo(player);
+
+        // Update the map to show visual change
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+    });
+
+    menu.exec(pos);
+}
+
+void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, const QPoint &globalPos, QChar currentPlayer)
+{
+    if (!m_mapWidget) return;
+
+    qDebug() << "Right-clicked on territory:" << territoryName << "by player" << currentPlayer;
+
+    // Check if this territory is disputed (has troops from multiple players)
+    bool isDisputed = false;
+    QChar firstPlayerWithTroops = '\0';
+    for (Player *player : m_players) {
+        QList<GamePiece*> pieces = player->getPiecesAtTerritory(territoryName);
+
+        // Check if this player has any troops (not just leaders)
+        bool hasTroops = false;
+        for (GamePiece *piece : pieces) {
+            GamePiece::Type type = piece->getType();
+            if (type == GamePiece::Type::Infantry ||
+                type == GamePiece::Type::Cavalry ||
+                type == GamePiece::Type::Catapult) {
+                hasTroops = true;
+                break;
+            }
+        }
+
+        if (hasTroops) {
+            if (firstPlayerWithTroops == '\0') {
+                firstPlayerWithTroops = player->getId();
+            } else if (firstPlayerWithTroops != player->getId()) {
+                isDisputed = true;
+                break;
+            }
+        }
+    }
+
+    // Don't show menu for disputed territories (combat zone)
+    if (isDisputed) {
+        qDebug() << "Territory is disputed - not showing movement menu";
+        return;
+    }
+
+    // Find the current player
+    Player *player = nullptr;
+    for (Player *p : m_players) {
+        if (p->getId() == currentPlayer) {
+            player = p;
+            break;
+        }
+    }
+
+    if (!player) {
+        qDebug() << "Could not find player" << currentPlayer;
+        return;
+    }
+
+    // Find all leaders at this territory belonging to current player
+    QList<GamePiece*> leaders;
+    QList<GamePiece*> piecesAtTerritory = player->getPiecesAtTerritory(territoryName);
+
+    for (GamePiece *piece : piecesAtTerritory) {
+        GamePiece::Type type = piece->getType();
+        if (type == GamePiece::Type::Caesar ||
+            type == GamePiece::Type::General ||
+            type == GamePiece::Type::Galley) {
+            // Only include leaders with moves remaining
+            if (piece->getMovesRemaining() > 0) {
+                leaders.append(piece);
+            }
+        }
+    }
+
+    if (leaders.isEmpty()) {
+        qDebug() << "No movable leaders found at" << territoryName;
+        return;
+    }
+
+    qDebug() << "Found" << leaders.size() << "movable leaders at" << territoryName;
+
+    // Create main menu
+    QMenu menu(this);
+    menu.setTitle(QString("Leaders at %1").arg(territoryName));
+
+    // Add each leader with their movement submenu
+    for (GamePiece *leader : leaders) {
+        QString leaderName;
+        QIcon leaderIcon;
+        if (leader->getType() == GamePiece::Type::Caesar) {
+            leaderName = QString("Caesar %1 (%2 moves)").arg(leader->getPlayer()).arg(leader->getMovesRemaining());
+            leaderIcon = QIcon(":/images/ceasarIcon.png");
+        } else if (leader->getType() == GamePiece::Type::General) {
+            GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+            leaderName = QString("General %1 #%2 (%3 moves)").arg(leader->getPlayer()).arg(general->getNumber()).arg(leader->getMovesRemaining());
+            leaderIcon = QIcon(":/images/generalIcon.png");
+        } else if (leader->getType() == GamePiece::Type::Galley) {
+            leaderName = QString("Galley %1 (%2 moves)").arg(leader->getPlayer()).arg(leader->getMovesRemaining());
+            leaderIcon = QIcon(":/images/galleyIcon.png");
+        }
+
+        // Create submenu for this leader's movement options
+        QMenu *leaderSubmenu = menu.addMenu(leaderIcon, leaderName);
+
+        // Get neighbors using MapGraph
+        QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
+
+        // Get territories connected by roads from this territory using BFS to find all reachable territories
+        QList<QString> roadConnectedTerritories;
+        QSet<QString> visited;
+        QList<QString> toVisit;
+
+        visited.insert(territoryName);
+        toVisit.append(territoryName);
+
+        // BFS through road network
+        while (!toVisit.isEmpty()) {
+            QString currentTerritory = toVisit.takeFirst();
+
+            // Look through all roads for connections from currentTerritory
+            for (Road *road : player->getRoads()) {
+                QString territory1 = road->getTerritoryName();  // "from" territory
+                Position toPos = road->getToPosition();
+                QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);  // "to" territory
+
+                QString nextTerritory;
+                if (territory1 == currentTerritory && !visited.contains(territory2)) {
+                    nextTerritory = territory2;
+                } else if (territory2 == currentTerritory && !visited.contains(territory1)) {
+                    nextTerritory = territory1;
+                }
+
+                if (!nextTerritory.isEmpty()) {
+                    visited.insert(nextTerritory);
+                    toVisit.append(nextTerritory);
+                    // Only add to destinations if it's not already a neighbor
+                    if (!neighbors.contains(nextTerritory)) {
+                        roadConnectedTerritories.append(nextTerritory);
+                    }
+                }
+            }
+        }
+
+        // Combine neighbors and road-connected territories
+        QList<QString> allDestinations = neighbors + roadConnectedTerritories;
+
+        // Add each destination as a movement option
+        for (const QString &destinationName : allDestinations) {
+            Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
+            int value = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
+            bool isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
+            QChar owner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+
+            // Build display text - indicate if this is via road
+            bool isViaRoad = roadConnectedTerritories.contains(destinationName);
+            QString ownership = (owner == '\0') ? "[Unclaimed]" : (owner == leader->getPlayer()) ? "[You]" : QString("[Player %1]").arg(owner);
+            QString troops = getTroopInfoAt(destPos.row, destPos.col);
+            QString roadIndicator = isViaRoad ? " [via road]" : "";
+            QString displayText = (value > 0) ? QString("%1 (%2) %3%4%5").arg(destinationName).arg(value).arg(ownership).arg(troops).arg(roadIndicator)
+                                              : QString("%1 %2%3%4").arg(destinationName).arg(ownership).arg(troops).arg(roadIndicator);
+
+            // Determine icon - combat has precedence over city, city over flag
+            QIcon moveIcon;
+            bool hasCombat = false;
+            bool hasCity = false;
+
+            // Check for combat (enemy pieces or enemy-owned territory)
+            for (Player *p : m_players) {
+                if (p->getId() != player->getId()) {
+                    QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(destinationName);
+                    if (!enemyPieces.isEmpty()) {
+                        hasCombat = true;
+                        qDebug() << "  Combat detected at" << destinationName << "- enemy pieces from player" << p->getId();
+                        break;
+                    }
+                }
+            }
+            if (!hasCombat && owner != '\0' && owner != player->getId()) {
+                hasCombat = true;  // Enemy-owned territory
+                qDebug() << "  Combat detected at" << destinationName << "- enemy-owned territory by player" << owner;
+            }
+
+            qDebug() << "  Icon decision for" << destinationName << "- hasCombat:" << hasCombat << "hasCity:" << hasCity << "owner:" << owner;
+
+            // Check for city (any player)
+            if (!hasCombat) {
+                for (Player *p : m_players) {
+                    City *cityAtDest = p->getCityAtTerritory(destinationName);
+                    if (cityAtDest) {
+                        hasCity = true;
+                        break;
+                    }
+                }
+            }
+
+            // Set icon based on what we found (combat > city > flag > nothing)
+            if (hasCombat) {
+                moveIcon = QIcon(":/images/combatIcon.png");
+            } else if (hasCity) {
+                moveIcon = QIcon(":/images/newCityIcon.png");
+            } else if (owner != '\0') {
+                // Territory is owned - show flag based on player color
+                QString flagPath;
+                switch (owner.toLatin1()) {
+                    case 'A': flagPath = ":/images/redFlag.png"; break;
+                    case 'B': flagPath = ":/images/greenFlag.png"; break;
+                    case 'C': flagPath = ":/images/blueFlag.png"; break;
+                    case 'D': flagPath = ":/images/yellowFlag.png"; break;
+                    case 'E': flagPath = ":/images/blackFlag.png"; break;
+                    case 'F': flagPath = ":/images/orangeFlag.png"; break;
+                }
+                if (!flagPath.isEmpty()) {
+                    moveIcon = QIcon(flagPath);
+                }
+            }
+
+            QAction *moveToAction = leaderSubmenu->addAction(moveIcon, displayText);
+            moveToAction->setEnabled(!isSea);
+
+            // Connect to movement handler
+            connect(moveToAction, &QAction::triggered, [this, leader, destinationName]() {
+                moveLeaderToTerritory(leader, destinationName);
+            });
+        }
+    }
+
+    // Add separator if there are leaders (menu items above)
+    if (!leaders.isEmpty()) {
+        menu.addSeparator();
+    }
+
+    // Check if this territory has a city belonging to current player
+    City *city = player->getCityAtTerritory(territoryName);
+    if (city) {
+        QString cityType = city->isFortified() ? "Walled City" : "City";
+        QIcon fireCityIcon(":/images/fireCityIcon.png");
+        QAction *markAction = menu.addAction(fireCityIcon, QString("Mark %1 for Destruction").arg(cityType));
+        markAction->setCheckable(true);
+        markAction->setChecked(city->isMarkedForDestruction());
+
+        connect(markAction, &QAction::triggered, [this, city, player](bool checked) {
+            city->setMarkedForDestruction(checked);
+            qDebug() << "City at" << city->getTerritoryName() << (checked ? "marked" : "unmarked") << "for destruction";
+
+            // Update the display to reflect the change
+            updatePlayerInfo(player);
+
+            // Update the map to show visual change
+            if (m_mapWidget) {
+                m_mapWidget->update();
+            }
+        });
+    }
+
+    // Show the menu (only if there are leaders or a city)
+    if (!leaders.isEmpty() || city) {
+        menu.exec(globalPos);
+    }
+}
+
+// OLD GRID-BASED CODE REMOVED BELOW - Now using MapGraph for neighbor lookup
+#if 0
+// This old code is disabled and will be removed later
+void OLD_UNUSED_GRID_CODE() {
+    // Up (row - 1) - OLD CODE
     bool upIsSea = (currentPos.row > 0) && m_mapWidget->isSeaTerritory(currentPos.row - 1, currentPos.col);
     QChar upOwner = (currentPos.row > 0) ? m_mapWidget->getTerritoryOwnerAt(currentPos.row - 1, currentPos.col) : '\0';
     QString upOwnership = (upOwner == '\0') ? "[Unclaimed]" : (upOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(upOwner);
@@ -862,7 +1243,7 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
         upRoadSubmenu->setIcon(upIcon);
 
         // First, add the adjacent territory itself (upPos) as an option
-        QAction *adjacentAction = upRoadSubmenu->addAction(upText);
+        QAction *adjacentAction = upRoadSubmenu->addAction(upIcon, upText);
         adjacentAction->setEnabled(piece->getMovesRemaining() > 0);
         connect(adjacentAction, &QAction::triggered, [this, piece, upPos]() { moveLeaderViaRoad(piece, upPos); });
 
@@ -878,7 +1259,50 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
             QString roadTroops = getTroopInfoAt(roadPos.row, roadPos.col);
             QString roadText = (roadValue > 0) ? QString("%1 (%2) %3%4 [Via Road]").arg(roadTerritory).arg(roadValue).arg(roadOwnership).arg(roadTroops) : QString("%1 %2%3 [Via Road]").arg(roadTerritory).arg(roadOwnership).arg(roadTroops);
 
-            QAction *roadAction = upRoadSubmenu->addAction(roadText);
+            // Determine icon for road destination (combat > city > flag > nothing)
+            QIcon roadIcon;
+            bool roadHasCombat = false;
+            bool roadHasCity = false;
+            for (Player *p : m_players) {
+                if (p->getId() != piece->getPlayer()) {
+                    QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(roadTerritory);
+                    if (!enemyPieces.isEmpty()) {
+                        roadHasCombat = true;
+                        break;
+                    }
+                }
+            }
+            if (!roadHasCombat && roadOwner != '\0' && roadOwner != piece->getPlayer()) {
+                roadHasCombat = true;
+            }
+            if (!roadHasCombat) {
+                for (Player *p : m_players) {
+                    if (p->getCityAtTerritory(roadTerritory)) {
+                        roadHasCity = true;
+                        break;
+                    }
+                }
+            }
+            if (roadHasCombat) {
+                roadIcon = QIcon(":/images/combatIcon.png");
+            } else if (roadHasCity) {
+                roadIcon = QIcon(":/images/newCityIcon.png");
+            } else if (roadOwner != '\0') {
+                QString flagPath;
+                switch (roadOwner.toLatin1()) {
+                    case 'A': flagPath = ":/images/redFlag.png"; break;
+                    case 'B': flagPath = ":/images/greenFlag.png"; break;
+                    case 'C': flagPath = ":/images/blueFlag.png"; break;
+                    case 'D': flagPath = ":/images/yellowFlag.png"; break;
+                    case 'E': flagPath = ":/images/blackFlag.png"; break;
+                    case 'F': flagPath = ":/images/orangeFlag.png"; break;
+                }
+                if (!flagPath.isEmpty()) {
+                    roadIcon = QIcon(flagPath);
+                }
+            }
+
+            QAction *roadAction = upRoadSubmenu->addAction(roadIcon, roadText);
             roadAction->setEnabled(piece->getMovesRemaining() > 0);
             connect(roadAction, &QAction::triggered, [this, piece, roadPos]() { moveLeaderViaRoad(piece, roadPos); });
         }
@@ -900,7 +1324,55 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
     QString downOwnership = (downOwner == '\0') ? "[Unclaimed]" : (downOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(downOwner);
     QString downTroops = (currentPos.row < 7) ? getTroopInfoAt(currentPos.row + 1, currentPos.col) : "";
     QString downText = (downValue > 0) ? QString("%1 (%2) %3%4").arg(downTerritory).arg(downValue).arg(downOwnership).arg(downTroops) : QString("%1 %2%3").arg(downTerritory).arg(downOwnership).arg(downTroops);
-    QIcon downIcon = style()->standardIcon(QStyle::SP_ArrowDown);
+
+    // Determine icon for down direction (combat > city > flag > arrow)
+    QIcon downIcon;
+    bool downHasCombat = false;
+    bool downHasCity = false;
+    if (currentPos.row < 7) {
+        for (Player *p : m_players) {
+            if (p->getId() != piece->getPlayer()) {
+                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(downTerritory);
+                if (!enemyPieces.isEmpty()) {
+                    downHasCombat = true;
+                    break;
+                }
+            }
+        }
+        if (!downHasCombat && downOwner != '\0' && downOwner != piece->getPlayer()) {
+            downHasCombat = true;
+        }
+        if (!downHasCombat) {
+            for (Player *p : m_players) {
+                if (p->getCityAtTerritory(downTerritory)) {
+                    downHasCity = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (downHasCombat) {
+        downIcon = QIcon(":/images/combatIcon.png");
+    } else if (downHasCity) {
+        downIcon = QIcon(":/images/newCityIcon.png");
+    } else if (downOwner != '\0') {
+        QString flagPath;
+        switch (downOwner.toLatin1()) {
+            case 'A': flagPath = ":/images/redFlag.png"; break;
+            case 'B': flagPath = ":/images/greenFlag.png"; break;
+            case 'C': flagPath = ":/images/blueFlag.png"; break;
+            case 'D': flagPath = ":/images/yellowFlag.png"; break;
+            case 'E': flagPath = ":/images/blackFlag.png"; break;
+            case 'F': flagPath = ":/images/orangeFlag.png"; break;
+        }
+        if (!flagPath.isEmpty()) {
+            downIcon = QIcon(flagPath);
+        } else {
+            downIcon = style()->standardIcon(QStyle::SP_ArrowDown);
+        }
+    } else {
+        downIcon = style()->standardIcon(QStyle::SP_ArrowDown);
+    }
 
     // Check if there's a road connection downward
     Position downPos = {currentPos.row + 1, currentPos.col};
@@ -950,7 +1422,55 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
     QString leftOwnership = (leftOwner == '\0') ? "[Unclaimed]" : (leftOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(leftOwner);
     QString leftTroops = (currentPos.col > 0) ? getTroopInfoAt(currentPos.row, currentPos.col - 1) : "";
     QString leftText = (leftValue > 0) ? QString("%1 (%2) %3%4").arg(leftTerritory).arg(leftValue).arg(leftOwnership).arg(leftTroops) : QString("%1 %2%3").arg(leftTerritory).arg(leftOwnership).arg(leftTroops);
-    QIcon leftIcon = style()->standardIcon(QStyle::SP_ArrowBack);
+
+    // Determine icon for left direction (combat > city > flag > arrow)
+    QIcon leftIcon;
+    bool leftHasCombat = false;
+    bool leftHasCity = false;
+    if (currentPos.col > 0) {
+        for (Player *p : m_players) {
+            if (p->getId() != piece->getPlayer()) {
+                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(leftTerritory);
+                if (!enemyPieces.isEmpty()) {
+                    leftHasCombat = true;
+                    break;
+                }
+            }
+        }
+        if (!leftHasCombat && leftOwner != '\0' && leftOwner != piece->getPlayer()) {
+            leftHasCombat = true;
+        }
+        if (!leftHasCombat) {
+            for (Player *p : m_players) {
+                if (p->getCityAtTerritory(leftTerritory)) {
+                    leftHasCity = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (leftHasCombat) {
+        leftIcon = QIcon(":/images/combatIcon.png");
+    } else if (leftHasCity) {
+        leftIcon = QIcon(":/images/newCityIcon.png");
+    } else if (leftOwner != '\0') {
+        QString flagPath;
+        switch (leftOwner.toLatin1()) {
+            case 'A': flagPath = ":/images/redFlag.png"; break;
+            case 'B': flagPath = ":/images/greenFlag.png"; break;
+            case 'C': flagPath = ":/images/blueFlag.png"; break;
+            case 'D': flagPath = ":/images/yellowFlag.png"; break;
+            case 'E': flagPath = ":/images/blackFlag.png"; break;
+            case 'F': flagPath = ":/images/orangeFlag.png"; break;
+        }
+        if (!flagPath.isEmpty()) {
+            leftIcon = QIcon(flagPath);
+        } else {
+            leftIcon = style()->standardIcon(QStyle::SP_ArrowBack);
+        }
+    } else {
+        leftIcon = style()->standardIcon(QStyle::SP_ArrowBack);
+    }
 
     // Check if there's a road connection leftward
     Position leftPos = {currentPos.row, currentPos.col - 1};
@@ -1000,7 +1520,55 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
     QString rightOwnership = (rightOwner == '\0') ? "[Unclaimed]" : (rightOwner == piece->getPlayer()) ? "[You]" : QString("[Player %1]").arg(rightOwner);
     QString rightTroops = (currentPos.col < 11) ? getTroopInfoAt(currentPos.row, currentPos.col + 1) : "";
     QString rightText = (rightValue > 0) ? QString("%1 (%2) %3%4").arg(rightTerritory).arg(rightValue).arg(rightOwnership).arg(rightTroops) : QString("%1 %2%3").arg(rightTerritory).arg(rightOwnership).arg(rightTroops);
-    QIcon rightIcon = style()->standardIcon(QStyle::SP_ArrowForward);
+
+    // Determine icon for right direction (combat > city > flag > arrow)
+    QIcon rightIcon;
+    bool rightHasCombat = false;
+    bool rightHasCity = false;
+    if (currentPos.col < 11) {
+        for (Player *p : m_players) {
+            if (p->getId() != piece->getPlayer()) {
+                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(rightTerritory);
+                if (!enemyPieces.isEmpty()) {
+                    rightHasCombat = true;
+                    break;
+                }
+            }
+        }
+        if (!rightHasCombat && rightOwner != '\0' && rightOwner != piece->getPlayer()) {
+            rightHasCombat = true;
+        }
+        if (!rightHasCombat) {
+            for (Player *p : m_players) {
+                if (p->getCityAtTerritory(rightTerritory)) {
+                    rightHasCity = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (rightHasCombat) {
+        rightIcon = QIcon(":/images/combatIcon.png");
+    } else if (rightHasCity) {
+        rightIcon = QIcon(":/images/newCityIcon.png");
+    } else if (rightOwner != '\0') {
+        QString flagPath;
+        switch (rightOwner.toLatin1()) {
+            case 'A': flagPath = ":/images/redFlag.png"; break;
+            case 'B': flagPath = ":/images/greenFlag.png"; break;
+            case 'C': flagPath = ":/images/blueFlag.png"; break;
+            case 'D': flagPath = ":/images/yellowFlag.png"; break;
+            case 'E': flagPath = ":/images/blackFlag.png"; break;
+            case 'F': flagPath = ":/images/orangeFlag.png"; break;
+        }
+        if (!flagPath.isEmpty()) {
+            rightIcon = QIcon(flagPath);
+        } else {
+            rightIcon = style()->standardIcon(QStyle::SP_ArrowForward);
+        }
+    } else {
+        rightIcon = style()->standardIcon(QStyle::SP_ArrowForward);
+    }
 
     // Check if there's a road connection rightward
     Position rightPos = {currentPos.row, currentPos.col + 1};
@@ -1042,10 +1610,8 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
         connect(rightAction, &QAction::triggered, [this, piece]() { moveLeaderWithTroops(piece, 0, 1); });
     }
 
-    moveAction->setMenu(moveSubmenu);
-
-    menu.exec(pos);
-}
+}  // End of old grid code block
+#endif  // End of disabled old code
 
 void PlayerInfoWidget::movePiece(GamePiece *piece, int rowDelta, int colDelta)
 {
@@ -1082,7 +1648,7 @@ void PlayerInfoWidget::movePiece(GamePiece *piece, int rowDelta, int colDelta)
     bool hasEnemyPieces = false;
     for (Player *otherPlayer : m_players) {
         if (otherPlayer->getId() != owningPlayer->getId()) {
-            QList<GamePiece*> enemyPieces = otherPlayer->getPiecesAtPosition(newPos);
+            QList<GamePiece*> enemyPieces = otherPlayer->getPiecesAtTerritory(newTerritoryName);
             if (!enemyPieces.isEmpty()) {
                 hasEnemyPieces = true;
                 break;
@@ -1164,7 +1730,7 @@ void PlayerInfoWidget::movePieceWithoutCost(GamePiece *piece, int rowDelta, int 
     bool hasEnemyPieces = false;
     for (Player *otherPlayer : m_players) {
         if (otherPlayer->getId() != owningPlayer->getId()) {
-            QList<GamePiece*> enemyPieces = otherPlayer->getPiecesAtPosition(newPos);
+            QList<GamePiece*> enemyPieces = otherPlayer->getPiecesAtTerritory(newTerritoryName);
             if (!enemyPieces.isEmpty()) {
                 hasEnemyPieces = true;
                 break;
@@ -1206,12 +1772,250 @@ void PlayerInfoWidget::movePieceWithoutCost(GamePiece *piece, int rowDelta, int 
     emit pieceMoved(currentPos.row, currentPos.col, newPos.row, newPos.col);
 }
 
+void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory)
+{
+    if (!leader || !m_mapWidget) return;
+
+    qDebug() << "Moving leader to territory:" << destinationTerritory;
+
+    // Get current and destination positions
+    QString currentTerritory = leader->getTerritoryName();
+    Position currentPos = m_mapWidget->territoryNameToPosition(currentTerritory);
+    Position destPos = m_mapWidget->territoryNameToPosition(destinationTerritory);
+
+    qDebug() << "  From:" << currentTerritory << "pos" << currentPos.row << currentPos.col;
+    qDebug() << "  To:" << destinationTerritory << "pos" << destPos.row << destPos.col;
+
+    // Find which player owns this leader
+    Player *owningPlayer = nullptr;
+    for (Player *player : m_players) {
+        if (player->getId() == leader->getPlayer()) {
+            owningPlayer = player;
+            break;
+        }
+    }
+
+    if (!owningPlayer) return;
+
+    // Get all troops at the same territory as the leader
+    QList<GamePiece*> allPiecesAtTerritory = owningPlayer->getPiecesAtTerritory(currentTerritory);
+    qDebug() << "  Found" << allPiecesAtTerritory.size() << "pieces at" << currentTerritory;
+
+    // Get legion IDs based on leader type
+    QList<int> legionIds;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::General) {
+        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::Galley) {
+        legionIds = static_cast<GalleyPiece*>(leader)->getLegion();
+    }
+    qDebug() << "  Leader's legion has" << legionIds.size() << "troops:" << legionIds;
+
+    // Filter to only include actual troops in this leader's legion
+    QList<GamePiece*> troopsToMove;
+    for (GamePiece *piece : allPiecesAtTerritory) {
+        if (legionIds.contains(piece->getUniqueId())) {
+            troopsToMove.append(piece);
+        }
+    }
+    qDebug() << "  Troops to move:" << troopsToMove.size();
+
+    // Check if there are enemy pieces at the destination
+    QString destTerritory = destinationTerritory;
+    bool hasEnemies = false;
+    for (Player *player : m_players) {
+        if (player->getId() != owningPlayer->getId()) {
+            QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(destTerritory);
+            if (!enemyPieces.isEmpty()) {
+                hasEnemies = true;
+                break;
+            }
+        }
+    }
+
+    // Get leader name for display
+    QString leaderName;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = QString("Caesar %1").arg(leader->getPlayer());
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+        leaderName = QString("General %1 #%2").arg(leader->getPlayer()).arg(general->getNumber());
+    } else if (leader->getType() == GamePiece::Type::Galley) {
+        leaderName = QString("Galley %1").arg(leader->getPlayer());
+    }
+
+    // Get all troops at this territory (regardless of moves remaining)
+    QList<GamePiece*> allTroops;
+    for (GamePiece *piece : allPiecesAtTerritory) {
+        GamePiece::Type type = piece->getType();
+        if (type == GamePiece::Type::Infantry ||
+            type == GamePiece::Type::Cavalry ||
+            type == GamePiece::Type::Catapult) {
+            allTroops.append(piece);
+        }
+    }
+
+    // Check if moving into combat - need to also check territory ownership
+    bool movingIntoCombat = hasEnemies;
+    if (!movingIntoCombat) {
+        QChar destOwner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+        if (destOwner != '\0' && destOwner != owningPlayer->getId()) {
+            movingIntoCombat = true;
+        }
+    }
+
+    // Always show troop selection dialog if there are ANY troops at this territory
+    // Loop until user selects valid troops or cancels
+    bool validSelection = false;
+    QList<int> selectedTroopIds;
+
+    while (!allTroops.isEmpty() && !validSelection) {
+        TroopSelectionDialog dialog(leaderName, allTroops, legionIds, this);
+        if (dialog.exec() == QDialog::Accepted) {
+            selectedTroopIds = dialog.getSelectedTroopIds();
+
+            // If moving into combat, validate that troops are selected
+            if (movingIntoCombat && selectedTroopIds.isEmpty()) {
+                QMessageBox::warning(this, "Cannot Move",
+                    QString("%1 cannot move into combat without troops!\n\n"
+                            "Leaders must have at least one troop in their legion to enter combat.\n\n"
+                            "Please select at least one troop or cancel the move.")
+                    .arg(leaderName));
+                // Loop will continue - show dialog again
+                continue;
+            }
+
+            // Validate that all selected troops have moves remaining
+            QList<GamePiece*> troopsWithoutMoves;
+            for (GamePiece *troop : allTroops) {
+                if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
+                    troopsWithoutMoves.append(troop);
+                }
+            }
+
+            // If any selected troops don't have moves, show error and loop back
+            if (!troopsWithoutMoves.isEmpty()) {
+                QStringList troopNames;
+                for (GamePiece *troop : troopsWithoutMoves) {
+                    QString typeName;
+                    if (troop->getType() == GamePiece::Type::Infantry) typeName = "Infantry";
+                    else if (troop->getType() == GamePiece::Type::Cavalry) typeName = "Cavalry";
+                    else if (troop->getType() == GamePiece::Type::Catapult) typeName = "Catapult";
+                    troopNames.append(QString("%1 #%2").arg(typeName).arg(troop->getSerialNumber()));
+                }
+
+                QMessageBox::warning(this, "Cannot Move",
+                    QString("The following troops have no moves remaining and cannot move:\n\n%1\n\n"
+                            "Please deselect these troops or try again.")
+                    .arg(troopNames.join("\n")));
+                // Loop will continue - show dialog again
+            } else {
+                // Valid selection - all selected troops have moves
+                validSelection = true;
+            }
+        } else {
+            // User cancelled - abort the move
+            return;
+        }
+    }
+
+    // If we have a valid selection, proceed with the move
+    if (validSelection) {
+        // Update the leader's legion with the selected troops
+        if (leader->getType() == GamePiece::Type::Caesar) {
+            static_cast<CaesarPiece*>(leader)->setLegion(selectedTroopIds);
+        } else if (leader->getType() == GamePiece::Type::General) {
+            static_cast<GeneralPiece*>(leader)->setLegion(selectedTroopIds);
+        } else if (leader->getType() == GamePiece::Type::Galley) {
+            static_cast<GalleyPiece*>(leader)->setLegion(selectedTroopIds);
+        }
+
+        qDebug() << "Updated legion with" << selectedTroopIds.size() << "troops:" << selectedTroopIds;
+
+        // Store last territory before moving (for retreat purposes)
+        if (leader->getType() == GamePiece::Type::Caesar) {
+            static_cast<CaesarPiece*>(leader)->setLastTerritory(currentPos);
+        } else if (leader->getType() == GamePiece::Type::General) {
+            static_cast<GeneralPiece*>(leader)->setLastTerritory(currentPos);
+        } else if (leader->getType() == GamePiece::Type::Galley) {
+            static_cast<GalleyPiece*>(leader)->setLastTerritory(currentPos);
+        }
+
+        // Move leader
+        leader->setTerritoryName(destinationTerritory);
+        leader->setPosition(destPos);
+        leader->setMovesRemaining(leader->getMovesRemaining() - 1);
+
+        qDebug() << "Moved leader" << leaderName;
+
+        // Move selected troops
+        for (GamePiece *troop : allTroops) {
+            if (selectedTroopIds.contains(troop->getUniqueId())) {
+                qDebug() << "Moving troop ID:" << troop->getUniqueId() << "to territory:" << destinationTerritory;
+                troop->setTerritoryName(destinationTerritory);
+                troop->setPosition(destPos);
+                troop->setMovesRemaining(troop->getMovesRemaining() - 1);
+            }
+        }
+
+        qDebug() << "Finished moving all troops";
+
+        // Claim the destination territory for the owning player
+        owningPlayer->claimTerritory(destinationTerritory);
+        qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+
+        // Update display
+        updateAllPlayers();
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+    } else {
+        // No troops available, check if moving into combat
+        if (movingIntoCombat) {
+            QMessageBox::warning(this, "Cannot Move",
+                QString("%1 cannot move into combat without troops!\n\n"
+                        "Leaders must have at least one troop in their legion to enter combat.")
+                .arg(leaderName));
+            return;
+        }
+
+        // Just move the leader (no combat)
+
+        // Store last territory before moving (for retreat purposes)
+        if (leader->getType() == GamePiece::Type::Caesar) {
+            static_cast<CaesarPiece*>(leader)->setLastTerritory(currentPos);
+        } else if (leader->getType() == GamePiece::Type::General) {
+            static_cast<GeneralPiece*>(leader)->setLastTerritory(currentPos);
+        } else if (leader->getType() == GamePiece::Type::Galley) {
+            static_cast<GalleyPiece*>(leader)->setLastTerritory(currentPos);
+        }
+
+        leader->setTerritoryName(destinationTerritory);
+        leader->setPosition(destPos);
+        leader->setMovesRemaining(leader->getMovesRemaining() - 1);
+
+        qDebug() << "Moved leader" << leaderName << "(no troops available)";
+
+        // Claim the destination territory for the owning player
+        owningPlayer->claimTerritory(destinationTerritory);
+        qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+
+        // Update display
+        updateAllPlayers();
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+    }
+}
+
 void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int colDelta)
 {
     if (!leader || !m_mapWidget) return;
 
     // Get the leader's current position
     Position currentPos = leader->getPosition();
+    QString currentTerritory = leader->getTerritoryName();
 
     // Find the player who owns this leader
     Player *owningPlayer = nullptr;
@@ -1224,8 +2028,8 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
 
     if (!owningPlayer) return;
 
-    // Get all troops at the same position as the leader
-    QList<GamePiece*> allPiecesAtPosition = owningPlayer->getPiecesAtPosition(currentPos);
+    // Get all troops at the same territory as the leader
+    QList<GamePiece*> allPiecesAtPosition = owningPlayer->getPiecesAtTerritory(currentTerritory);
 
     // Filter to only include actual troops (Infantry, Cavalry, Catapult)
     QList<GamePiece*> troopsAtPosition;
@@ -1260,17 +2064,28 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
 
     // Calculate destination position
     Position destPos = {currentPos.row + rowDelta, currentPos.col + colDelta};
+    QString destTerritory = getTerritoryNameAt(destPos.row, destPos.col);
 
-    // Check if there are enemy pieces at the destination
+    // Check if there are enemy pieces at the destination OR if destination is owned by enemy
     bool hasEnemies = false;
     QList<GamePiece*> enemyPiecesAtDest;
+
+    // Check for enemy pieces
     for (Player *player : m_players) {
         if (player->getId() != owningPlayer->getId()) {
-            QList<GamePiece*> enemyPieces = player->getPiecesAtPosition(destPos);
+            QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(destTerritory);
             if (!enemyPieces.isEmpty()) {
                 hasEnemies = true;
                 enemyPiecesAtDest.append(enemyPieces);
             }
+        }
+    }
+
+    // Also check if destination territory is owned by an enemy player
+    if (!hasEnemies) {
+        QChar destOwner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+        if (destOwner != '\0' && destOwner != owningPlayer->getId()) {
+            hasEnemies = true;  // Moving into enemy-owned territory
         }
     }
 
@@ -1460,8 +2275,9 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
 
     if (!owningPlayer) return;
 
-    // Get all troops at the same position as the leader
-    QList<GamePiece*> allPiecesAtPosition = owningPlayer->getPiecesAtPosition(currentPos);
+    // Get all troops at the same territory as the leader
+    QString currentTerritory = leader->getTerritoryName();
+    QList<GamePiece*> allPiecesAtPosition = owningPlayer->getPiecesAtTerritory(currentTerritory);
 
     // Filter to only include actual troops (Infantry, Cavalry, Catapult)
     QList<GamePiece*> troopsAtPosition;
@@ -1494,17 +2310,28 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
         leaderName = QString("Galley %1").arg(leader->getPlayer());
     }
 
-    // Check if there are enemy pieces at the destination
+    // Check if there are enemy pieces at the destination OR if destination is owned by enemy
     bool hasEnemies = false;
     QList<GamePiece*> enemyPiecesAtDest;
     Position destPos = {destination.row, destination.col};
+    QString destTerritory = getTerritoryNameAt(destPos.row, destPos.col);
+
+    // Check for enemy pieces
     for (Player *player : m_players) {
         if (player->getId() != owningPlayer->getId()) {
-            QList<GamePiece*> enemyPieces = player->getPiecesAtPosition(destPos);
+            QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(destTerritory);
             if (!enemyPieces.isEmpty()) {
                 hasEnemies = true;
                 enemyPiecesAtDest.append(enemyPieces);
             }
+        }
+    }
+
+    // Also check if destination territory is owned by an enemy player
+    if (!hasEnemies) {
+        QChar destOwner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+        if (destOwner != '\0' && destOwner != owningPlayer->getId()) {
+            hasEnemies = true;  // Moving into enemy-owned territory
         }
     }
 
@@ -1703,10 +2530,10 @@ QString PlayerInfoWidget::getTroopInfoAt(int row, int col) const
         return "";
     }
 
-    Position pos = {row, col};
+    QString territoryName = getTerritoryNameAt(row, col);
     QStringList troopInfo;
 
-    // Check all players for troops at this position
+    // Check all players for troops at this territory
     for (Player *player : m_players) {
         int caesarCount = 0;
         int generalCount = 0;
@@ -1715,8 +2542,8 @@ QString PlayerInfoWidget::getTroopInfoAt(int row, int col) const
         int catapultCount = 0;
         int galleyCount = 0;
 
-        // Get all pieces at this position
-        QList<GamePiece*> piecesHere = player->getPiecesAtPosition(pos);
+        // Get all pieces at this territory
+        QList<GamePiece*> piecesHere = player->getPiecesAtTerritory(territoryName);
 
         for (GamePiece *piece : piecesHere) {
             switch (piece->getType()) {
@@ -1863,18 +2690,19 @@ void PlayerInfoWidget::onEndTurnClicked()
     for (int row = 0; row < 8; ++row) {
         for (int col = 0; col < 12; ++col) {
             Position pos = {row, col};
+            QString territoryName = getTerritoryNameAt(row, col);
 
-            // Check if current player has pieces at this position
-            QList<GamePiece*> currentPlayerPieces = currentPlayer->getPiecesAtPosition(pos);
+            // Check if current player has pieces at this territory
+            QList<GamePiece*> currentPlayerPieces = currentPlayer->getPiecesAtTerritory(territoryName);
             if (currentPlayerPieces.isEmpty()) {
                 continue;  // No pieces from current player here
             }
 
-            // Check if any other player has pieces at this position
+            // Check if any other player has pieces at this territory
             bool hasEnemyPieces = false;
             for (Player *player : m_players) {
                 if (player->getId() != currentPlayer->getId()) {
-                    QList<GamePiece*> enemyPieces = player->getPiecesAtPosition(pos);
+                    QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(territoryName);
                     if (!enemyPieces.isEmpty()) {
                         hasEnemyPieces = true;
                         break;
@@ -1903,14 +2731,14 @@ void PlayerInfoWidget::onEndTurnClicked()
             Position pos = it.value();
 
             // Count pieces at this location
-            QList<GamePiece*> currentPlayerPieces = currentPlayer->getPiecesAtPosition(pos);
+            QList<GamePiece*> currentPlayerPieces = currentPlayer->getPiecesAtTerritory(territoryName);
 
             // Count enemy pieces
             int enemyCount = 0;
             QStringList enemyPlayerIds;
             for (Player *player : m_players) {
                 if (player->getId() != currentPlayer->getId()) {
-                    QList<GamePiece*> enemyPieces = player->getPiecesAtPosition(pos);
+                    QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(territoryName);
                     if (!enemyPieces.isEmpty()) {
                         enemyCount += enemyPieces.size();
                         if (!enemyPlayerIds.contains(QString(player->getId()))) {
@@ -1934,17 +2762,23 @@ void PlayerInfoWidget::onEndTurnClicked()
         combatList << "";
         combatList << "You must resolve all combats before ending your turn.";
 
-        QMessageBox::information(this, "Combat Detected", combatList.join("\n"));
+        QMessageBox combatMsgBox(this);
+        combatMsgBox.setWindowTitle("Combat Detected");
+        combatMsgBox.setText(combatList.join("\n"));
+        combatMsgBox.setIconPixmap(QPixmap(":/images/combatIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        combatMsgBox.setStandardButtons(QMessageBox::Ok);
+        combatMsgBox.exec();
 
         // Resolve each combat
         for (auto it = combatTerritories.constBegin(); it != combatTerritories.constEnd(); ++it) {
+            QString territoryName = it.key();
             Position pos = it.value();
 
-            // Find the enemy player at this position (take the first one if multiple)
+            // Find the enemy player at this territory (take the first one if multiple)
             Player *enemyPlayer = nullptr;
             for (Player *player : m_players) {
                 if (player->getId() != currentPlayer->getId()) {
-                    QList<GamePiece*> enemyPieces = player->getPiecesAtPosition(pos);
+                    QList<GamePiece*> enemyPieces = player->getPiecesAtTerritory(territoryName);
                     if (!enemyPieces.isEmpty()) {
                         enemyPlayer = player;
                         break;
@@ -1954,7 +2788,7 @@ void PlayerInfoWidget::onEndTurnClicked()
 
             if (enemyPlayer) {
                 // Current player is the attacker (their turn), enemy player is the defender
-                CombatDialog *combatDialog = new CombatDialog(currentPlayer, enemyPlayer, pos, m_mapWidget, this);
+                CombatDialog *combatDialog = new CombatDialog(currentPlayer, enemyPlayer, territoryName, m_mapWidget, this);
                 combatDialog->exec();
                 combatDialog->deleteLater();  // Use deleteLater() to avoid heap corruption
             }
@@ -1973,71 +2807,159 @@ void PlayerInfoWidget::onEndTurnClicked()
     int taxesCollected = currentPlayer->collectTaxes(m_mapWidget);
     qDebug() << "Player" << currentPlayer->getId() << "collected" << taxesCollected << "talents in taxes";
 
-    // FIRST: Allow player to destroy their own cities (before purchase phase)
-    CityDestructionDialog *destructionDialog = new CityDestructionDialog(
-        currentPlayer->getId(),
-        currentPlayer->getCities(),
-        this
-    );
+    // FIRST: Show city destruction dialog with ALL cities as checkboxes
+    QList<City*> allCities = currentPlayer->getCities();
+    if (!allCities.isEmpty()) {
+        // Create custom dialog for selecting cities to destroy
+        QDialog cityDestructionDialog(this);
+        cityDestructionDialog.setWindowTitle("City Destruction Selection");
 
-    if (destructionDialog->exec() == QDialog::Accepted) {
-        QList<City*> citiesToDestroy = destructionDialog->getCitiesToDestroy();
+        QHBoxLayout *topLayout = new QHBoxLayout(&cityDestructionDialog);
 
-        if (!citiesToDestroy.isEmpty()) {
-            qDebug() << "Player" << currentPlayer->getId() << "destroying" << citiesToDestroy.size() << "cities";
+        // Add fire city icon on the left side
+        QLabel *iconLabel = new QLabel();
+        QPixmap fireCityPixmap(":/images/fireCityIcon.png");
+        iconLabel->setPixmap(fireCityPixmap.scaled(128, 128, Qt::KeepAspectRatio, Qt::FastTransformation));
+        iconLabel->setAlignment(Qt::AlignTop);
+        topLayout->addWidget(iconLabel);
 
-            for (City *city : citiesToDestroy) {
-                qDebug() << "  Destroying city at" << city->getTerritoryName()
-                         << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
+        // Add spacing between icon and content
+        topLayout->addSpacing(20);
 
-                QString territoryName = city->getTerritoryName();
-                Position cityPosition = city->getPosition();
+        // Main content on the right
+        QVBoxLayout *mainLayout = new QVBoxLayout();
 
-                // Find and remove all roads connected to this city's territory
-                QList<Road*> roadsAtTerritory = currentPlayer->getRoadsAtTerritory(territoryName);
-                for (Road *road : roadsAtTerritory) {
-                    qDebug() << "    Destroying road at" << road->getTerritoryName();
-                    currentPlayer->removeRoad(road);
-                    delete road;
-                }
+        QLabel *headerLabel = new QLabel(
+            QString("Player %1: Select cities to destroy (optional)").arg(currentPlayer->getId()));
+        headerLabel->setStyleSheet("font-weight: bold; font-size: 12pt;");
+        mainLayout->addWidget(headerLabel);
 
-                // Also check for roads that have this position as either endpoint
-                QList<Road*> allRoads = currentPlayer->getRoads();
-                for (Road *road : allRoads) {
-                    if (road->getFromPosition() == cityPosition || road->getToPosition() == cityPosition) {
-                        qDebug() << "    Destroying connected road from"
-                                 << road->getFromPosition().row << "," << road->getFromPosition().col
-                                 << " to " << road->getToPosition().row << "," << road->getToPosition().col;
-                        currentPlayer->removeRoad(road);
-                        delete road;
-                    }
-                }
+        QLabel *infoLabel = new QLabel(
+            "Cities marked during your turn are pre-selected.\n"
+            "You may change your selection before confirming.");
+        mainLayout->addWidget(infoLabel);
 
-                // Remove city and fortification from MapWidget grids
-                if (m_mapWidget) {
-                    m_mapWidget->removeCityAt(cityPosition.row, cityPosition.col);
-                    m_mapWidget->removeFortificationAt(cityPosition.row, cityPosition.col);
-                }
+        mainLayout->addSpacing(10);
 
-                // Remove city from player's inventory
-                currentPlayer->removeCity(city);
+        // Create checkboxes for each city
+        QList<QCheckBox*> cityCheckboxes;
+        for (City *city : allCities) {
+            QString cityType = city->isFortified() ? "Walled City" : "City";
+            QString cityLabel = QString("%1 at %2").arg(cityType).arg(city->getTerritoryName());
 
-                // Delete the city object
-                delete city;
+            QCheckBox *checkbox = new QCheckBox(cityLabel);
+            checkbox->setChecked(city->isMarkedForDestruction());  // Pre-check marked cities
+            checkbox->setProperty("cityPtr", QVariant::fromValue(static_cast<void*>(city)));
+            cityCheckboxes.append(checkbox);
+            mainLayout->addWidget(checkbox);
+        }
+
+        mainLayout->addSpacing(10);
+
+        // Add OK button (no cancel - must proceed)
+        QPushButton *okButton = new QPushButton("Continue");
+        connect(okButton, &QPushButton::clicked, &cityDestructionDialog, &QDialog::accept);
+        mainLayout->addWidget(okButton);
+
+        topLayout->addLayout(mainLayout);
+
+        // Show dialog and collect results
+        if (cityDestructionDialog.exec() == QDialog::Accepted) {
+            // First, update all cities' markedForDestruction flags based on checkbox state
+            for (QCheckBox *checkbox : cityCheckboxes) {
+                City *city = static_cast<City*>(checkbox->property("cityPtr").value<void*>());
+                city->setMarkedForDestruction(checkbox->isChecked());
             }
 
-            // Update display after destroying cities
-            updateAllPlayers();
+            // Collect selected cities
+            QList<City*> citiesToDestroy;
+            QStringList cityNames;
+            for (QCheckBox *checkbox : cityCheckboxes) {
+                if (checkbox->isChecked()) {
+                    City *city = static_cast<City*>(checkbox->property("cityPtr").value<void*>());
+                    citiesToDestroy.append(city);
+                    QString cityType = city->isFortified() ? "Walled City" : "City";
+                    cityNames.append(QString("%1 at %2").arg(cityType).arg(city->getTerritoryName()));
+                }
+            }
+
+            // Update the display to reflect any changes in marked cities
+            updatePlayerInfo(currentPlayer);
             if (m_mapWidget) {
                 m_mapWidget->update();
+            }
+
+            // If cities were selected, show confirmation dialog
+            if (!citiesToDestroy.isEmpty()) {
+                QMessageBox::StandardButton reply = QMessageBox::question(this,
+                    "Confirm City Destruction",
+                    QString("Are you sure you want to destroy the following cities?\n\n%1\n\n"
+                            "This action cannot be undone!")
+                    .arg(cityNames.join("\n")),
+                    QMessageBox::Yes | QMessageBox::No);
+
+                if (reply == QMessageBox::No) {
+                    // User said no to confirmation - don't destroy cities, but continue with turn end
+                    qDebug() << "Player" << currentPlayer->getId() << "declined city destruction confirmation";
+                } else {
+                    // User confirmed - proceed with destruction
+                    qDebug() << "Player" << currentPlayer->getId() << "destroying" << citiesToDestroy.size() << "cities";
+
+                    for (City *city : citiesToDestroy) {
+                        qDebug() << "  Destroying city at" << city->getTerritoryName()
+                                 << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
+
+                        QString territoryName = city->getTerritoryName();
+                        Position cityPosition = city->getPosition();
+
+                        // Find and remove all roads connected to this city's territory
+                        QList<Road*> roadsAtTerritory = currentPlayer->getRoadsAtTerritory(territoryName);
+                        for (Road *road : roadsAtTerritory) {
+                            qDebug() << "    Destroying road at" << road->getTerritoryName();
+                            currentPlayer->removeRoad(road);
+                            delete road;
+                        }
+
+                        // Also check for roads that have this position as either endpoint
+                        QList<Road*> allRoads = currentPlayer->getRoads();
+                        for (Road *road : allRoads) {
+                            if (road->getFromPosition() == cityPosition || road->getToPosition() == cityPosition) {
+                                qDebug() << "    Destroying connected road from"
+                                         << road->getFromPosition().row << "," << road->getFromPosition().col
+                                         << " to " << road->getToPosition().row << "," << road->getToPosition().col;
+                                currentPlayer->removeRoad(road);
+                                delete road;
+                            }
+                        }
+
+                        // Remove city and fortification from MapWidget grids
+                        if (m_mapWidget) {
+                            m_mapWidget->removeCityAt(cityPosition.row, cityPosition.col);
+                            m_mapWidget->removeFortificationAt(cityPosition.row, cityPosition.col);
+                        }
+
+                        // Remove city from player's inventory
+                        currentPlayer->removeCity(city);
+
+                        // Delete the city object
+                        delete city;
+                    }
+
+                    // Update display after destroying cities
+                    updateAllPlayers();
+                    if (m_mapWidget) {
+                        m_mapWidget->update();
+                    }
+                }
+            } else {
+                qDebug() << "Player" << currentPlayer->getId() << "chose not to destroy any cities";
             }
         }
     }
 
-    delete destructionDialog;
-
-    // SECOND: Build options for PurchaseDialog2
-    Position homePosition = currentPlayer->getHomeProvince();
+    // SECOND: Build options for PurchaseDialog
+    QString homeProvinceName = currentPlayer->getHomeProvinceName();
+    Position homePosition = m_mapWidget->territoryNameToPosition(homeProvinceName);
 
     // Build list of territories available for city placement
     QList<CityPlacementOption> cityOptions;
@@ -2179,7 +3101,7 @@ void PlayerInfoWidget::onEndTurnClicked()
 
         // Create military units at home province
         QString homeProvince = currentPlayer->getHomeProvinceName();
-        Position homePosForTroops = currentPlayer->getHomeProvince();
+        Position homePosForTroops = m_mapWidget->territoryNameToPosition(homeProvince);
 
         // Create infantry
         for (int i = 0; i < result.infantry; ++i) {
@@ -2438,15 +3360,18 @@ void PlayerInfoWidget::showCapturedGeneralContextMenu(GeneralPiece *general, con
                     }
 
                     // Ask the seller if they accept the offer
-                    QMessageBox::StandardButton sellerResponse = QMessageBox::question(this, "Accept Ransom?",
-                        QString("Player %1 is offering %2 talents for General %3 #%4.\n\n"
+                    QMessageBox sellerMsg(this);
+                    sellerMsg.setWindowTitle("Accept Ransom?");
+                    sellerMsg.setText(QString("Player %1 is offering %2 talents for General %3 #%4.\n\n"
                                 "Do you (Player %5) accept this offer?")
                         .arg(player->getId())
                         .arg(ransomAmount)
                         .arg(general->getPlayer())
                         .arg(general->getNumber())
-                        .arg(currentPlayer->getId()),
-                        QMessageBox::Yes | QMessageBox::No);
+                        .arg(currentPlayer->getId()));
+                    sellerMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    sellerMsg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+                    QMessageBox::StandardButton sellerResponse = (QMessageBox::StandardButton)sellerMsg.exec();
 
                     if (sellerResponse == QMessageBox::No) {
                         QMessageBox::information(this, "Ransom Declined",
@@ -2467,37 +3392,45 @@ void PlayerInfoWidget::showCapturedGeneralContextMenu(GeneralPiece *general, con
                         general->clearCaptured();  // No longer captured
 
                         // Move general to buyer's home province
-                        Position homePos = player->getHomeProvince();
+                        QString homeTerritoryName = player->getHomeProvinceName();
+                        Position homePos = m_mapWidget->territoryNameToPosition(homeTerritoryName);
                         general->setPosition(homePos);
-                        QString homeTerritoryName = m_mapWidget->getTerritoryNameAt(homePos.row, homePos.col);
                         general->setTerritoryName(homeTerritoryName);
 
-                        QMessageBox::information(this, "General Ransomed",
-                            QString("General %1 #%2 has been ransomed back to Player %3 for %4 talents.\n\n"
+                        QMessageBox ransomMsg(this);
+                        ransomMsg.setWindowTitle("General Ransomed");
+                        ransomMsg.setText(QString("General %1 #%2 has been ransomed back to Player %3 for %4 talents.\n\n"
                                     "The general has been returned to their home province.")
                             .arg(general->getPlayer())
                             .arg(general->getNumber())
                             .arg(player->getId())
                             .arg(ransomAmount));
+                        ransomMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                        ransomMsg.setStandardButtons(QMessageBox::Ok);
+                        ransomMsg.exec();
                     } else {
                         // Non-original owner buying - general stays captured but changes captor
                         general->setCapturedBy(player->getId());
                         player->addCapturedGeneral(general);
 
                         // Move general to buyer's home province
-                        Position homePos = player->getHomeProvince();
+                        QString homeTerritoryName = player->getHomeProvinceName();
+                        Position homePos = m_mapWidget->territoryNameToPosition(homeTerritoryName);
                         general->setPosition(homePos);
-                        QString homeTerritoryName = m_mapWidget->getTerritoryNameAt(homePos.row, homePos.col);
                         general->setTerritoryName(homeTerritoryName);
 
-                        QMessageBox::information(this, "General Ransomed",
-                            QString("General %1 #%2 has been sold to Player %3 for %4 talents.\n\n"
+                        QMessageBox soldMsg(this);
+                        soldMsg.setWindowTitle("General Ransomed");
+                        soldMsg.setText(QString("General %1 #%2 has been sold to Player %3 for %4 talents.\n\n"
                                     "The general is now held by Player %5.")
                             .arg(general->getPlayer())
                             .arg(general->getNumber())
                             .arg(player->getId())
                             .arg(ransomAmount)
                             .arg(player->getId()));
+                        soldMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                        soldMsg.setStandardButtons(QMessageBox::Ok);
+                        soldMsg.exec();
                     }
 
                     // Update displays
@@ -2597,14 +3530,17 @@ void PlayerInfoWidget::showCapturedGeneralContextMenu(GeneralPiece *general, con
             }
 
             // Ask the holder if they accept the offer
-            QMessageBox::StandardButton holderResponse = QMessageBox::question(this, "Accept Ransom?",
-                QString("Player %1 is offering %2 talents to buy back their General %3.\n\n"
+            QMessageBox holderMsg(this);
+            holderMsg.setWindowTitle("Accept Ransom?");
+            holderMsg.setText(QString("Player %1 is offering %2 talents to buy back their General %3.\n\n"
                         "Do you (Player %4) accept this offer?")
                 .arg(currentPlayer->getId())
                 .arg(ransomAmount)
                 .arg(general->getNumber())
-                .arg(heldBy),
-                QMessageBox::Yes | QMessageBox::No);
+                .arg(heldBy));
+            holderMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            holderMsg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            QMessageBox::StandardButton holderResponse = (QMessageBox::StandardButton)holderMsg.exec();
 
             if (holderResponse == QMessageBox::No) {
                 QMessageBox::information(this, "Ransom Declined",
@@ -2623,17 +3559,21 @@ void PlayerInfoWidget::showCapturedGeneralContextMenu(GeneralPiece *general, con
             general->clearCaptured();  // No longer captured
 
             // Move general to owner's home province
-            Position homePos = currentPlayer->getHomeProvince();
+            QString homeTerritoryName = currentPlayer->getHomeProvinceName();
+            Position homePos = m_mapWidget->territoryNameToPosition(homeTerritoryName);
             general->setPosition(homePos);
-            QString homeTerritoryName = m_mapWidget->getTerritoryNameAt(homePos.row, homePos.col);
             general->setTerritoryName(homeTerritoryName);
 
-            QMessageBox::information(this, "General Ransomed",
-                QString("General %1 #%2 has been ransomed back to you for %3 talents.\n\n"
+            QMessageBox returnMsg(this);
+            returnMsg.setWindowTitle("General Ransomed");
+            returnMsg.setText(QString("General %1 #%2 has been ransomed back to you for %3 talents.\n\n"
                         "The general has been returned to your home province.")
                 .arg(general->getPlayer())
                 .arg(general->getNumber())
                 .arg(ransomAmount));
+            returnMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            returnMsg.setStandardButtons(QMessageBox::Ok);
+            returnMsg.exec();
 
             // Update displays
             updateAllPlayers();

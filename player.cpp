@@ -1,5 +1,6 @@
 #include "player.h"
 #include "mapwidget.h"
+#include <QDebug>
 
 Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
     : QObject(parent)
@@ -10,6 +11,8 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
     , m_hasHomeFortifiedCity(true)  // Every player starts with a fortified city
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()
 {
+    qDebug() << "Creating Player" << m_id << "with home province:" << m_homeProvinceName;
+
     // TEMPORARY: Create dummy position for piece/building constructors
     // This will be removed when GamePiece/Building are updated to not need Position
     Position tempPos = {0, 0};
@@ -17,6 +20,7 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
     // Create Caesar at home province
     CaesarPiece *caesar = new CaesarPiece(m_id, tempPos, this);
     caesar->setTerritoryName(m_homeProvinceName);
+    qDebug() << "  Caesar created, territory name:" << caesar->getTerritoryName();
     m_caesars.append(caesar);
 
     // Create 6 Generals at home province (per 1984 rules)

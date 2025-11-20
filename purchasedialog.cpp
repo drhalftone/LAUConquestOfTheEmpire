@@ -7,6 +7,8 @@
 #include <QFrame>
 #include <QFont>
 #include <QMessageBox>
+#include <QPixmap>
+#include <QPainter>
 
 PurchaseDialog::PurchaseDialog(QChar player,
                                int availableMoney,
@@ -47,6 +49,56 @@ int PurchaseDialog::getCurrentPrice(int basePrice) const
     return basePrice * m_inflationMultiplier;
 }
 
+QPixmap PurchaseDialog::createIconCollage(const QString &iconPath, int count) const
+{
+    // Load the base icon
+    QPixmap baseIcon(iconPath);
+    if (baseIcon.isNull()) {
+        return QPixmap();
+    }
+
+    // Scale icon to reasonable size
+    QPixmap icon = baseIcon.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    // Limit display count to avoid huge images
+    int displayCount = qMin(count, 10);
+
+    // Calculate collage size based on overlap
+    int iconWidth = icon.width();
+    int iconHeight = icon.height();
+    int overlap = iconWidth / 2;  // 50% overlap
+    int collageWidth = iconWidth + (displayCount - 1) * overlap;
+    int collageHeight = iconHeight;
+
+    // Create collage pixmap
+    QPixmap collage(collageWidth, collageHeight);
+    collage.fill(Qt::transparent);
+
+    QPainter painter(&collage);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    // Draw overlapping icons
+    for (int i = 0; i < displayCount; ++i) {
+        int x = i * overlap;
+        painter.drawPixmap(x, 0, icon);
+    }
+
+    // If there are more icons than we can display, add a label
+    if (count > displayCount) {
+        painter.setPen(Qt::black);
+        QFont font = painter.font();
+        font.setBold(true);
+        font.setPointSize(10);
+        painter.setFont(font);
+        QString moreText = QString("+%1").arg(count - displayCount);
+        painter.drawText(collage.rect(), Qt::AlignRight | Qt::AlignVCenter, moreText);
+    }
+
+    painter.end();
+    return collage;
+}
+
 void PurchaseDialog::setupUI()
 {
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -77,7 +129,10 @@ void PurchaseDialog::setupUI()
     int row = 0;
 
     // Infantry
-    troopsLayout->addWidget(new QLabel("Infantry:"), row, 0);
+    QLabel *infantryIcon = new QLabel();
+    infantryIcon->setPixmap(QPixmap(":/images/infantryIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    troopsLayout->addWidget(infantryIcon, row, 0);
+    troopsLayout->addWidget(new QLabel("Infantry:"), row, 1);
     m_infantrySpinBox = new QSpinBox();
     m_infantrySpinBox->setMinimum(0);
     m_infantrySpinBox->setMaximum(m_availableInfantry);
@@ -86,14 +141,17 @@ void PurchaseDialog::setupUI()
         m_infantrySpinBox->setEnabled(false);
         m_infantrySpinBox->setToolTip("No infantry pieces available in the game box");
     }
-    troopsLayout->addWidget(m_infantrySpinBox, row, 1);
-    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(INFANTRY_BASE_COST))), row, 2);
-    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableInfantry)), row, 3);
+    troopsLayout->addWidget(m_infantrySpinBox, row, 2);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(INFANTRY_BASE_COST))), row, 3);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableInfantry)), row, 4);
     connect(m_infantrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
     // Cavalry
-    troopsLayout->addWidget(new QLabel("Cavalry:"), row, 0);
+    QLabel *cavalryIcon = new QLabel();
+    cavalryIcon->setPixmap(QPixmap(":/images/cavalryIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    troopsLayout->addWidget(cavalryIcon, row, 0);
+    troopsLayout->addWidget(new QLabel("Cavalry:"), row, 1);
     m_cavalrySpinBox = new QSpinBox();
     m_cavalrySpinBox->setMinimum(0);
     m_cavalrySpinBox->setMaximum(m_availableCavalry);
@@ -102,14 +160,17 @@ void PurchaseDialog::setupUI()
         m_cavalrySpinBox->setEnabled(false);
         m_cavalrySpinBox->setToolTip("No cavalry pieces available in the game box");
     }
-    troopsLayout->addWidget(m_cavalrySpinBox, row, 1);
-    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CAVALRY_BASE_COST))), row, 2);
-    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCavalry)), row, 3);
+    troopsLayout->addWidget(m_cavalrySpinBox, row, 2);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CAVALRY_BASE_COST))), row, 3);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCavalry)), row, 4);
     connect(m_cavalrySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
     // Catapults
-    troopsLayout->addWidget(new QLabel("Catapults:"), row, 0);
+    QLabel *catapultIcon = new QLabel();
+    catapultIcon->setPixmap(QPixmap(":/images/catapultIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    troopsLayout->addWidget(catapultIcon, row, 0);
+    troopsLayout->addWidget(new QLabel("Catapults:"), row, 1);
     m_catapultSpinBox = new QSpinBox();
     m_catapultSpinBox->setMinimum(0);
     m_catapultSpinBox->setMaximum(m_availableCatapults);
@@ -118,9 +179,9 @@ void PurchaseDialog::setupUI()
         m_catapultSpinBox->setEnabled(false);
         m_catapultSpinBox->setToolTip("No catapult pieces available in the game box");
     }
-    troopsLayout->addWidget(m_catapultSpinBox, row, 1);
-    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CATAPULT_BASE_COST))), row, 2);
-    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCatapults)), row, 3);
+    troopsLayout->addWidget(m_catapultSpinBox, row, 2);
+    troopsLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(CATAPULT_BASE_COST))), row, 3);
+    troopsLayout->addWidget(new QLabel(QString("(%1 available)").arg(m_availableCatapults)), row, 4);
     connect(m_catapultSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
@@ -135,12 +196,24 @@ void PurchaseDialog::setupUI()
         for (const CityPlacementOption &option : m_cityOptions) {
             QHBoxLayout *cityRow = new QHBoxLayout();
 
+            // City icon
+            QLabel *cityIcon = new QLabel();
+            cityIcon->setPixmap(QPixmap(":/images/newCityIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            cityRow->addWidget(cityIcon);
+
             // Regular city checkbox
             QCheckBox *cityCheckbox = new QCheckBox(QString("City at %1").arg(option.territoryName));
             connect(cityCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
             m_cityCheckboxes[cityCheckbox] = option;
             cityRow->addWidget(cityCheckbox);
             cityRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST))));
+
+            cityRow->addSpacing(20);
+
+            // Wall icon for fortified city
+            QLabel *wallIcon = new QLabel();
+            wallIcon->setPixmap(QPixmap(":/images/wallIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            cityRow->addWidget(wallIcon);
 
             // Fortified city checkbox
             QCheckBox *fortifiedCheckbox = new QCheckBox(QString("Fortified City at %1").arg(option.territoryName));
@@ -176,6 +249,16 @@ void PurchaseDialog::setupUI()
 
         for (const FortificationOption &option : m_fortificationOptions) {
             QHBoxLayout *fortRow = new QHBoxLayout();
+
+            // Wall icon
+            QLabel *wallIcon = new QLabel();
+            QPixmap wallPixmap(":/images/wallIcon.png");
+            if (!wallPixmap.isNull()) {
+                wallIcon->setPixmap(wallPixmap.scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            } else {
+                wallIcon->setText("[W]"); // Fallback if icon doesn't load
+            }
+            fortRow->addWidget(wallIcon);
 
             QCheckBox *fortCheckbox = new QCheckBox(QString("Add walls to city at %1").arg(option.territoryName));
             connect(fortCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
@@ -229,7 +312,12 @@ void PurchaseDialog::setupUI()
                 .arg(option.direction)
                 .arg(option.seaTerritoryName);
 
-            galleysLayout->addWidget(new QLabel(label + ":"), galleyRow, 0);
+            // Galley icon
+            QLabel *galleyIcon = new QLabel();
+            galleyIcon->setPixmap(QPixmap(":/images/galleyIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            galleysLayout->addWidget(galleyIcon, galleyRow, 0);
+
+            galleysLayout->addWidget(new QLabel(label + ":"), galleyRow, 1);
 
             QSpinBox *galleySpinBox = new QSpinBox();
             galleySpinBox->setMinimum(0);
@@ -246,8 +334,8 @@ void PurchaseDialog::setupUI()
             connect(galleySpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
             m_galleySpinboxes[galleySpinBox] = option;
 
-            galleysLayout->addWidget(galleySpinBox, galleyRow, 1);
-            galleysLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(GALLEY_BASE_COST))), galleyRow, 2);
+            galleysLayout->addWidget(galleySpinBox, galleyRow, 2);
+            galleysLayout->addWidget(new QLabel(QString("%1 talents each").arg(getCurrentPrice(GALLEY_BASE_COST))), galleyRow, 3);
 
             galleyRow++;
         }
@@ -430,90 +518,194 @@ void PurchaseDialog::onPurchaseClicked()
         return;
     }
 
-    // Build summary of purchases
-    QStringList items;
+    // Create custom confirmation dialog with icon collages
+    QDialog confirmDialog(this);
+    confirmDialog.setWindowTitle("Confirm Purchase");
+    confirmDialog.setModal(true);
 
-    // Add troops
+    QVBoxLayout *mainLayout = new QVBoxLayout(&confirmDialog);
+
+    // Title
+    QLabel *titleLabel = new QLabel(QString("Player %1 - Purchase Summary").arg(m_player));
+    QFont titleFont = titleLabel->font();
+    titleFont.setPointSize(14);
+    titleFont.setBold(true);
+    titleLabel->setFont(titleFont);
+    titleLabel->setAlignment(Qt::AlignCenter);
+    mainLayout->addWidget(titleLabel);
+
+    mainLayout->addSpacing(10);
+
+    // Add troop collages
     if (m_infantrySpinBox->value() > 0) {
-        items.append(QString("%1 Infantry (%2 talents)")
+        QHBoxLayout *infantryRow = new QHBoxLayout();
+        QLabel *infantryCollage = new QLabel();
+        infantryCollage->setPixmap(createIconCollage(":/images/infantryIcon.png", m_infantrySpinBox->value()));
+        infantryRow->addWidget(infantryCollage);
+        infantryRow->addWidget(new QLabel(QString("%1 Infantry - %2 talents")
             .arg(m_infantrySpinBox->value())
-            .arg(m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST)));
-    }
-    if (m_cavalrySpinBox->value() > 0) {
-        items.append(QString("%1 Cavalry (%2 talents)")
-            .arg(m_cavalrySpinBox->value())
-            .arg(m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST)));
-    }
-    if (m_catapultSpinBox->value() > 0) {
-        items.append(QString("%1 Catapults (%2 talents)")
-            .arg(m_catapultSpinBox->value())
-            .arg(m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST)));
+            .arg(m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST))));
+        infantryRow->addStretch();
+        mainLayout->addLayout(infantryRow);
     }
 
-    // Add regular cities
+    if (m_cavalrySpinBox->value() > 0) {
+        QHBoxLayout *cavalryRow = new QHBoxLayout();
+        QLabel *cavalryCollage = new QLabel();
+        cavalryCollage->setPixmap(createIconCollage(":/images/cavalryIcon.png", m_cavalrySpinBox->value()));
+        cavalryRow->addWidget(cavalryCollage);
+        cavalryRow->addWidget(new QLabel(QString("%1 Cavalry - %2 talents")
+            .arg(m_cavalrySpinBox->value())
+            .arg(m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST))));
+        cavalryRow->addStretch();
+        mainLayout->addLayout(cavalryRow);
+    }
+
+    if (m_catapultSpinBox->value() > 0) {
+        QHBoxLayout *catapultRow = new QHBoxLayout();
+        QLabel *catapultCollage = new QLabel();
+        catapultCollage->setPixmap(createIconCollage(":/images/catapultIcon.png", m_catapultSpinBox->value()));
+        catapultRow->addWidget(catapultCollage);
+        catapultRow->addWidget(new QLabel(QString("%1 Catapults - %2 talents")
+            .arg(m_catapultSpinBox->value())
+            .arg(m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST))));
+        catapultRow->addStretch();
+        mainLayout->addLayout(catapultRow);
+    }
+
+    // Count cities and show collage
+    int cityCount = 0;
+    int fortifiedCityCount = 0;
+    QStringList cityDetails;
+    QStringList fortifiedCityDetails;
+
     for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
         if (it.key()->isChecked()) {
-            items.append(QString("City at %1 (%2 talents)")
-                .arg(it.value().territoryName)
-                .arg(getCurrentPrice(CITY_BASE_COST)));
+            cityCount++;
+            cityDetails.append(it.value().territoryName);
         }
     }
 
-    // Add fortified cities
     for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
         if (it.key()->isChecked()) {
-            items.append(QString("Fortified City at %1 (%2 talents)")
-                .arg(it.value().territoryName)
-                .arg(getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST)));
+            fortifiedCityCount++;
+            fortifiedCityDetails.append(it.value().territoryName);
         }
     }
 
-    // Add fortifications
+    if (cityCount > 0) {
+        QHBoxLayout *cityRow = new QHBoxLayout();
+        QLabel *cityCollage = new QLabel();
+        cityCollage->setPixmap(createIconCollage(":/images/newCityIcon.png", cityCount));
+        cityRow->addWidget(cityCollage);
+        cityRow->addWidget(new QLabel(QString("%1 City(s) at %2 - %3 talents")
+            .arg(cityCount)
+            .arg(cityDetails.join(", "))
+            .arg(cityCount * getCurrentPrice(CITY_BASE_COST))));
+        cityRow->addStretch();
+        mainLayout->addLayout(cityRow);
+    }
+
+    if (fortifiedCityCount > 0) {
+        QHBoxLayout *fortCityRow = new QHBoxLayout();
+
+        // City icon
+        QLabel *cityCollage = new QLabel();
+        cityCollage->setPixmap(createIconCollage(":/images/newCityIcon.png", fortifiedCityCount));
+        fortCityRow->addWidget(cityCollage);
+
+        // Wall icon
+        QLabel *wallCollage = new QLabel();
+        wallCollage->setPixmap(createIconCollage(":/images/wallIcon.png", fortifiedCityCount));
+        fortCityRow->addWidget(wallCollage);
+
+        fortCityRow->addWidget(new QLabel(QString("%1 Fortified City(s) at %2 - %3 talents")
+            .arg(fortifiedCityCount)
+            .arg(fortifiedCityDetails.join(", "))
+            .arg(fortifiedCityCount * getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST))));
+        fortCityRow->addStretch();
+        mainLayout->addLayout(fortCityRow);
+    }
+
+    // Count fortifications (walls added to existing cities)
+    int fortificationCount = 0;
+    QStringList fortificationDetails;
     for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
         if (it.key()->isChecked()) {
-            items.append(QString("Fortify city at %1 (%2 talents)")
-                .arg(it.value().territoryName)
-                .arg(getCurrentPrice(FORTIFICATION_BASE_COST)));
+            fortificationCount++;
+            fortificationDetails.append(it.value().territoryName);
         }
     }
 
-    // Add galleys
+    if (fortificationCount > 0) {
+        QHBoxLayout *fortRow = new QHBoxLayout();
+        QLabel *wallCollage = new QLabel();
+        wallCollage->setPixmap(createIconCollage(":/images/wallIcon.png", fortificationCount));
+        fortRow->addWidget(wallCollage);
+        fortRow->addWidget(new QLabel(QString("%1 Fortification(s) at %2 - %3 talents")
+            .arg(fortificationCount)
+            .arg(fortificationDetails.join(", "))
+            .arg(fortificationCount * getCurrentPrice(FORTIFICATION_BASE_COST))));
+        fortRow->addStretch();
+        mainLayout->addLayout(fortRow);
+    }
+
+    // Count galleys and show collage
+    int totalGalleys = 0;
+    QStringList galleyDetails;
     for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
         int count = it.key()->value();
         if (count > 0) {
-            items.append(QString("%1 Galleys at %2 border (%3) - %4 talents")
+            totalGalleys += count;
+            galleyDetails.append(QString("%1 at %2 %3")
                 .arg(count)
                 .arg(it.value().direction)
-                .arg(it.value().seaTerritoryName)
-                .arg(count * getCurrentPrice(GALLEY_BASE_COST)));
+                .arg(it.value().seaTerritoryName));
         }
     }
 
-    // Build confirmation message
-    QString message = QString("Player %1 - Purchase Summary:\n\n").arg(m_player);
-
-    if (items.isEmpty()) {
-        message += "No items selected.\n";
-    } else {
-        for (const QString &item : items) {
-            message += "• " + item + "\n";
-        }
+    if (totalGalleys > 0) {
+        QHBoxLayout *galleyRow = new QHBoxLayout();
+        QLabel *galleyCollage = new QLabel();
+        galleyCollage->setPixmap(createIconCollage(":/images/galleyIcon.png", totalGalleys));
+        galleyRow->addWidget(galleyCollage);
+        galleyRow->addWidget(new QLabel(QString("%1 Galley(s): %2 - %3 talents")
+            .arg(totalGalleys)
+            .arg(galleyDetails.join(", "))
+            .arg(totalGalleys * getCurrentPrice(GALLEY_BASE_COST))));
+        galleyRow->addStretch();
+        mainLayout->addLayout(galleyRow);
     }
 
-    message += QString("\nTotal Cost: %1 talents\n").arg(m_totalSpent);
-    message += QString("Remaining: %1 talents\n\n").arg(m_availableMoney - m_totalSpent);
-    message += "Are you sure you want to complete this purchase?";
+    mainLayout->addSpacing(15);
 
-    // Show confirmation dialog
-    QMessageBox::StandardButton reply = QMessageBox::question(
-        this,
-        "Confirm Purchase",
-        message,
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No
-    );
+    // Cost summary
+    QLabel *costLabel = new QLabel(QString("Total Cost: %1 talents\nRemaining: %2 talents")
+        .arg(m_totalSpent)
+        .arg(m_availableMoney - m_totalSpent));
+    QFont costFont = costLabel->font();
+    costFont.setBold(true);
+    costLabel->setFont(costFont);
+    mainLayout->addWidget(costLabel);
 
-    if (reply == QMessageBox::Yes) {
+    mainLayout->addSpacing(10);
+
+    QLabel *questionLabel = new QLabel("Are you sure you want to complete this purchase?");
+    mainLayout->addWidget(questionLabel);
+
+    // Buttons
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    QPushButton *yesButton = new QPushButton("Yes");
+    QPushButton *noButton = new QPushButton("No");
+    connect(yesButton, &QPushButton::clicked, &confirmDialog, &QDialog::accept);
+    connect(noButton, &QPushButton::clicked, &confirmDialog, &QDialog::reject);
+    buttonLayout->addStretch();
+    buttonLayout->addWidget(yesButton);
+    buttonLayout->addWidget(noButton);
+    buttonLayout->addStretch();
+    mainLayout->addLayout(buttonLayout);
+
+    if (confirmDialog.exec() == QDialog::Accepted) {
         accept();
     }
 }

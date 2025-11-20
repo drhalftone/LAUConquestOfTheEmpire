@@ -19,11 +19,20 @@ class CombatDialog : public QDialog
     Q_OBJECT
 
 public:
+    enum class CombatResult {
+        AttackerWins = 0,
+        DefenderWins = 1,
+        AttackerRetreats = 2
+    };
+
     explicit CombatDialog(Player *attackingPlayer,
                          Player *defendingPlayer,
-                         const Position &combatPosition,
+                         const QString &combatTerritoryName,
                          MapWidget *mapWidget,
                          QWidget *parent = nullptr);
+
+    // Get the result of the combat
+    CombatResult getCombatResult() const { return m_combatResult; }
 
 private slots:
     void onAttackingTroopClicked();
@@ -67,7 +76,7 @@ private:
 
     Player *m_attackingPlayer;
     Player *m_defendingPlayer;
-    Position m_combatPosition;
+    QString m_combatTerritoryName;
     MapWidget *m_mapWidget;
 
     QList<GamePiece*> m_attackingPieces;
@@ -91,6 +100,9 @@ private:
     // Player headers for showing advantages
     QLabel *m_attackingHeader;
     QLabel *m_defendingHeader;
+
+    // Combat result
+    CombatResult m_combatResult;
 };
 
 #endif // COMBATDIALOG_H

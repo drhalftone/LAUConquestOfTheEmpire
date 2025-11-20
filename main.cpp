@@ -1,4 +1,3 @@
-#include "mainwindow.h"
 #include "playerinfowidget.h"
 #include "mapwidget.h"
 #include "player.h"
@@ -22,6 +21,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    // Set application icon
+    a.setWindowIcon(QIcon(":/images/coeIcon.png"));
 
     // Show startup dialog: New Game or Load Game
     QMessageBox startupDialog;
@@ -97,8 +99,7 @@ int main(int argc, char *argv[])
         for (int i = 0; i < 6 && i < homeProvinces.size(); ++i) {
             Player *player = new Player(
                 playerIds[i],
-                homeProvinces[i].position,
-                homeProvinces[i].name
+                homeProvinces[i].name  // Only need territory name now
             );
             players.append(player);
         }
@@ -110,59 +111,69 @@ int main(int argc, char *argv[])
     mapWidget->setPlayers(players);
     mapWidget->show();
 
-    // Start the current player's turn
+    // Start the current player's turn (only for new games, not loaded games)
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
-        players[currentPlayerIndex]->startTurn();
+        if (!loadGame) {
+            // New game - start the first player's turn
+            players[currentPlayerIndex]->startTurn();
+            mapWidget->setAtStartOfTurn(true);  // At the start of the turn
+        }
+        // For loaded games, the player's movement points are already loaded from file
+        // No need to call startTurn() which would reset them
         mapWidget->setCurrentPlayerIndex(currentPlayerIndex);
-        mapWidget->setAtStartOfTurn(true);  // At the start of the turn
     }
 
-    // FOR TESTING: Move Player A's troops next to Player B for immediate combat testing
-    // DISABLED - uncomment to enable combat testing setup
-    /*
-    if (players.size() >= 2) {
+    // FOR TESTING: Create three cities adjacent to Player A's home city to test road functionality
+    if (!loadGame && players.size() >= 1) {
         Player *playerA = players[0];
-        Player *playerB = players[1];
+        QString homeTerritory = playerA->getHomeProvinceName();
+        Position homePos = mapWidget->territoryNameToPosition(homeTerritory);
 
-        // Get Player B's home position
-        Position playerBHome = playerB->getHomeProvince();
+        qDebug() << "=== TESTING: Setting up Player A with 3 adjacent cities ===";
+        qDebug() << "Player A home territory:" << homeTerritory << "at position" << homePos.row << "," << homePos.col;
 
-        // Calculate adjacent position (one tile to the left of Player B)
-        Position adjacentPos = playerBHome;
-        adjacentPos.col = (adjacentPos.col > 0) ? adjacentPos.col - 1 : adjacentPos.col + 1;
+        // Get neighbors of home territory
+        QList<QString> neighbors = mapWidget->getGraph()->getNeighbors(homeTerritory);
+        qDebug() << "Home territory neighbors:" << neighbors;
 
-        // Move Player A's first general and some troops to the adjacent position
-        if (playerA->getGenerals().size() > 0) {
-            GeneralPiece *general = playerA->getGenerals()[0];
+        // Take first 3 neighbors (or however many exist)
+        int citiesCreated = 0;
+        for (int i = 0; i < qMin(3, neighbors.size()); ++i) {
+            QString neighborTerritory = neighbors[i];
+            Position neighborPos = mapWidget->territoryNameToPosition(neighborTerritory);
 
-            // Get the adjacent territory name first
-            QString adjacentTerritoryName = mapWidget->getTerritoryNameAt(adjacentPos.row, adjacentPos.col);
-
-            // Move general to adjacent position
-            general->setPosition(adjacentPos);
-            general->setTerritoryName(adjacentTerritoryName);  // Update territory name
-            general->setLastTerritory(playerA->getHomeProvince());
-
-            // Move some infantry with the general
-            QList<int> legion;
-            int troopCount = 0;
-            for (InfantryPiece *infantry : playerA->getInfantry()) {
-                if (troopCount < 2) {
-                    infantry->setPosition(adjacentPos);
-                    infantry->setTerritoryName(adjacentTerritoryName);  // Update territory name for infantry too
-                    legion.append(infantry->getUniqueId());
-                    troopCount++;
-                }
+            // Skip if it's a sea territory
+            if (mapWidget->isSeaTerritory(neighborPos.row, neighborPos.col)) {
+                qDebug() << "  Skipping sea territory:" << neighborTerritory;
+                continue;
             }
-            general->setLegion(legion);
 
-            // Claim the adjacent territory for Player A (for testing)
-            if (!adjacentTerritoryName.isEmpty() && !playerA->ownsTerritory(adjacentTerritoryName)) {
-                playerA->claimTerritory(adjacentTerritoryName);
-            }
+            qDebug() << "  Creating city at" << neighborTerritory << "(" << neighborPos.row << "," << neighborPos.col << ")";
+
+            // Claim the territory
+            playerA->claimTerritory(neighborTerritory);
+
+            // Create a city
+            City *city = new City(playerA->getId(), neighborPos, neighborTerritory, false, playerA);
+            playerA->addCity(city);
+
+            citiesCreated++;
+        }
+
+        qDebug() << "Created" << citiesCreated << "cities for Player A";
+
+        // Update roads - this should create roads between home and the new cities
+        mapWidget->updateRoads();
+
+        qDebug() << "Player A now has" << playerA->getRoads().size() << "roads";
+        for (Road *road : playerA->getRoads()) {
+            Position fromPos = road->getFromPosition();
+            Position toPos = road->getToPosition();
+            QString fromTerritory = road->getTerritoryName();
+            QString toTerritory = mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
+            qDebug() << "  Road:" << fromTerritory << "->" << toTerritory;
         }
     }
-    */
 
     // Update the map to show initial territory ownership
     mapWidget->update();
@@ -171,6 +182,7 @@ int main(int argc, char *argv[])
     PlayerInfoWidget *infoWidget = new PlayerInfoWidget();
     infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
     infoWidget->setPlayers(players);
+    mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget for right-click movement
     infoWidget->show();
 
     // Create score window (kept for backward compatibility but can be removed)
@@ -333,6 +345,21 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         mapWidget->setTerritoryAt(row, col, name, value, isLand);
     }
 
+    // Try to load graph from JSON object, otherwise rebuild from territory grid
+    if (gameState.contains("graph") && mapWidget->getGraph()) {
+        QJsonObject graphObj = gameState["graph"].toObject();
+        if (mapWidget->getGraph()->loadFromJsonObject(graphObj)) {
+            qDebug() << "Loaded graph from save file";
+        } else {
+            qDebug() << "Failed to load graph, rebuilding from territory grid";
+            mapWidget->buildGraphFromGrid();
+        }
+    } else {
+        // No graph data in save file, build from territory grid (backward compatibility)
+        qDebug() << "No graph data in save file, rebuilding from territory grid";
+        mapWidget->buildGraphFromGrid();
+    }
+
     // Load players
     QJsonArray playersArray = gameState["players"].toArray();
     for (const QJsonValue &playerValue : playersArray) {
@@ -346,7 +373,7 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QString homeName = playerObj["homeName"].toString();
 
         // Create player (this will auto-create Caesar, 5 generals, and home city)
-        Player *player = new Player(playerId, homePos, homeName);
+        Player *player = new Player(playerId, homeName);  // Only need territory name
 
         // Set wallet
         player->setWallet(wallet);
@@ -648,35 +675,14 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
             player->addCity(city);
         }
 
-        // Load Roads
-        QJsonArray roadsArray = playerObj["roads"].toArray();
-        for (const QJsonValue &roadValue : roadsArray) {
-            QJsonObject roadObj = roadValue.toObject();
-
-            Position fromPos;
-            fromPos.row = roadObj["fromRow"].toInt(0);
-            fromPos.col = roadObj["fromCol"].toInt(0);
-
-            Position toPos;
-            toPos.row = roadObj["toRow"].toInt(0);
-            toPos.col = roadObj["toCol"].toInt(0);
-
-            // Validate that neither endpoint is a sea territory
-            if (mapWidget->isSeaTerritory(fromPos.row, fromPos.col) ||
-                mapWidget->isSeaTerritory(toPos.row, toPos.col)) {
-                qDebug() << "Skipping road from sea territory: (" << fromPos.row << "," << fromPos.col
-                         << ") to (" << toPos.row << "," << toPos.col << ")";
-                continue;  // Skip this road
-            }
-
-            // Road constructor takes one position, we'll set the "to" position after
-            Road *road = new Road(playerId, fromPos, "", player);
-            road->setToPosition(toPos);
-            player->addRoad(road);
-        }
+        // Roads are not loaded - they are automatically generated from cities after all players are loaded
 
         players.append(player);
     }
+
+    // Now that all players and cities are loaded, generate roads
+    mapWidget->setPlayers(players);
+    mapWidget->updateRoads();
 
     return true;
 }

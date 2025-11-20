@@ -305,16 +305,203 @@ int MapGraph::countByType(TerritoryType type) const
 
 bool MapGraph::loadFromJson(const QString &filePath)
 {
-    // TODO: Implement JSON loading in Phase 4
-    // For now, return false
-    Q_UNUSED(filePath);
-    return false;
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (doc.isNull() || !doc.isObject()) {
+        return false;
+    }
+
+    QJsonObject graphObj = doc.object();
+
+    // Clear existing territories
+    clear();
+
+    // Load territories
+    QJsonArray territoriesArray = graphObj["territories"].toArray();
+    for (const QJsonValue &territoryValue : territoriesArray) {
+        QJsonObject territoryObj = territoryValue.toObject();
+
+        Territory territory;
+        territory.name = territoryObj["name"].toString();
+        territory.centroid = QPointF(territoryObj["centroidX"].toDouble(), territoryObj["centroidY"].toDouble());
+        territory.labelPosition = QPointF(territoryObj["labelX"].toDouble(), territoryObj["labelY"].toDouble());
+
+        // Load type
+        QString typeStr = territoryObj["type"].toString();
+        if (typeStr == "Sea") territory.type = TerritoryType::Sea;
+        else if (typeStr == "Mountain") territory.type = TerritoryType::Mountain;
+        else if (typeStr == "Impassable") territory.type = TerritoryType::Impassable;
+        else territory.type = TerritoryType::Land;
+
+        // Load boundary polygon
+        QJsonArray boundaryArray = territoryObj["boundary"].toArray();
+        for (const QJsonValue &pointValue : boundaryArray) {
+            QJsonObject pointObj = pointValue.toObject();
+            territory.boundary << QPointF(pointObj["x"].toDouble(), pointObj["y"].toDouble());
+        }
+
+        // Load neighbors
+        QJsonArray neighborsArray = territoryObj["neighbors"].toArray();
+        for (const QJsonValue &neighborValue : neighborsArray) {
+            territory.neighbors.append(neighborValue.toString());
+        }
+
+        m_territories[territory.name] = territory;
+    }
+
+    return true;
 }
 
 bool MapGraph::saveToJson(const QString &filePath) const
 {
-    // TODO: Implement JSON saving in Phase 4
-    // For now, return false
-    Q_UNUSED(filePath);
-    return false;
+    QJsonObject graphObj;
+
+    // Save territories
+    QJsonArray territoriesArray;
+    for (const Territory &territory : m_territories) {
+        QJsonObject territoryObj;
+        territoryObj["name"] = territory.name;
+        territoryObj["centroidX"] = territory.centroid.x();
+        territoryObj["centroidY"] = territory.centroid.y();
+        territoryObj["labelX"] = territory.labelPosition.x();
+        territoryObj["labelY"] = territory.labelPosition.y();
+
+        // Save type
+        QString typeStr;
+        switch (territory.type) {
+            case TerritoryType::Sea: typeStr = "Sea"; break;
+            case TerritoryType::Mountain: typeStr = "Mountain"; break;
+            case TerritoryType::Impassable: typeStr = "Impassable"; break;
+            default: typeStr = "Land"; break;
+        }
+        territoryObj["type"] = typeStr;
+
+        // Save boundary polygon
+        QJsonArray boundaryArray;
+        for (const QPointF &point : territory.boundary) {
+            QJsonObject pointObj;
+            pointObj["x"] = point.x();
+            pointObj["y"] = point.y();
+            boundaryArray.append(pointObj);
+        }
+        territoryObj["boundary"] = boundaryArray;
+
+        // Save neighbors
+        QJsonArray neighborsArray;
+        for (const QString &neighbor : territory.neighbors) {
+            neighborsArray.append(neighbor);
+        }
+        territoryObj["neighbors"] = neighborsArray;
+
+        territoriesArray.append(territoryObj);
+    }
+    graphObj["territories"] = territoriesArray;
+
+    // Write to file
+    QJsonDocument doc(graphObj);
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+
+    file.write(doc.toJson());
+    file.close();
+
+    return true;
+}
+
+bool MapGraph::loadFromJsonObject(const QJsonObject &graphObj)
+{
+    // Clear existing territories
+    clear();
+
+    // Load territories
+    QJsonArray territoriesArray = graphObj["territories"].toArray();
+    for (const QJsonValue &territoryValue : territoriesArray) {
+        QJsonObject territoryObj = territoryValue.toObject();
+
+        Territory territory;
+        territory.name = territoryObj["name"].toString();
+        territory.centroid = QPointF(territoryObj["centroidX"].toDouble(), territoryObj["centroidY"].toDouble());
+        territory.labelPosition = QPointF(territoryObj["labelX"].toDouble(), territoryObj["labelY"].toDouble());
+
+        // Load type
+        QString typeStr = territoryObj["type"].toString();
+        if (typeStr == "Sea") territory.type = TerritoryType::Sea;
+        else if (typeStr == "Mountain") territory.type = TerritoryType::Mountain;
+        else if (typeStr == "Impassable") territory.type = TerritoryType::Impassable;
+        else territory.type = TerritoryType::Land;
+
+        // Load boundary polygon
+        QJsonArray boundaryArray = territoryObj["boundary"].toArray();
+        for (const QJsonValue &pointValue : boundaryArray) {
+            QJsonObject pointObj = pointValue.toObject();
+            territory.boundary << QPointF(pointObj["x"].toDouble(), pointObj["y"].toDouble());
+        }
+
+        // Load neighbors
+        QJsonArray neighborsArray = territoryObj["neighbors"].toArray();
+        for (const QJsonValue &neighborValue : neighborsArray) {
+            territory.neighbors.append(neighborValue.toString());
+        }
+
+        m_territories[territory.name] = territory;
+    }
+
+    return true;
+}
+
+QJsonObject MapGraph::saveToJsonObject() const
+{
+    QJsonObject graphObj;
+
+    // Save territories
+    QJsonArray territoriesArray;
+    for (const Territory &territory : m_territories) {
+        QJsonObject territoryObj;
+        territoryObj["name"] = territory.name;
+        territoryObj["centroidX"] = territory.centroid.x();
+        territoryObj["centroidY"] = territory.centroid.y();
+        territoryObj["labelX"] = territory.labelPosition.x();
+        territoryObj["labelY"] = territory.labelPosition.y();
+
+        // Save type
+        QString typeStr;
+        switch (territory.type) {
+            case TerritoryType::Sea: typeStr = "Sea"; break;
+            case TerritoryType::Mountain: typeStr = "Mountain"; break;
+            case TerritoryType::Impassable: typeStr = "Impassable"; break;
+            default: typeStr = "Land"; break;
+        }
+        territoryObj["type"] = typeStr;
+
+        // Save boundary polygon
+        QJsonArray boundaryArray;
+        for (const QPointF &point : territory.boundary) {
+            QJsonObject pointObj;
+            pointObj["x"] = point.x();
+            pointObj["y"] = point.y();
+            boundaryArray.append(pointObj);
+        }
+        territoryObj["boundary"] = boundaryArray;
+
+        // Save neighbors
+        QJsonArray neighborsArray;
+        for (const QString &neighbor : territory.neighbors) {
+            neighborsArray.append(neighbor);
+        }
+        territoryObj["neighbors"] = neighborsArray;
+
+        territoriesArray.append(territoryObj);
+    }
+    graphObj["territories"] = territoriesArray;
+
+    return graphObj;
 }

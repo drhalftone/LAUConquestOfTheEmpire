@@ -5,25 +5,26 @@
 
 CombatDialog::CombatDialog(Player *attackingPlayer,
                            Player *defendingPlayer,
-                           const Position &combatPosition,
+                           const QString &combatTerritoryName,
                            MapWidget *mapWidget,
                            QWidget *parent)
     : QDialog(parent)
     , m_attackingPlayer(attackingPlayer)
     , m_defendingPlayer(defendingPlayer)
-    , m_combatPosition(combatPosition)
+    , m_combatTerritoryName(combatTerritoryName)
     , m_mapWidget(mapWidget)
     , m_selectedTarget(nullptr)
     , m_isAttackersTurn(true)
     , m_retreatButton(nullptr)
     , m_attackingHeader(nullptr)
     , m_defendingHeader(nullptr)
+    , m_combatResult(CombatResult::DefenderWins)  // Default to defender wins
 {
     setWindowTitle("Combat Resolution");
 
-    // Get all pieces at combat position
-    m_attackingPieces = m_attackingPlayer->getPiecesAtPosition(combatPosition);
-    m_defendingPieces = m_defendingPlayer->getPiecesAtPosition(combatPosition);
+    // Get all pieces at combat territory
+    m_attackingPieces = m_attackingPlayer->getPiecesAtTerritory(combatTerritoryName);
+    m_defendingPieces = m_defendingPlayer->getPiecesAtTerritory(combatTerritoryName);
 
     // Check if defender has any troops (not just leaders)
     bool defenderHasTroops = false;
@@ -56,10 +57,21 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
         // Call checkCombatEnd immediately which will handle the victory
         // We'll do this after the dialog is set up, so create a minimal dialog first
         QVBoxLayout *tempLayout = new QVBoxLayout(this);
+
+        // Add victory icon and message in horizontal layout
+        QHBoxLayout *messageLayout = new QHBoxLayout();
+        QLabel *iconLabel = new QLabel();
+        QPixmap victoryPixmap(":/images/victoryIcon.png");
+        iconLabel->setPixmap(victoryPixmap.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        iconLabel->setAlignment(Qt::AlignCenter);
+        messageLayout->addWidget(iconLabel);
+
         QLabel *messageLabel = new QLabel("Defender has no troops to defend with!\n\nAttacker wins by default!");
         messageLabel->setAlignment(Qt::AlignCenter);
         messageLabel->setStyleSheet("font-size: 14pt; padding: 20px;");
-        tempLayout->addWidget(messageLabel);
+        messageLayout->addWidget(messageLabel);
+
+        tempLayout->addLayout(messageLayout);
 
         QPushButton *okButton = new QPushButton("Continue");
         connect(okButton, &QPushButton::clicked, [this]() {
@@ -76,10 +88,21 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
         qDebug() << "Attacker has no troops - defender wins automatically";
 
         QVBoxLayout *tempLayout = new QVBoxLayout(this);
+
+        // Add victory icon and message in horizontal layout
+        QHBoxLayout *messageLayout = new QHBoxLayout();
+        QLabel *iconLabel = new QLabel();
+        QPixmap victoryPixmap(":/images/victoryIcon.png");
+        iconLabel->setPixmap(victoryPixmap.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        iconLabel->setAlignment(Qt::AlignCenter);
+        messageLayout->addWidget(iconLabel);
+
         QLabel *messageLabel = new QLabel("Attacker has no troops!\n\nDefender wins by default!");
         messageLabel->setAlignment(Qt::AlignCenter);
         messageLabel->setStyleSheet("font-size: 14pt; padding: 20px;");
-        tempLayout->addWidget(messageLabel);
+        messageLayout->addWidget(messageLabel);
+
+        tempLayout->addLayout(messageLayout);
 
         QPushButton *okButton = new QPushButton("Continue");
         connect(okButton, &QPushButton::clicked, [this]() {
@@ -327,11 +350,7 @@ QGroupBox* CombatDialog::createLegionGroupBox(GamePiece *leader, const QList<int
     } else {
         // Show current territory for defenders (no retreat available)
         if (m_mapWidget) {
-            QString currentTerritoryName = m_mapWidget->getTerritoryNameAt(m_combatPosition.row, m_combatPosition.col);
-            QLabel *retreatLabel = new QLabel(QString("%1 [%2,%3]")
-                                                  .arg(currentTerritoryName)
-                                                  .arg(m_combatPosition.row)
-                                                  .arg(m_combatPosition.col));
+            QLabel *retreatLabel = new QLabel(m_combatTerritoryName);
             retreatLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
             retreatLabel->setAlignment(Qt::AlignCenter);
             layout->addWidget(retreatLabel);
@@ -340,21 +359,27 @@ QGroupBox* CombatDialog::createLegionGroupBox(GamePiece *leader, const QList<int
 
     // Add troops in legion
     Player *owningPlayer = (leader->getPlayer() == m_attackingPlayer->getId()) ? m_attackingPlayer : m_defendingPlayer;
-    QList<GamePiece*> allPieces = owningPlayer->getPiecesAtPosition(m_combatPosition);
+    QList<GamePiece*> allPieces = owningPlayer->getPiecesAtTerritory(m_combatTerritoryName);
 
     for (int pieceId : legionIds) {
         for (GamePiece *piece : allPieces) {
             if (piece->getUniqueId() == pieceId) {
                 QString troopType;
+                QString iconPath;
                 if (piece->getType() == GamePiece::Type::Infantry) {
                     troopType = "Infantry";
+                    iconPath = ":/images/infantryIcon.png";
                 } else if (piece->getType() == GamePiece::Type::Cavalry) {
                     troopType = "Cavalry";
+                    iconPath = ":/images/cavalryIcon.png";
                 } else if (piece->getType() == GamePiece::Type::Catapult) {
                     troopType = "Catapult";
+                    iconPath = ":/images/catapultIcon.png";
                 }
 
                 QPushButton *troopButton = new QPushButton(QString("%1\nID: %2").arg(troopType).arg(piece->getSerialNumber()));
+                troopButton->setIcon(QIcon(iconPath));
+                troopButton->setIconSize(QSize(24, 24));
                 troopButton->setMinimumHeight(40);
                 troopButton->setMaximumWidth(140);  // Fixed width for buttons
 
@@ -391,11 +416,7 @@ QGroupBox* CombatDialog::createUnledTroopsGroupBox(const QList<GamePiece*> &troo
 
     // Add territory info (current combat location)
     if (m_mapWidget) {
-        QString currentTerritoryName = m_mapWidget->getTerritoryNameAt(m_combatPosition.row, m_combatPosition.col);
-        QLabel *territoryLabel = new QLabel(QString("%1 [%2,%3]")
-                                                .arg(currentTerritoryName)
-                                                .arg(m_combatPosition.row)
-                                                .arg(m_combatPosition.col));
+        QLabel *territoryLabel = new QLabel(m_combatTerritoryName);
         territoryLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
         territoryLabel->setAlignment(Qt::AlignCenter);
         layout->addWidget(territoryLabel);
@@ -404,15 +425,21 @@ QGroupBox* CombatDialog::createUnledTroopsGroupBox(const QList<GamePiece*> &troo
     // Add each troop
     for (GamePiece *piece : troops) {
         QString troopType;
+        QString iconPath;
         if (piece->getType() == GamePiece::Type::Infantry) {
             troopType = "Infantry";
+            iconPath = ":/images/infantryIcon.png";
         } else if (piece->getType() == GamePiece::Type::Cavalry) {
             troopType = "Cavalry";
+            iconPath = ":/images/cavalryIcon.png";
         } else if (piece->getType() == GamePiece::Type::Catapult) {
             troopType = "Catapult";
+            iconPath = ":/images/catapultIcon.png";
         }
 
         QPushButton *troopButton = new QPushButton(QString("%1\nID: %2").arg(troopType).arg(piece->getSerialNumber()));
+        troopButton->setIcon(QIcon(iconPath));
+        troopButton->setIconSize(QSize(24, 24));
         troopButton->setMinimumHeight(40);
         troopButton->setMaximumWidth(140);  // Fixed width for buttons
 
@@ -579,17 +606,32 @@ void CombatDialog::onRetreatClicked()
     // Move all attacking leaders (and their troops) back to their last territory
     // Use fresh lists from player to avoid dangling pointers
 
+    qDebug() << "=== RETREAT CLICKED ===";
+    qDebug() << "Combat territory:" << m_combatTerritoryName;
+
+    // Get all attacking pieces at combat territory for troop lookup
+    QList<GamePiece*> allAttackingPieces = m_attackingPlayer->getPiecesAtTerritory(m_combatTerritoryName);
+    qDebug() << "Found" << allAttackingPieces.size() << "attacking pieces at combat territory";
+
     // Process generals
     for (GeneralPiece *general : m_attackingPlayer->getGenerals()) {
-        if (general && general->getPosition() == m_combatPosition && general->hasLastTerritory()) {
+        qDebug() << "Checking general #" << general->getNumber() << "at territory:" << general->getTerritoryName() << "hasLastTerritory:" << general->hasLastTerritory();
+        if (general && general->getTerritoryName() == m_combatTerritoryName && general->hasLastTerritory()) {
             Position retreatPosition = general->getLastTerritory();
+            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+
+            qDebug() << "Retreating general to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
             general->setPosition(retreatPosition);
+            general->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this general's legion
             QList<int> legion = general->getLegion();
-            for (GamePiece *troop : m_attackingTroopButtons.values()) {
-                if (troop && legion.contains(troop->getUniqueId())) {
-                    troop->setPosition(retreatPosition);
+            qDebug() << "  General's legion has" << legion.size() << "troops:" << legion;
+            for (GamePiece *piece : allAttackingPieces) {
+                if (piece && legion.contains(piece->getUniqueId())) {
+                    qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
+                    piece->setPosition(retreatPosition);
+                    piece->setTerritoryName(retreatTerritoryName);
                 }
             }
         }
@@ -597,15 +639,22 @@ void CombatDialog::onRetreatClicked()
 
     // Process caesars
     for (CaesarPiece *caesar : m_attackingPlayer->getCaesars()) {
-        if (caesar && caesar->getPosition() == m_combatPosition && caesar->hasLastTerritory()) {
+        if (caesar && caesar->getTerritoryName() == m_combatTerritoryName && caesar->hasLastTerritory()) {
             Position retreatPosition = caesar->getLastTerritory();
+            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+
+            qDebug() << "Retreating caesar to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
             caesar->setPosition(retreatPosition);
+            caesar->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this caesar's legion
             QList<int> legion = caesar->getLegion();
-            for (GamePiece *troop : m_attackingTroopButtons.values()) {
-                if (troop && legion.contains(troop->getUniqueId())) {
-                    troop->setPosition(retreatPosition);
+            qDebug() << "  Caesar's legion has" << legion.size() << "troops:" << legion;
+            for (GamePiece *piece : allAttackingPieces) {
+                if (piece && legion.contains(piece->getUniqueId())) {
+                    qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
+                    piece->setPosition(retreatPosition);
+                    piece->setTerritoryName(retreatTerritoryName);
                 }
             }
         }
@@ -613,21 +662,41 @@ void CombatDialog::onRetreatClicked()
 
     // Process galleys
     for (GalleyPiece *galley : m_attackingPlayer->getGalleys()) {
-        if (galley && galley->getPosition() == m_combatPosition && galley->hasLastTerritory()) {
+        if (galley && galley->getTerritoryName() == m_combatTerritoryName && galley->hasLastTerritory()) {
             Position retreatPosition = galley->getLastTerritory();
+            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+
+            qDebug() << "Retreating galley to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
             galley->setPosition(retreatPosition);
+            galley->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this galley's legion
             QList<int> legion = galley->getLegion();
-            for (GamePiece *troop : m_attackingTroopButtons.values()) {
-                if (troop && legion.contains(troop->getUniqueId())) {
-                    troop->setPosition(retreatPosition);
+            qDebug() << "  Galley's legion has" << legion.size() << "troops:" << legion;
+            for (GamePiece *piece : allAttackingPieces) {
+                if (piece && legion.contains(piece->getUniqueId())) {
+                    qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
+                    piece->setPosition(retreatPosition);
+                    piece->setTerritoryName(retreatTerritoryName);
                 }
             }
         }
     }
 
-    QMessageBox::information(this, "Retreat", "Attacker has retreated! Surviving troops have returned to their previous territory.");
+    // Unclaim the combat territory from the attacker (they retreated and left)
+    if (m_attackingPlayer->ownsTerritory(m_combatTerritoryName)) {
+        qDebug() << "Unclaiming territory" << m_combatTerritoryName << "from retreating attacker" << m_attackingPlayer->getId();
+        m_attackingPlayer->unclaimTerritory(m_combatTerritoryName);
+    }
+
+    QMessageBox retreatMsg(this);
+    retreatMsg.setWindowTitle("Retreat");
+    retreatMsg.setText("Attacker has retreated! Surviving troops have returned to their previous territory.");
+    retreatMsg.setIconPixmap(QPixmap(":/images/retreatIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    retreatMsg.setStandardButtons(QMessageBox::Ok);
+    retreatMsg.exec();
+
+    m_combatResult = CombatResult::AttackerRetreats;
     accept();
 }
 
@@ -658,8 +727,8 @@ int CombatDialog::calculateDefenderAdvantage() const
 
     // Check for walled city (fortified city) in defending territory
     if (m_mapWidget) {
-        City *city = m_defendingPlayer->getCityAtPosition(m_combatPosition);
-        qDebug() << "Checking for city at position" << m_combatPosition.row << m_combatPosition.col;
+        City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
+        qDebug() << "Checking for city at territory" << m_combatTerritoryName;
         qDebug() << "City found:" << (city != nullptr);
         if (city) {
             qDebug() << "City is fortified:" << city->isFortified();
@@ -754,6 +823,9 @@ void CombatDialog::removeTroopButton(QPushButton *button)
 
 bool CombatDialog::checkCombatEnd()
 {
+    // Convert territory name to position for piece operations (temporary until GamePiece uses territory names)
+    Position combatPosition = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
+
     qDebug() << "checkCombatEnd called";
     bool attackerHasTroops = !m_attackingTroopButtons.isEmpty();
     bool defenderHasTroops = !m_defendingTroopButtons.isEmpty();
@@ -771,21 +843,21 @@ bool CombatDialog::checkCombatEnd()
 
         // Get infantry at combat position
         for (InfantryPiece *infantry : m_defendingPlayer->getInfantry()) {
-            if (infantry && infantry->getPosition() == m_combatPosition) {
+            if (infantry && infantry->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(infantry);
             }
         }
 
         // Get cavalry at combat position
         for (CavalryPiece *cavalry : m_defendingPlayer->getCavalry()) {
-            if (cavalry && cavalry->getPosition() == m_combatPosition) {
+            if (cavalry && cavalry->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(cavalry);
             }
         }
 
         // Get catapults at combat position
         for (CatapultPiece *catapult : m_defendingPlayer->getCatapults()) {
-            if (catapult && catapult->getPosition() == m_combatPosition) {
+            if (catapult && catapult->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(catapult);
             }
         }
@@ -808,7 +880,7 @@ bool CombatDialog::checkCombatEnd()
         QList<CaesarPiece*> defeatedCaesars;
         const QList<CaesarPiece*> &defendingCaesars = m_defendingPlayer->getCaesars();
         for (CaesarPiece *caesar : defendingCaesars) {
-            if (caesar && caesar->getPosition() == m_combatPosition) {
+            if (caesar && caesar->getTerritoryName() == m_combatTerritoryName) {
                 defeatedCaesars.append(caesar);
             }
         }
@@ -918,8 +990,9 @@ bool CombatDialog::checkCombatEnd()
                 caesar->deleteLater();
             }
 
-            QMessageBox::information(this, "Complete Takeover",
-                QString("Player %1 has been eliminated!\n\n"
+            QMessageBox eliminationMsg(this);
+            eliminationMsg.setWindowTitle("Complete Takeover");
+            eliminationMsg.setText(QString("Player %1 has been eliminated!\n\n"
                         "Player %2 gained:\n"
                         "• %3 territories\n"
                         "• %4 cities\n"
@@ -933,6 +1006,9 @@ bool CombatDialog::checkCombatEnd()
                 .arg(generals.size())
                 .arg(infantry.size() + cavalry.size() + catapults.size() + galleys.size())
                 .arg(capturedMoney + 100));
+            eliminationMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            eliminationMsg.setStandardButtons(QMessageBox::Ok);
+            eliminationMsg.exec();
 
             accept();
             return true;
@@ -945,7 +1021,7 @@ bool CombatDialog::checkCombatEnd()
         qDebug() << "Collecting defeated generals";
         const QList<GeneralPiece*> &defendingGenerals = m_defendingPlayer->getGenerals();
         for (GeneralPiece *general : defendingGenerals) {
-            if (general && general->getPosition() == m_combatPosition) {
+            if (general && general->getTerritoryName() == m_combatTerritoryName) {
                 defeatedGenerals.append(general);
             }
         }
@@ -972,7 +1048,7 @@ bool CombatDialog::checkCombatEnd()
                 // Mark as captured (keeps general in original player's list)
                 general->setCapturedBy(m_attackingPlayer->getId());
                 // Move to attacker's position
-                general->setPosition(m_combatPosition);
+                general->setPosition(combatPosition);
                 // Add to attacker's captured list (for easy reference)
                 m_attackingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
@@ -986,7 +1062,7 @@ bool CombatDialog::checkCombatEnd()
         }
 
         // Transfer territory ownership
-        QString territoryName = m_mapWidget->getTerritoryNameAt(m_combatPosition.row, m_combatPosition.col);
+        QString territoryName = m_combatTerritoryName;
 
         // Remove territory from defender
         m_defendingPlayer->unclaimTerritory(territoryName);
@@ -994,8 +1070,8 @@ bool CombatDialog::checkCombatEnd()
         // Add territory to attacker
         m_attackingPlayer->claimTerritory(territoryName);
 
-        // Transfer any cities at this position from defender to attacker
-        City *city = m_defendingPlayer->getCityAtPosition(m_combatPosition);
+        // Transfer any cities at this territory from defender to attacker
+        City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
         if (city) {
             // Remove from defender
             m_defendingPlayer->removeCity(city);
@@ -1008,25 +1084,25 @@ bool CombatDialog::checkCombatEnd()
         // Move all surviving attacking troops to the conquered territory position
         for (GamePiece *piece : m_attackingTroopButtons.values()) {
             if (piece) {
-                piece->setPosition(m_combatPosition);
+                piece->setPosition(combatPosition);
             }
         }
 
         // Also move any attacking leaders (generals, caesars, galleys) to the conquered position
         // Use fresh lists from the player to avoid dangling pointers
         for (GeneralPiece *general : m_attackingPlayer->getGenerals()) {
-            if (general && general->getPosition() == m_combatPosition) {
-                general->setPosition(m_combatPosition);  // Already there, but ensure it's set
+            if (general && general->getTerritoryName() == m_combatTerritoryName) {
+                general->setPosition(combatPosition);  // Already there, but ensure it's set
             }
         }
         for (CaesarPiece *caesar : m_attackingPlayer->getCaesars()) {
-            if (caesar && caesar->getPosition() == m_combatPosition) {
-                caesar->setPosition(m_combatPosition);
+            if (caesar && caesar->getTerritoryName() == m_combatTerritoryName) {
+                caesar->setPosition(combatPosition);
             }
         }
         for (GalleyPiece *galley : m_attackingPlayer->getGalleys()) {
-            if (galley && galley->getPosition() == m_combatPosition) {
-                galley->setPosition(m_combatPosition);
+            if (galley && galley->getTerritoryName() == m_combatTerritoryName) {
+                galley->setPosition(combatPosition);
             }
         }
 
@@ -1039,7 +1115,14 @@ bool CombatDialog::checkCombatEnd()
                 .arg(city->isFortified() ? "Walled City" : "City");
         }
 
-        QMessageBox::information(this, "Combat Over", conquestMessage);
+        QMessageBox attackerWinsMsg(this);
+        attackerWinsMsg.setWindowTitle("Combat Over");
+        attackerWinsMsg.setText(conquestMessage);
+        attackerWinsMsg.setIconPixmap(QPixmap(":/images/victoryIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        attackerWinsMsg.setStandardButtons(QMessageBox::Ok);
+        attackerWinsMsg.exec();
+
+        m_combatResult = CombatResult::AttackerWins;
         accept();
         return true;
     }
@@ -1054,21 +1137,21 @@ bool CombatDialog::checkCombatEnd()
 
         // Get infantry at combat position
         for (InfantryPiece *infantry : m_attackingPlayer->getInfantry()) {
-            if (infantry && infantry->getPosition() == m_combatPosition) {
+            if (infantry && infantry->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(infantry);
             }
         }
 
         // Get cavalry at combat position
         for (CavalryPiece *cavalry : m_attackingPlayer->getCavalry()) {
-            if (cavalry && cavalry->getPosition() == m_combatPosition) {
+            if (cavalry && cavalry->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(cavalry);
             }
         }
 
         // Get catapults at combat position
         for (CatapultPiece *catapult : m_attackingPlayer->getCatapults()) {
-            if (catapult && catapult->getPosition() == m_combatPosition) {
+            if (catapult && catapult->getTerritoryName() == m_combatTerritoryName) {
                 defeatedTroops.append(catapult);
             }
         }
@@ -1091,7 +1174,7 @@ bool CombatDialog::checkCombatEnd()
         QList<CaesarPiece*> defeatedCaesars;
         const QList<CaesarPiece*> &attackingCaesars = m_attackingPlayer->getCaesars();
         for (CaesarPiece *caesar : attackingCaesars) {
-            if (caesar && caesar->getPosition() == m_combatPosition) {
+            if (caesar && caesar->getTerritoryName() == m_combatTerritoryName) {
                 defeatedCaesars.append(caesar);
             }
         }
@@ -1228,7 +1311,7 @@ bool CombatDialog::checkCombatEnd()
         qDebug() << "Collecting defeated generals";
         const QList<GeneralPiece*> &attackingGenerals = m_attackingPlayer->getGenerals();
         for (GeneralPiece *general : attackingGenerals) {
-            if (general && general->getPosition() == m_combatPosition) {
+            if (general && general->getTerritoryName() == m_combatTerritoryName) {
                 defeatedGenerals.append(general);
             }
         }
@@ -1255,7 +1338,7 @@ bool CombatDialog::checkCombatEnd()
                 // Mark as captured (keeps general in original player's list)
                 general->setCapturedBy(m_defendingPlayer->getId());
                 // Keep at current position (defender's territory)
-                general->setPosition(m_combatPosition);
+                general->setPosition(combatPosition);
                 // Add to defender's captured list (for easy reference)
                 m_defendingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
@@ -1268,7 +1351,20 @@ bool CombatDialog::checkCombatEnd()
             }
         }
 
-        QMessageBox::information(this, "Combat Over", "Defender Wins! Territory successfully defended.");
+        // Unclaim the combat territory from the attacker (they lost and have no troops here)
+        if (m_attackingPlayer->ownsTerritory(m_combatTerritoryName)) {
+            qDebug() << "Unclaiming territory" << m_combatTerritoryName << "from defeated attacker" << m_attackingPlayer->getId();
+            m_attackingPlayer->unclaimTerritory(m_combatTerritoryName);
+        }
+
+        QMessageBox defenderWinsMsg(this);
+        defenderWinsMsg.setWindowTitle("Combat Over");
+        defenderWinsMsg.setText("Defender Wins! Territory successfully defended.");
+        defenderWinsMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        defenderWinsMsg.setStandardButtons(QMessageBox::Ok);
+        defenderWinsMsg.exec();
+
+        m_combatResult = CombatResult::DefenderWins;
         accept();
         return true;
     }

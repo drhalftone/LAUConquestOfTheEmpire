@@ -85,6 +85,7 @@ private slots:
 private:
     void setupUI();
     int getCurrentPrice(int basePrice) const;
+    QPixmap createIconCollage(const QString &iconPath, int count) const;
 
     QChar m_player;
     int m_availableMoney;

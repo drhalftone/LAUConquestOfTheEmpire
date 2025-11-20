@@ -1,0 +1,26 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource>
+        <file>images/coeIcon.png</file>
+        <file>images/newCityIcon.png</file>
+        <file>images/fireCityIcon.png</file>
+        <file>images/infantryIcon.png</file>
+        <file>images/catapultIcon.png</file>
+        <file>images/generalIcon.png</file>
+        <file>images/ceasarIcon.png</file>
+        <file>images/cavalryIcon.png</file>
+        <file>images/galleyIcon.png</file>
+        <file>images/wallIcon.png</file>
+        <file>images/combatIcon.png</file>
+        <file>images/redFlag.png</file>
+        <file>images/blueFlag.png</file>
+        <file>images/greenFlag.png</file>
+        <file>images/yellowFlag.png</file>
+        <file>images/orangeFlag.png</file>
+        <file>images/blackFlag.png</file>
+        <file>images/victoryIcon.png</file>
+        <file>images/deadIcon.png</file>
+        <file>images/retreatIcon.png</file>
+        <file>images/captureIcon.png</file>
+    </qresource>
+</RCC>

@@ -2,6 +2,8 @@
 #include "mapgraph.h"
 #include "gamepiece.h"
 #include "player.h"
+#include "building.h"
+#include "playerinfowidget.h"
 #include <QPainter>
 #include <QRandomGenerator>
 #include <QMouseEvent>
@@ -29,10 +31,13 @@
 #include <QStandardPaths>
 #include <algorithm>
 #include <QtMath>
+#include <QList>
+#include <QDebug>
 
 MapWidget::MapWidget(QWidget *parent)
     : QWidget(parent)
     , m_menuBar(nullptr)
+    , m_playerInfoWidget(nullptr)
     , m_tileWidth(60)
     , m_tileHeight(60)
     , m_dragging(false)
@@ -171,13 +176,27 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 painter.drawRect(x + 4, y + 4, m_tileWidth - 8, m_tileHeight - 8);
             }
 
-            // Check if this territory is disputed (has pieces from multiple players)
+            // Check if this territory is disputed (has TROOPS from multiple players)
+            // Leaders alone don't count as disputed - only Infantry/Cavalry/Catapult
             bool isDisputed = false;
             QChar firstPlayer = '\0';
-            ::Position pos = {row, col};  // Use global Position type
+            QString territoryName = getTerritoryNameAt(row, col);
             for (Player *player : m_players) {
-                QList<GamePiece*> pieces = player->getPiecesAtPosition(pos);
-                if (!pieces.isEmpty()) {
+                QList<GamePiece*> pieces = player->getPiecesAtTerritory(territoryName);
+
+                // Check if this player has any actual troops (not just leaders)
+                bool hasTroops = false;
+                for (GamePiece *piece : pieces) {
+                    GamePiece::Type type = piece->getType();
+                    if (type == GamePiece::Type::Infantry ||
+                        type == GamePiece::Type::Cavalry ||
+                        type == GamePiece::Type::Catapult) {
+                        hasTroops = true;
+                        break;
+                    }
+                }
+
+                if (hasTroops) {
                     if (firstPlayer == '\0') {
                         firstPlayer = player->getId();
                     } else if (firstPlayer != player->getId()) {
@@ -232,9 +251,9 @@ void MapWidget::paintEvent(QPaintEvent *event)
 
             // Draw cities for all players at this position
             City *cityAtPosition = nullptr;
+            // territoryName already defined above at line 177
             for (Player *player : m_players) {
-                ::Position pos = {row, col};
-                City *city = player->getCityAtPosition(pos);
+                City *city = player->getCityAtTerritory(territoryName);
                 if (city) {
                     cityAtPosition = city;
                     break;
@@ -245,42 +264,8 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 // Save painter state before drawing city
                 painter.save();
 
-                painter.setPen(Qt::black);
-                painter.setBrush(QColor(150, 100, 50)); // Brown for city
-
-                // Draw small building in top-right corner
-                int citySize = m_tileWidth / 6;
-                QRect cityRect(x + m_tileWidth - citySize - 2, y + 2, citySize, citySize);
-                painter.drawRect(cityRect);
-
-                // Draw roof (triangle)
-                QPolygon roof;
-                roof << QPoint(x + m_tileWidth - citySize - 2, y + 2)
-                     << QPoint(x + m_tileWidth - 2, y + 2)
-                     << QPoint(x + m_tileWidth - citySize/2 - 2, y - citySize/2 + 2);
-                painter.drawPolygon(roof);
-
-                // Draw fortification if present (wall around city)
-                if (cityAtPosition->isFortified()) {
-                    painter.setPen(QPen(QColor(80, 80, 80), 2)); // Dark gray thick line
-                    painter.setBrush(Qt::NoBrush);
-
-                    // Draw crenelated wall around the city icon
-                    int wallMargin = 1;
-                    QRect wallRect(x + m_tileWidth - citySize - 2 - wallMargin,
-                                 y + 2 - wallMargin,
-                                 citySize + wallMargin * 2,
-                                 citySize + wallMargin * 2);
-                    painter.drawRect(wallRect);
-
-                    // Draw crenelations (small rectangles on top)
-                    int crenelSize = citySize / 4;
-                    for (int i = 0; i < 3; ++i) {
-                        int crenelX = wallRect.left() + i * (citySize / 2);
-                        painter.fillRect(crenelX, wallRect.top() - crenelSize/2,
-                                       crenelSize, crenelSize/2, QColor(80, 80, 80));
-                    }
-                }
+                // Use the City's paint method to draw it (handles color for marked cities)
+                cityAtPosition->paint(painter, x, y, m_tileWidth, m_tileHeight);
 
                 // Restore painter state after drawing city
                 painter.restore();
@@ -352,18 +337,24 @@ void MapWidget::paintEvent(QPaintEvent *event)
         // Get all pieces for this player
         QList<GamePiece*> allPieces = player->getAllPieces();
 
-        // Group pieces by position
-        QMap<Position, QVector<GamePiece*>> piecesAtPosition;
+        // Group pieces by territory name (not position, since pieces now use territory names)
+        QMap<QString, QVector<GamePiece*>> piecesAtTerritory;
         for (GamePiece *piece : allPieces) {
-            // Create position key
-            Position pos = piece->getPosition();
-            piecesAtPosition[pos].append(piece);
+            QString territoryName = piece->getTerritoryName();
+            if (territoryName.isEmpty()) {
+                qDebug() << "WARNING: Piece has empty territory name, skipping";
+                continue;
+            }
+            piecesAtTerritory[territoryName].append(piece);
         }
 
-        // Draw each group of pieces at their position
-        for (auto posIt = piecesAtPosition.begin(); posIt != piecesAtPosition.end(); ++posIt) {
-            Position pos = posIt.key();
-            const QVector<GamePiece*> &piecesHere = posIt.value();
+        // Draw each group of pieces at their territory
+        for (auto territoryIt = piecesAtTerritory.begin(); territoryIt != piecesAtTerritory.end(); ++territoryIt) {
+            QString territoryName = territoryIt.key();
+            const QVector<GamePiece*> &piecesHere = territoryIt.value();
+
+            // Convert territory name to position for drawing
+            Position pos = territoryNameToPosition(territoryName);
 
             int x = pos.col * m_tileWidth;
             int y = menuBarHeight + (pos.row * m_tileHeight);
@@ -819,8 +810,37 @@ QVector<MapWidget::Piece*> MapWidget::getPiecesAtPosition(const Position &pos, Q
 
 void MapWidget::mousePressEvent(QMouseEvent *event)
 {
-    Q_UNUSED(event);
-    // Mouse dragging removed - piece movement now handled by PlayerInfoWidget context menus
+    // Handle right-click for territory movement menu
+    if (event->button() == Qt::RightButton && m_playerInfoWidget) {
+        // Get menu bar height
+        int menuBarHeight = m_menuBar ? m_menuBar->height() : 0;
+
+        // Calculate which tile was clicked (adjust for menu bar)
+        int clickX = event->pos().x();
+        int clickY = event->pos().y() - menuBarHeight;
+
+        int col = clickX / m_tileWidth;
+        int row = clickY / m_tileHeight;
+
+        // Check if click is within valid map bounds
+        if (row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+            QString territoryName = getTerritoryNameAt(row, col);
+
+            // Get current player
+            QChar currentPlayer = '\0';
+            if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+                currentPlayer = m_players[m_currentPlayerIndex]->getId();
+            }
+
+            if (currentPlayer != '\0') {
+                // Convert click position to global screen coordinates for menu
+                QPoint globalPos = mapToGlobal(event->pos());
+
+                // Delegate to PlayerInfoWidget to handle the right-click
+                m_playerInfoWidget->handleTerritoryRightClick(territoryName, globalPos, currentPlayer);
+            }
+        }
+    }
 }
 
 void MapWidget::mouseMoveEvent(QMouseEvent *event)
@@ -869,7 +889,7 @@ bool MapWidget::event(QEvent *event)
             bool hasCity = false;
             bool isFortified = false;
             for (Player *player : m_players) {
-                City *city = player->getCityAtPosition(pos);
+                City *city = player->getCityAtTerritory(territoryName);
                 if (city) {
                     hasCity = true;
                     isFortified = city->isFortified();
@@ -883,7 +903,7 @@ bool MapWidget::event(QEvent *event)
             // Collect all pieces at this position from all players
             bool foundPieces = false;
             for (Player *player : m_players) {
-                QList<GamePiece*> piecesHere = player->getPiecesAtPosition(pos);
+                QList<GamePiece*> piecesHere = player->getPiecesAtTerritory(territoryName);
 
                 if (!piecesHere.isEmpty()) {
                     foundPieces = true;
@@ -1163,10 +1183,8 @@ bool MapWidget::hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const
         return false;
     }
 
-    // Create Position from common.h
-    ::Position pos;
-    pos.row = row;
-    pos.col = col;
+    // Get territory name at this location
+    QString territoryName = getTerritoryNameAt(row, col);
 
     // Check all players except the current player
     for (Player *player : m_players) {
@@ -1174,8 +1192,8 @@ bool MapWidget::hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const
             continue;
         }
 
-        // Check if this player has any pieces at this position
-        QList<GamePiece*> pieces = player->getPiecesAtPosition(pos);
+        // Check if this player has any pieces at this territory
+        QList<GamePiece*> pieces = player->getPiecesAtTerritory(territoryName);
         if (!pieces.isEmpty()) {
             return true;
         }
@@ -1264,9 +1282,30 @@ void MapWidget::dropEvent(QDropEvent *event)
             return;
         }
 
-        // Place the city
+        // Find the player who owns this territory
+        Player *owningPlayer = nullptr;
+        for (Player *player : m_players) {
+            if (player->getId() == owner) {
+                owningPlayer = player;
+                break;
+            }
+        }
+
+        if (!owningPlayer) {
+            qDebug() << "Could not find player" << owner;
+            return;
+        }
+
+        // Place the city on the map
         m_hasCity[row][col] = true;
-        qDebug() << "Placed city at row:" << row << "col:" << col;
+
+        // Create City object and add to player
+        Position pos{row, col};
+        QString territoryName = m_territories[row][col].name;
+        City *city = new City(owner, pos, territoryName, false, owningPlayer);
+        owningPlayer->addCity(city);
+
+        qDebug() << "Placed city at row:" << row << "col:" << col << "territory:" << territoryName;
 
         emit itemPlaced(itemType);
         event->acceptProposedAction();
@@ -1290,9 +1329,35 @@ void MapWidget::dropEvent(QDropEvent *event)
             return;
         }
 
-        // Place the fortification
+        // Find the player who owns this city
+        Player *owningPlayer = nullptr;
+        for (Player *player : m_players) {
+            if (player->getId() == owner) {
+                owningPlayer = player;
+                break;
+            }
+        }
+
+        if (!owningPlayer) {
+            qDebug() << "Could not find player" << owner;
+            return;
+        }
+
+        // Find the city at this position and fortify it
+        QString territoryName = m_territories[row][col].name;
+        QList<City*> citiesAtTerritory = owningPlayer->getCitiesAtTerritory(territoryName);
+        if (citiesAtTerritory.isEmpty()) {
+            qDebug() << "ERROR: City exists on map but not in player's city list at" << territoryName;
+            return;
+        }
+
+        // Fortify the city
+        City *city = citiesAtTerritory.first();
+        city->setFortified(true);
+
+        // Place the fortification on the map
         m_hasFortification[row][col] = true;
-        qDebug() << "Placed fortification at row:" << row << "col:" << col;
+        qDebug() << "Placed fortification at row:" << row << "col:" << col << "territory:" << territoryName;
 
         emit itemPlaced(itemType);
         event->acceptProposedAction();
@@ -1460,9 +1525,13 @@ void MapWidget::saveGame()
         QJsonObject playerObj;
         playerObj["id"] = QString(player->getId());
         playerObj["wallet"] = player->getWallet();
-        playerObj["homeRow"] = player->getHomeProvince().row;
-        playerObj["homeCol"] = player->getHomeProvince().col;
-        playerObj["homeName"] = player->getHomeProvinceName();
+
+        // Convert home territory name to position for backward compatibility with save files
+        QString homeName = player->getHomeProvinceName();
+        Position homePos = territoryNameToPosition(homeName);
+        playerObj["homeRow"] = homePos.row;
+        playerObj["homeCol"] = homePos.col;
+        playerObj["homeName"] = homeName;
 
         // Save owned territories
         QJsonArray territoriesArray;
@@ -1621,25 +1690,21 @@ void MapWidget::saveGame()
             cityObj["col"] = city->getPosition().col;
             cityObj["territory"] = city->getTerritoryName();
             cityObj["isFortified"] = city->isFortified();
+            cityObj["markedForDestruction"] = city->isMarkedForDestruction();
             citiesArray.append(cityObj);
         }
         playerObj["cities"] = citiesArray;
 
-        // Save Roads
-        QJsonArray roadsArray;
-        for (Road *road : player->getRoads()) {
-            QJsonObject roadObj;
-            roadObj["fromRow"] = road->getFromPosition().row;
-            roadObj["fromCol"] = road->getFromPosition().col;
-            roadObj["toRow"] = road->getToPosition().row;
-            roadObj["toCol"] = road->getToPosition().col;
-            roadsArray.append(roadObj);
-        }
-        playerObj["roads"] = roadsArray;
+        // Roads are not saved - they are automatically generated from cities
 
         playersArray.append(playerObj);
     }
     gameState["players"] = playersArray;
+
+    // Save graph data under "graph" key
+    if (m_graph) {
+        gameState["graph"] = m_graph->saveToJsonObject();
+    }
 
     // Write to file
     QJsonDocument doc(gameState);
@@ -1855,13 +1920,17 @@ void MapWidget::updateRoads()
         // Check each pair of cities to see if they're adjacent
         for (int i = 0; i < cities.size(); ++i) {
             City *city1 = cities[i];
-            ::Position pos1 = city1->getPosition();  // City uses global Position
             QString territory1 = city1->getTerritoryName();
+
+            // Get position from territory name (MapWidget knows the grid layout)
+            ::Position pos1 = territoryNameToPosition(territory1);
 
             for (int j = i + 1; j < cities.size(); ++j) {
                 City *city2 = cities[j];
-                ::Position pos2 = city2->getPosition();  // City uses global Position
                 QString territory2 = city2->getTerritoryName();
+
+                // Get position from territory name
+                ::Position pos2 = territoryNameToPosition(territory2);
 
                 // Check if territories are different (roads connect different territories)
                 if (territory1 == territory2) {
@@ -1932,8 +2001,8 @@ void MapWidget::buildGraphFromGrid()
     // Create a territory for each grid cell
     for (int row = 0; row < ROWS; ++row) {
         for (int col = 0; col < COLUMNS; ++col) {
-            // Generate territory name from grid position (format: "T_row_col")
-            QString territoryName = QString("T_%1_%2").arg(row).arg(col);
+            // Use actual territory name from m_territories array
+            QString territoryName = m_territories[row][col].name;
 
             // Create territory
             Territory territory;
@@ -1979,17 +2048,17 @@ void MapWidget::buildGraphFromGrid()
     // Now add edges between adjacent cells (4-directional: up, down, left, right)
     for (int row = 0; row < ROWS; ++row) {
         for (int col = 0; col < COLUMNS; ++col) {
-            QString currentTerritory = QString("T_%1_%2").arg(row).arg(col);
+            QString currentTerritory = m_territories[row][col].name;
 
             // Check right neighbor
             if (col + 1 < COLUMNS) {
-                QString rightNeighbor = QString("T_%1_%2").arg(row).arg(col + 1);
+                QString rightNeighbor = m_territories[row][col + 1].name;
                 m_graph->addEdge(currentTerritory, rightNeighbor);
             }
 
             // Check down neighbor
             if (row + 1 < ROWS) {
-                QString downNeighbor = QString("T_%1_%2").arg(row + 1).arg(col);
+                QString downNeighbor = m_territories[row + 1][col].name;
                 m_graph->addEdge(currentTerritory, downNeighbor);
             }
         }
@@ -2007,7 +2076,16 @@ QString MapWidget::positionToTerritoryName(const Position &pos) const
 
 Position MapWidget::territoryNameToPosition(const QString &territoryName) const
 {
-    // Parse territory name format "T_row_col"
+    // Search through all territories to find matching name
+    for (int row = 0; row < ROWS; ++row) {
+        for (int col = 0; col < COLUMNS; ++col) {
+            if (m_territories[row][col].name == territoryName) {
+                return Position{row, col};
+            }
+        }
+    }
+
+    // Fallback: Parse territory name format "T_row_col" (for backward compatibility)
     if (territoryName.startsWith("T_")) {
         QStringList parts = territoryName.mid(2).split("_");
         if (parts.size() == 2) {
@@ -2019,5 +2097,7 @@ Position MapWidget::territoryNameToPosition(const QString &territoryName) const
             }
         }
     }
+
+    qDebug() << "WARNING: Could not find position for territory:" << territoryName;
     return Position{-1, -1};  // Invalid territory name
 }

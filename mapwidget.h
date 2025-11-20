@@ -10,6 +10,7 @@
 
 // Forward declarations
 class Player;
+class PlayerInfoWidget;
 
 class MapWidget : public QWidget
 {
@@ -82,6 +83,9 @@ public:
     void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
     int getCurrentPlayerIndex() const { return m_currentPlayerIndex; }
 
+    // Set PlayerInfoWidget reference for handling territory clicks
+    void setPlayerInfoWidget(PlayerInfoWidget *widget) { m_playerInfoWidget = widget; }
+
     // Set territory data (for loading saved games)
     void setTerritoryAt(int row, int col, const QString &name, int value, bool isLand);
     void clearMap();  // Clear existing map before loading
@@ -115,6 +119,9 @@ public:
     // Debug visualization
     void setGraphDebugMode(bool enabled) { m_graphDebugMode = enabled; update(); }
     bool isGraphDebugMode() const { return m_graphDebugMode; }
+
+    // Build graph from grid (for loading saved games)
+    void buildGraphFromGrid();
 
 public slots:
     void saveGame();
@@ -152,15 +159,13 @@ private:
     QVector<Piece*> getPiecesAtPosition(const Position &pos, QChar player);
     void createMenuBar();
 
-    // Graph-based map system
-    void buildGraphFromGrid();  // Convert grid to graph representation
-
     QMenuBar *m_menuBar;
     QVector<QVector<TileType>> m_tiles;
     QMap<QChar, QVector<Piece>> m_playerPieces;  // Maps 'A'-'F' to their 6 pieces (1 caesar + 5 generals) - DEPRECATED, use m_players
     QVector<QVector<TerritoryInfo>> m_territories;  // Territory info for each tile
     QVector<QVector<QChar>> m_ownership;  // Which player owns each square ('\0' if none) - DEPRECATED, query m_players
     QList<Player*> m_players;  // Reference to player objects for querying pieces and ownership
+    PlayerInfoWidget *m_playerInfoWidget;  // Reference to PlayerInfoWidget for handling territory clicks
     int m_tileWidth;
     int m_tileHeight;
     int m_currentPlayerIndex;  // Index of current player in m_players list

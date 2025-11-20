@@ -10,13 +10,11 @@ CONFIG += c++17
 
 SOURCES += \
     main.cpp \
-    mainwindow.cpp \
     mapwidget.cpp \
     mapgraph.cpp \
     scorewindow.cpp \
     walletwindow.cpp \
     purchasedialog.cpp \
-    placementdialog.cpp \
     gamepiece.cpp \
     player.cpp \
     building.cpp \
@@ -26,13 +24,11 @@ SOURCES += \
     citydestructiondialog.cpp
 
 HEADERS += \
-    mainwindow.h \
     mapwidget.h \
     mapgraph.h \
     scorewindow.h \
     walletwindow.h \
     purchasedialog.h \
-    placementdialog.h \
     gamepiece.h \
     player.h \
     building.h \
@@ -41,6 +37,9 @@ HEADERS += \
     troopselectiondialog.h \
     combatdialog.h \
     citydestructiondialog.h
+
+RESOURCES += \
+    resources.qrc
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

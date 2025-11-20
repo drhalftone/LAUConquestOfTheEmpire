@@ -7,6 +7,7 @@
 #include <QList>
 #include <QMap>
 #include <QColor>
+#include <QJsonObject>
 
 // Territory type classification
 enum class TerritoryType {
@@ -142,6 +143,12 @@ public:
 
     // Save graph to JSON file
     bool saveToJson(const QString &filePath) const;
+
+    // Load graph from JSON object (for embedding in game saves)
+    bool loadFromJsonObject(const QJsonObject &graphObj);
+
+    // Save graph to JSON object (for embedding in game saves)
+    QJsonObject saveToJsonObject() const;
 
 private:
     // Internal storage: map from territory name to Territory data

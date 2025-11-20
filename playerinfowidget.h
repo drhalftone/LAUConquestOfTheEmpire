@@ -30,6 +30,9 @@ public:
     void updatePlayerInfo(Player *player);
     void updateAllPlayers();
 
+    // Handle right-click on territory in map
+    void handleTerritoryRightClick(const QString &territoryName, const QPoint &globalPos, QChar currentPlayer);
+
 signals:
     void pieceMoved(int fromRow, int fromCol, int toRow, int toCol);
 
@@ -58,11 +61,13 @@ private:
     void showCaesarContextMenu(CaesarPiece *piece, const QPoint &pos);
     void showGeneralContextMenu(GeneralPiece *piece, const QPoint &pos);
     void showCapturedGeneralContextMenu(GeneralPiece *general, const QPoint &pos);
+    void showTerritoryContextMenu(Player *player, const QString &territoryName, const QPoint &pos);
     void movePiece(GamePiece *piece, int rowDelta, int colDelta);
     void movePieceWithoutCost(GamePiece *piece, int rowDelta, int colDelta);
 
     // Leader movement with troops
     void moveLeaderWithTroops(GamePiece *leader, int rowDelta, int colDelta);
+    void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);  // Territory-based movement
 
     // Leader movement via road (only costs 1 movement point)
     void moveLeaderViaRoad(GamePiece *leader, const Position &destination);
