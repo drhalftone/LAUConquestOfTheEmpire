@@ -15,7 +15,7 @@ class Player : public QObject
 
 public:
     // Constructor - automatically creates Caesar, 5 Generals, and fortified city at home province
-    explicit Player(QChar id, const Position &homeProvince, const QString &homeProvinceName, QObject *parent = nullptr);
+    explicit Player(QChar id, const QString &homeProvinceName, QObject *parent = nullptr);
     ~Player();
 
     // Player identification
@@ -82,13 +82,6 @@ public:
     QList<Road*> getRoadsAtTerritory(const QString &territoryName) const;
     City* getCityAtTerritory(const QString &territoryName) const;  // Returns first city found or nullptr
 
-    // Query pieces by position
-    QList<GamePiece*> getPiecesAtPosition(const Position &pos) const;
-
-    // Query buildings by position
-    QList<Building*> getBuildingsAtPosition(const Position &pos) const;
-    City* getCityAtPosition(const Position &pos) const;  // Returns first city found or nullptr
-
     // Count pieces
     int getTotalPieceCount() const;
     int getCaesarCount() const { return m_caesars.size(); }
@@ -131,7 +124,6 @@ public:
     void setWallet(int amount);
 
     // Home province and structures (set in constructor)
-    Position getHomeProvince() const { return m_homeProvince; }
     QString getHomeProvinceName() const { return m_homeProvinceName; }
 
     // The home province automatically has a fortified city (created in constructor)
@@ -203,7 +195,6 @@ private:
     int m_wallet;                         // Accumulated wealth in talents
 
     // Home province data
-    Position m_homeProvince;              // Starting position (where Caesar started)
     QString m_homeProvinceName;           // Name of home territory
     bool m_hasHomeFortifiedCity;          // Every player starts with a fortified city at home
 

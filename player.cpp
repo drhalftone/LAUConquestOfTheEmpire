@@ -1,37 +1,40 @@
 #include "player.h"
 #include "mapwidget.h"
 
-Player::Player(QChar id, const Position &homeProvince, const QString &homeProvinceName, QObject *parent)
+Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
     : QObject(parent)
     , m_id(id)
     , m_color(getColorForPlayer(id))
     , m_wallet(100)  // Start each player with 100 talents
-    , m_homeProvince(homeProvince)
     , m_homeProvinceName(homeProvinceName)
     , m_hasHomeFortifiedCity(true)  // Every player starts with a fortified city
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()
 {
+    // TEMPORARY: Create dummy position for piece/building constructors
+    // This will be removed when GamePiece/Building are updated to not need Position
+    Position tempPos = {0, 0};
+
     // Create Caesar at home province
-    CaesarPiece *caesar = new CaesarPiece(m_id, m_homeProvince, this);
+    CaesarPiece *caesar = new CaesarPiece(m_id, tempPos, this);
     caesar->setTerritoryName(m_homeProvinceName);
     m_caesars.append(caesar);
 
     // Create 6 Generals at home province (per 1984 rules)
     for (int i = 1; i <= 6; ++i) {
-        GeneralPiece *general = new GeneralPiece(m_id, m_homeProvince, i, this);
+        GeneralPiece *general = new GeneralPiece(m_id, tempPos, i, this);
         general->setTerritoryName(m_homeProvinceName);
         m_generals.append(general);
     }
 
     // Create 4 Infantry at home province (per 1984 rules)
     for (int i = 1; i <= 4; ++i) {
-        InfantryPiece *infantry = new InfantryPiece(m_id, m_homeProvince, this);
+        InfantryPiece *infantry = new InfantryPiece(m_id, tempPos, this);
         infantry->setTerritoryName(m_homeProvinceName);
         m_infantry.append(infantry);
     }
 
     // Create fortified city at home province
-    City *homeCity = new City(m_id, m_homeProvince, m_homeProvinceName, true, this);
+    City *homeCity = new City(m_id, tempPos, m_homeProvinceName, true, this);
     m_cities.append(homeCity);
 
     // Claim the home province territory
@@ -454,84 +457,10 @@ City* Player::getCityAtTerritory(const QString &territoryName) const
     return nullptr;  // No city found
 }
 
-// ========== Query Pieces by Position ==========
-
-QList<GamePiece*> Player::getPiecesAtPosition(const Position &pos) const
-{
-    QList<GamePiece*> pieces;
-
-    // Check all piece types
-    for (CaesarPiece *piece : m_caesars) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    for (GeneralPiece *piece : m_generals) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    for (InfantryPiece *piece : m_infantry) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    for (CavalryPiece *piece : m_cavalry) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    for (CatapultPiece *piece : m_catapults) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    for (GalleyPiece *piece : m_galleys) {
-        if (piece->getPosition() == pos) {
-            pieces.append(piece);
-        }
-    }
-
-    return pieces;
-}
-
-// ========== Query Buildings by Position ==========
-
-QList<Building*> Player::getBuildingsAtPosition(const Position &pos) const
-{
-    QList<Building*> buildings;
-
-    // Check cities
-    for (City *city : m_cities) {
-        if (city->getPosition() == pos) {
-            buildings.append(city);
-        }
-    }
-
-    // Check roads
-    for (Road *road : m_roads) {
-        if (road->getPosition() == pos) {
-            buildings.append(road);
-        }
-    }
-
-    return buildings;
-}
-
-City* Player::getCityAtPosition(const Position &pos) const
-{
-    for (City *city : m_cities) {
-        if (city->getPosition() == pos) {
-            return city;  // Return first city found
-        }
-    }
-    return nullptr;  // No city found
-}
+// Note: Position-based query methods removed - use territory-based versions instead:
+// - getPiecesAtTerritory()
+// - getBuildingsAtTerritory()
+// - getCityAtTerritory()
 
 // ========== Count Methods ==========
 
