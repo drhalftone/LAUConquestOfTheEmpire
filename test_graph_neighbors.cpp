@@ -2,24 +2,56 @@
 #include <QDebug>
 #include "mapwidget.h"
 #include "mapgraph.h"
+#include "player.h"
+#include "gamepiece.h"
 #include "common.h"
 
-// Test function to verify graph neighbors match grid neighbors
-bool testGraphNeighbors()
+// Helper function to get territory type as string
+QString territoryTypeToString(TerritoryType type)
 {
-    qDebug() << "=== Starting Graph Neighbor Verification Test ===\n";
+    switch (type) {
+        case TerritoryType::Land: return "Land";
+        case TerritoryType::Sea: return "Sea";
+        case TerritoryType::Mountain: return "Mountain";
+        case TerritoryType::Impassable: return "Impassable";
+        default: return "Unknown";
+    }
+}
+
+// Test function to verify graph neighbors match grid neighbors
+bool testGraphNeighbors(bool verboseMode = false)
+{
+    qDebug() << "========================================";
+    qDebug() << "  Graph Neighbor Verification Test";
+    qDebug() << "========================================\n";
 
     // Create a MapWidget (this will generate random map and build graph)
     MapWidget *mapWidget = new MapWidget();
 
-    qDebug() << "Map generated with" << mapWidget->getGraph()->territoryCount() << "territories";
-    qDebug() << "Grid size:" << MapWidget::ROWS << "rows x" << MapWidget::COLUMNS << "columns";
-    qDebug() << "Expected territories:" << (MapWidget::ROWS * MapWidget::COLUMNS) << "\n";
+    qDebug() << "Map Configuration:";
+    qDebug() << "  Grid size:" << MapWidget::ROWS << "rows x" << MapWidget::COLUMNS << "columns";
+    qDebug() << "  Total territories:" << mapWidget->getGraph()->territoryCount();
+    qDebug() << "  Land territories:" << mapWidget->getGraph()->countByType(TerritoryType::Land);
+    qDebug() << "  Sea territories:" << mapWidget->getGraph()->countByType(TerritoryType::Sea);
+    qDebug() << "";
 
     bool allTestsPassed = true;
     int totalTests = 0;
     int passedTests = 0;
     int failedTests = 0;
+
+    // Statistics
+    int landTerritories = 0;
+    int seaTerritories = 0;
+    int ownedTerritories = 0;
+    int territoriesWithPieces = 0;
+
+    // Type mismatch tracking
+    int typeMismatches = 0;
+
+    qDebug() << "========================================";
+    qDebug() << "  Testing Territory Properties";
+    qDebug() << "========================================\n";
 
     // Iterate through every grid position
     for (int row = 0; row < MapWidget::ROWS; ++row) {
@@ -36,6 +68,39 @@ bool testGraphNeighbors()
                 failedTests++;
                 allTestsPassed = false;
                 continue;
+            }
+
+            // === Get Territory Information ===
+
+            // Territory type from grid
+            bool isSeaGrid = mapWidget->isSeaTerritory(row, col);
+            QString gridType = isSeaGrid ? "Sea" : "Land";
+
+            // Territory type from graph
+            TerritoryType graphType = mapWidget->getGraph()->getType(territoryName);
+            QString graphTypeStr = territoryTypeToString(graphType);
+
+            // Update statistics
+            if (isSeaGrid) {
+                seaTerritories++;
+            } else {
+                landTerritories++;
+            }
+
+            // Territory value
+            int territoryValue = mapWidget->getTerritoryValueAt(row, col);
+
+            // Ownership
+            QChar owner = mapWidget->getTerritoryOwnerAt(row, col);
+            QString ownerStr = (owner == '\0') ? "None" : QString(owner);
+            if (owner != '\0') {
+                ownedTerritories++;
+            }
+
+            // Count pieces (would need access to players to get actual pieces)
+            // For now, just note if it has pieces based on ownership
+            if (owner != '\0') {
+                territoriesWithPieces++;
             }
 
             // Get neighbors from graph
@@ -68,64 +133,135 @@ bool testGraphNeighbors()
                 expectedNeighbors.append(mapWidget->positionToTerritoryName(rightPos));
             }
 
-            // Compare the two lists
-            bool neighborsMatch = true;
+            // === Verification ===
 
-            // Check if counts match
+            bool territoryPassed = true;
+            QStringList issues;
+
+            // Check if territory types match
+            bool typeMatches = (isSeaGrid && graphType == TerritoryType::Sea) ||
+                              (!isSeaGrid && graphType == TerritoryType::Land);
+            if (!typeMatches) {
+                issues << QString("Type mismatch: Grid=%1, Graph=%2").arg(gridType, graphTypeStr);
+                territoryPassed = false;
+                typeMismatches++;
+            }
+
+            // Check if neighbor counts match
             if (graphNeighbors.size() != expectedNeighbors.size()) {
-                qDebug() << "FAIL: Territory" << territoryName << "at (" << row << "," << col << ")";
-                qDebug() << "  Expected" << expectedNeighbors.size() << "neighbors, got" << graphNeighbors.size();
-                neighborsMatch = false;
+                issues << QString("Neighbor count: Expected=%1, Got=%2")
+                    .arg(expectedNeighbors.size())
+                    .arg(graphNeighbors.size());
+                territoryPassed = false;
             }
 
             // Check if all expected neighbors are in graph neighbors
             for (const QString &expectedNeighbor : expectedNeighbors) {
                 if (!graphNeighbors.contains(expectedNeighbor)) {
-                    if (neighborsMatch) {  // Only print header once
-                        qDebug() << "FAIL: Territory" << territoryName << "at (" << row << "," << col << ")";
-                    }
-                    qDebug() << "  Missing expected neighbor:" << expectedNeighbor;
-                    neighborsMatch = false;
+                    issues << QString("Missing neighbor: %1").arg(expectedNeighbor);
+                    territoryPassed = false;
                 }
             }
 
             // Check if graph has any unexpected neighbors
             for (const QString &graphNeighbor : graphNeighbors) {
                 if (!expectedNeighbors.contains(graphNeighbor)) {
-                    if (neighborsMatch) {  // Only print header once
-                        qDebug() << "FAIL: Territory" << territoryName << "at (" << row << "," << col << ")";
-                    }
-                    qDebug() << "  Unexpected graph neighbor:" << graphNeighbor;
-                    neighborsMatch = false;
+                    issues << QString("Unexpected neighbor: %1").arg(graphNeighbor);
+                    territoryPassed = false;
                 }
             }
 
-            if (neighborsMatch) {
+            // === Print Results ===
+
+            if (!territoryPassed || verboseMode) {
+                QString status = territoryPassed ? "[PASS]" : "[FAIL]";
+                qDebug() << status << territoryName << "at (" << row << "," << col << ")";
+                qDebug() << "  Grid Type:" << gridType;
+                qDebug() << "  Graph Type:" << graphTypeStr;
+                qDebug() << "  Territory Value:" << territoryValue;
+                qDebug() << "  Owner:" << ownerStr;
+                qDebug() << "  Neighbor Count:" << graphNeighbors.size() << "(expected:" << expectedNeighbors.size() << ")";
+
+                // Print neighbor details
+                qDebug() << "  Neighbors:";
+                for (const QString &neighbor : graphNeighbors) {
+                    // Get neighbor position and type
+                    Position neighborPos = mapWidget->territoryNameToPosition(neighbor);
+                    TerritoryType neighborType = mapWidget->getGraph()->getType(neighbor);
+                    QString neighborTypeStr = territoryTypeToString(neighborType);
+                    QString expectedMark = expectedNeighbors.contains(neighbor) ? "" : " [UNEXPECTED]";
+
+                    qDebug() << "    -" << neighbor
+                             << "(" << neighborPos.row << "," << neighborPos.col << ")"
+                             << neighborTypeStr
+                             << expectedMark;
+                }
+
+                // Print missing neighbors if any
+                for (const QString &expected : expectedNeighbors) {
+                    if (!graphNeighbors.contains(expected)) {
+                        Position expectedPos = mapWidget->territoryNameToPosition(expected);
+                        qDebug() << "    - [MISSING]" << expected
+                                 << "(" << expectedPos.row << "," << expectedPos.col << ")";
+                    }
+                }
+
+                if (!issues.isEmpty()) {
+                    qDebug() << "  Issues:";
+                    for (const QString &issue : issues) {
+                        qDebug() << "    •" << issue;
+                    }
+                }
+
+                qDebug() << "";
+            }
+
+            if (territoryPassed) {
                 passedTests++;
             } else {
                 failedTests++;
                 allTestsPassed = false;
-
-                // Print details for failed test
-                qDebug() << "  Expected neighbors:" << expectedNeighbors;
-                qDebug() << "  Graph neighbors:   " << graphNeighbors;
-                qDebug() << "";
             }
         }
     }
 
-    // Print summary
-    qDebug() << "\n=== Test Summary ===";
-    qDebug() << "Total territories tested:" << totalTests;
-    qDebug() << "Passed:" << passedTests;
-    qDebug() << "Failed:" << failedTests;
-    qDebug() << "Success rate:" << QString::number(100.0 * passedTests / totalTests, 'f', 1) << "%";
+    // === Print Summary ===
+
+    qDebug() << "========================================";
+    qDebug() << "  Test Results Summary";
+    qDebug() << "========================================\n";
+
+    qDebug() << "Territory Statistics:";
+    qDebug() << "  Total territories:" << totalTests;
+    qDebug() << "  Land territories:" << landTerritories;
+    qDebug() << "  Sea territories:" << seaTerritories;
+    qDebug() << "  Owned territories:" << ownedTerritories;
+    qDebug() << "  Territories with pieces:" << territoriesWithPieces;
+    qDebug() << "";
+
+    qDebug() << "Test Results:";
+    qDebug() << "  Passed:" << passedTests;
+    qDebug() << "  Failed:" << failedTests;
+    qDebug() << "  Success rate:" << QString::number(100.0 * passedTests / totalTests, 'f', 1) << "%";
+    qDebug() << "";
+
+    if (typeMismatches > 0) {
+        qDebug() << "Issues Found:";
+        qDebug() << "  Type mismatches (Grid vs Graph):" << typeMismatches;
+        qDebug() << "";
+    }
 
     if (allTestsPassed) {
-        qDebug() << "\n✓ ALL TESTS PASSED - Graph neighbors match grid neighbors perfectly!";
+        qDebug() << "✓ ✓ ✓ ALL TESTS PASSED ✓ ✓ ✓";
+        qDebug() << "Graph neighbors match grid neighbors perfectly!";
+        qDebug() << "Territory types match between grid and graph!";
     } else {
-        qDebug() << "\n✗ SOME TESTS FAILED - Graph neighbors do not match grid neighbors";
+        qDebug() << "✗ ✗ ✗ TESTS FAILED ✗ ✗ ✗";
+        qDebug() << "Issues detected in graph/grid synchronization.";
     }
+
+    qDebug() << "";
+    qDebug() << "========================================\n";
 
     delete mapWidget;
 
@@ -136,8 +272,18 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
+    // Check for verbose flag
+    bool verbose = false;
+    if (argc > 1 && QString(argv[1]) == "-v") {
+        verbose = true;
+        qDebug() << "Running in VERBOSE mode (showing all territories)\n";
+    } else {
+        qDebug() << "Running in NORMAL mode (showing only failures)";
+        qDebug() << "Use '-v' flag for verbose output (show all territories)\n";
+    }
+
     // Run the test
-    bool success = testGraphNeighbors();
+    bool success = testGraphNeighbors(verbose);
 
     // Return 0 if all tests passed, 1 if any failed
     return success ? 0 : 1;
