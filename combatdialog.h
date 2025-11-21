@@ -13,6 +13,7 @@
 #include "player.h"
 #include "gamepiece.h"
 #include "mapwidget.h"
+#include "laurollingdiewidget.h"
 
 class CombatDialog : public QDialog
 {
@@ -29,6 +30,7 @@ private slots:
     void onAttackingTroopClicked();
     void onDefendingTroopClicked();
     void onRetreatClicked();
+    void onRollComplete(int value, QObject *sender);
 
 private:
     // Create the attacking side (left)
@@ -91,6 +93,9 @@ private:
     // Player headers for showing advantages
     QLabel *m_attackingHeader;
     QLabel *m_defendingHeader;
+
+    // Rolling die widget
+    LAURollingDieWidget *m_dieWidget;
 };
 
 #endif // COMBATDIALOG_H

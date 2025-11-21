@@ -58,8 +58,14 @@ public:
     // Check if currently rolling
     bool rolling() const { return isRolling; }
 
+public slots:
+    // Start rolling - stores the sender object to return with result
+    // Shows the widget if hidden
+    void startRoll(QObject *sender);
+
 signals:
-    void rollComplete(QVector<int> values);
+    // Emits the die value and the original sender when roll completes
+    void rollComplete(int value, QObject *sender);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -80,6 +86,9 @@ private:
     bool isRolling;
     int rollCount;
     int maxRolls;
+
+    // Store the sender object to return with roll result
+    QObject *m_rollSender;
 };
 
 #endif // LAUROLLINGDIEWIDGET_H

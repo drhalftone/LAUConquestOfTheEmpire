@@ -18,8 +18,13 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     , m_retreatButton(nullptr)
     , m_attackingHeader(nullptr)
     , m_defendingHeader(nullptr)
+    , m_dieWidget(nullptr)
 {
     setWindowTitle("Combat Resolution");
+
+    // Create rolling die widget
+    m_dieWidget = new LAURollingDieWidget(1, this);
+    connect(m_dieWidget, &LAURollingDieWidget::rollComplete, this, &CombatDialog::onRollComplete);
 
     // Get all pieces at combat position
     m_attackingPieces = m_attackingPlayer->getPiecesAtPosition(combatPosition);
@@ -455,61 +460,17 @@ void CombatDialog::onAttackingTroopClicked()
     QPushButton *clickedButton = qobject_cast<QPushButton*>(sender());
     if (!clickedButton) return;
 
-    // Defender selected which attacking troop to attack
     GamePiece *attackingPiece = m_attackingTroopButtons[clickedButton];
     if (!attackingPiece) return;
 
     qDebug() << "Defender attacking attacking troop ID" << attackingPiece->getSerialNumber();
 
-    // Disable all buttons during combat resolution
+    // Disable all buttons during die roll
     setDefendingButtonsEnabled(false);
     setAttackingButtonsEnabled(false);
 
-    // Calculate defender's advantage
-    int advantage = getNetAdvantage(false);
-
-    // Resolve attack
-    bool isHit = resolveAttack(attackingPiece->getType(), advantage);
-
-    // Show result dialog
-    QString resultMessage;
-    if (isHit) {
-        resultMessage = QString("HIT! Attacking troop (ID: %1) has been destroyed.")
-                            .arg(attackingPiece->getSerialNumber());
-    } else {
-        resultMessage = QString("MISS! Attacking troop (ID: %1) survived.")
-                            .arg(attackingPiece->getSerialNumber());
-    }
-
-    QMessageBox::information(this, "Combat Result", resultMessage);
-
-    // After OK is clicked, remove the troop if it was hit
-    if (isHit) {
-        qDebug() << "Removing attacking troop ID" << attackingPiece->getSerialNumber();
-        // Remove the attacking troop button
-        removeTroopButton(clickedButton);
-        // Remove the piece from the player based on type
-        if (attackingPiece->getType() == GamePiece::Type::Infantry) {
-            m_attackingPlayer->removeInfantry(static_cast<InfantryPiece*>(attackingPiece));
-        } else if (attackingPiece->getType() == GamePiece::Type::Cavalry) {
-            m_attackingPlayer->removeCavalry(static_cast<CavalryPiece*>(attackingPiece));
-        } else if (attackingPiece->getType() == GamePiece::Type::Catapult) {
-            m_attackingPlayer->removeCatapult(static_cast<CatapultPiece*>(attackingPiece));
-        }
-        attackingPiece->deleteLater();  // Use deleteLater() instead of delete
-
-        // Update advantages (catapult count may have changed)
-        updateAdvantageDisplay();
-
-        // Check if combat is over
-        if (checkCombatEnd()) {
-            return;  // Dialog closed, don't re-enable buttons
-        }
-    }
-
-    // Switch back to attacker's turn
-    setDefendingButtonsEnabled(true);
-    setAttackingButtonsEnabled(false);
+    // Start die roll - pass the button as sender
+    m_dieWidget->startRoll(clickedButton);
 }
 
 void CombatDialog::onDefendingTroopClicked()
@@ -517,61 +478,17 @@ void CombatDialog::onDefendingTroopClicked()
     QPushButton *clickedButton = qobject_cast<QPushButton*>(sender());
     if (!clickedButton) return;
 
-    // Attacker selected which defending troop to attack
     GamePiece *defendingPiece = m_defendingTroopButtons[clickedButton];
     if (!defendingPiece) return;
 
     qDebug() << "Attacker attacking defending troop ID" << defendingPiece->getSerialNumber();
 
-    // Disable all buttons during combat resolution
+    // Disable all buttons during die roll
     setDefendingButtonsEnabled(false);
     setAttackingButtonsEnabled(false);
 
-    // Calculate attacker's advantage
-    int advantage = getNetAdvantage(true);
-
-    // Resolve attack
-    bool isHit = resolveAttack(defendingPiece->getType(), advantage);
-
-    // Show result dialog
-    QString resultMessage;
-    if (isHit) {
-        resultMessage = QString("HIT! Defending troop (ID: %1) has been destroyed.")
-                            .arg(defendingPiece->getSerialNumber());
-    } else {
-        resultMessage = QString("MISS! Defending troop (ID: %1) survived.")
-                            .arg(defendingPiece->getSerialNumber());
-    }
-
-    QMessageBox::information(this, "Combat Result", resultMessage);
-
-    // After OK is clicked, remove the troop if it was hit
-    if (isHit) {
-        qDebug() << "Removing defending troop ID" << defendingPiece->getSerialNumber();
-        // Remove the defending troop button
-        removeTroopButton(clickedButton);
-        // Remove the piece from the player based on type
-        if (defendingPiece->getType() == GamePiece::Type::Infantry) {
-            m_defendingPlayer->removeInfantry(static_cast<InfantryPiece*>(defendingPiece));
-        } else if (defendingPiece->getType() == GamePiece::Type::Cavalry) {
-            m_defendingPlayer->removeCavalry(static_cast<CavalryPiece*>(defendingPiece));
-        } else if (defendingPiece->getType() == GamePiece::Type::Catapult) {
-            m_defendingPlayer->removeCatapult(static_cast<CatapultPiece*>(defendingPiece));
-        }
-        defendingPiece->deleteLater();  // Use deleteLater() instead of delete
-
-        // Update advantages (catapult count may have changed)
-        updateAdvantageDisplay();
-
-        // Check if combat is over
-        if (checkCombatEnd()) {
-            return;  // Dialog closed, don't re-enable buttons
-        }
-    }
-
-    // Switch to defender's turn
-    setAttackingButtonsEnabled(true);
-    setDefendingButtonsEnabled(false);
+    // Start die roll - pass the button as sender
+    m_dieWidget->startRoll(clickedButton);
 }
 
 void CombatDialog::onRetreatClicked()
@@ -1287,5 +1204,110 @@ QColor CombatDialog::getTroopColor(GamePiece::Type type) const
         return QColor(255, 182, 193);  // Light pink
     default:
         return QColor(Qt::white);
+    }
+}
+
+
+void CombatDialog::onRollComplete(int dieValue, QObject *sender)
+{
+    QPushButton *clickedButton = qobject_cast<QPushButton*>(sender);
+    if (!clickedButton) return;
+
+    // Determine if this was an attacking or defending troop being targeted
+    bool isAttackingTarget = m_attackingTroopButtons.contains(clickedButton);
+    bool isDefendingTarget = m_defendingTroopButtons.contains(clickedButton);
+
+    GamePiece *targetPiece = nullptr;
+    Player *targetPlayer = nullptr;
+    bool isAttackersTurn = false;
+
+    if (isAttackingTarget) {
+        // Defender was attacking an attacker troop
+        targetPiece = m_attackingTroopButtons[clickedButton];
+        targetPlayer = m_attackingPlayer;
+        isAttackersTurn = false;
+    } else if (isDefendingTarget) {
+        // Attacker was attacking a defender troop
+        targetPiece = m_defendingTroopButtons[clickedButton];
+        targetPlayer = m_defendingPlayer;
+        isAttackersTurn = true;
+    } else {
+        return;  // Unknown button
+    }
+
+    if (!targetPiece) return;
+
+    // Calculate advantage
+    int advantage = getNetAdvantage(isAttackersTurn);
+
+    // Apply advantage to die roll
+    int modifiedRoll = dieValue + advantage;
+
+    qDebug() << "Roll:" << dieValue << "+ Advantage:" << advantage << "= Total:" << modifiedRoll;
+
+    // Determine hit threshold based on target type
+    int hitThreshold;
+    GamePiece::Type targetType = targetPiece->getType();
+    if (targetType == GamePiece::Type::Infantry) {
+        hitThreshold = 4;
+    } else if (targetType == GamePiece::Type::Cavalry) {
+        hitThreshold = 5;
+    } else if (targetType == GamePiece::Type::Catapult) {
+        hitThreshold = 6;
+    } else {
+        setDefendingButtonsEnabled(true);
+        setAttackingButtonsEnabled(false);
+        return;  // Leaders cannot be targeted
+    }
+
+    bool isHit = (modifiedRoll >= hitThreshold);
+    qDebug() << "Target type:" << (int)targetType << "Threshold:" << hitThreshold << "Hit:" << isHit;
+
+    // Show result dialog
+    QString resultMessage;
+    if (isHit) {
+        resultMessage = QString("HIT! Troop (ID: %1) has been destroyed.
+Rolled %2 + %3 advantage = %4 (needed %5)")
+                            .arg(targetPiece->getSerialNumber())
+                            .arg(dieValue).arg(advantage).arg(modifiedRoll).arg(hitThreshold);
+    } else {
+        resultMessage = QString("MISS! Troop (ID: %1) survived.
+Rolled %2 + %3 advantage = %4 (needed %5)")
+                            .arg(targetPiece->getSerialNumber())
+                            .arg(dieValue).arg(advantage).arg(modifiedRoll).arg(hitThreshold);
+    }
+
+    QMessageBox::information(this, "Combat Result", resultMessage);
+
+    // Remove the troop if it was hit
+    if (isHit) {
+        qDebug() << "Removing troop ID" << targetPiece->getSerialNumber();
+        removeTroopButton(clickedButton);
+
+        if (targetType == GamePiece::Type::Infantry) {
+            targetPlayer->removeInfantry(static_cast<InfantryPiece*>(targetPiece));
+        } else if (targetType == GamePiece::Type::Cavalry) {
+            targetPlayer->removeCavalry(static_cast<CavalryPiece*>(targetPiece));
+        } else if (targetType == GamePiece::Type::Catapult) {
+            targetPlayer->removeCatapult(static_cast<CatapultPiece*>(targetPiece));
+        }
+        targetPiece->deleteLater();
+
+        updateAdvantageDisplay();
+
+        if (checkCombatEnd()) {
+            return;
+        }
+    }
+
+    // Switch turns
+    if (isAttackersTurn) {
+        // It was attacker's turn, now defender's turn
+        setAttackingButtonsEnabled(true);
+        setDefendingButtonsEnabled(false);
+    } else {
+        // It was defender's turn, now attacker's turn
+        setDefendingButtonsEnabled(true);
+        setAttackingButtonsEnabled(false);
     }
 }
