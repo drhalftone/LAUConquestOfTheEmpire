@@ -328,8 +328,8 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Caesars - fixed height since there's exactly one
     QGroupBox *caesarBox = new QGroupBox(QString("Caesars (%1)").arg(player->getCaesarCount()));
     QTableWidget *caesarTable = new QTableWidget();
-    caesarTable->setColumnCount(5);
-    caesarTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    caesarTable->setColumnCount(4);
+    caesarTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     caesarTable->horizontalHeader()->setStretchLastSection(true);
     caesarTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     caesarTable->setAlternatingRowColors(true);
@@ -337,7 +337,7 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     caesarTable->setRowCount(player->getCaesarCount());
 
     // Set fixed height for Caesar table (1 row + header)
-    caesarTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    caesarTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     caesarTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     caesarTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
@@ -354,9 +354,8 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     for (CaesarPiece *piece : player->getCaesars()) {
         caesarTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         caesarTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        caesarTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        caesarTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        caesarTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        caesarTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        caesarTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
         row++;
     }
 
@@ -377,13 +376,14 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Generals
     QGroupBox *generalBox = new QGroupBox(QString("Generals (%1)").arg(player->getGeneralCount()));
     QTableWidget *generalTable = new QTableWidget();
-    generalTable->setColumnCount(5);
-    generalTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    generalTable->setColumnCount(4);
+    generalTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     generalTable->horizontalHeader()->setStretchLastSection(true);
     generalTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     generalTable->setAlternatingRowColors(true);
     generalTable->setContextMenuPolicy(Qt::CustomContextMenu);
     generalTable->setRowCount(player->getGeneralCount());
+    generalTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
     // Connect context menu signal
     connect(generalTable, &QTableWidget::customContextMenuRequested, [this, player, generalTable](const QPoint &pos) {
@@ -398,9 +398,8 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     for (GeneralPiece *piece : player->getGenerals()) {
         generalTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         generalTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        generalTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        generalTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        generalTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        generalTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        generalTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
 
         row++;
     }
@@ -424,19 +423,19 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Infantry
     QGroupBox *infantryBox = new QGroupBox(QString("Infantry (%1)").arg(player->getInfantryCount()));
     QTableWidget *infantryTable = new QTableWidget();
-    infantryTable->setColumnCount(5);
-    infantryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    infantryTable->setColumnCount(4);
+    infantryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     infantryTable->horizontalHeader()->setStretchLastSection(true);
     infantryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     infantryTable->setAlternatingRowColors(true);
     infantryTable->setRowCount(player->getInfantryCount());
+    infantryTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     row = 0;
     for (InfantryPiece *piece : player->getInfantry()) {
         infantryTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         infantryTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        infantryTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        infantryTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        infantryTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        infantryTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        infantryTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
         row++;
     }
     // Resize infantry table to fit content (max 10 rows visible)
@@ -459,19 +458,19 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Cavalry
     QGroupBox *cavalryBox = new QGroupBox(QString("Cavalry (%1)").arg(player->getCavalryCount()));
     QTableWidget *cavalryTable = new QTableWidget();
-    cavalryTable->setColumnCount(5);
-    cavalryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    cavalryTable->setColumnCount(4);
+    cavalryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     cavalryTable->horizontalHeader()->setStretchLastSection(true);
     cavalryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     cavalryTable->setAlternatingRowColors(true);
     cavalryTable->setRowCount(player->getCavalryCount());
+    cavalryTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     row = 0;
     for (CavalryPiece *piece : player->getCavalry()) {
         cavalryTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         cavalryTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        cavalryTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        cavalryTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        cavalryTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        cavalryTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        cavalryTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
         row++;
     }
     // Resize cavalry table to fit content (max 10 rows visible)
@@ -495,19 +494,19 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Catapults
     QGroupBox *catapultBox = new QGroupBox(QString("Catapults (%1)").arg(player->getCatapultCount()));
     QTableWidget *catapultTable = new QTableWidget();
-    catapultTable->setColumnCount(5);
-    catapultTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    catapultTable->setColumnCount(4);
+    catapultTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     catapultTable->horizontalHeader()->setStretchLastSection(true);
     catapultTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     catapultTable->setAlternatingRowColors(true);
     catapultTable->setRowCount(player->getCatapultCount());
+    catapultTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     row = 0;
     for (CatapultPiece *piece : player->getCatapults()) {
         catapultTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         catapultTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        catapultTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        catapultTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        catapultTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        catapultTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        catapultTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
         row++;
     }
     // Resize catapult table to fit content (max 10 rows visible)
@@ -531,19 +530,19 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     // Galleys
     QGroupBox *galleyBox = new QGroupBox(QString("Galleys (%1)").arg(player->getGalleyCount()));
     QTableWidget *galleyTable = new QTableWidget();
-    galleyTable->setColumnCount(5);
-    galleyTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Position", "Movement", "On Galley"});
+    galleyTable->setColumnCount(4);
+    galleyTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
     galleyTable->horizontalHeader()->setStretchLastSection(true);
     galleyTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     galleyTable->setAlternatingRowColors(true);
     galleyTable->setRowCount(player->getGalleyCount());
+    galleyTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     row = 0;
     for (GalleyPiece *piece : player->getGalleys()) {
         galleyTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         galleyTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
-        galleyTable->setItem(row, 2, new QTableWidgetItem(QString("[%1, %2]").arg(piece->getPosition().row).arg(piece->getPosition().col)));
-        galleyTable->setItem(row, 3, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        galleyTable->setItem(row, 4, new QTableWidgetItem(piece->getOnGalley()));
+        galleyTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
+        galleyTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
         row++;
     }
     // Resize galley table to fit content (max 10 rows visible)
@@ -579,12 +578,13 @@ QGroupBox* PlayerInfoWidget::createCapturedGeneralsSection(Player *player)
         layout->addWidget(emptyLabel);
     } else {
         QTableWidget *table = new QTableWidget();
-        table->setColumnCount(4);
-        table->setHorizontalHeaderLabels({"Original Player", "Serial Number", "Territory", "Position"});
+        table->setColumnCount(3);
+        table->setHorizontalHeaderLabels({"Original Player", "Serial Number", "Territory"});
         table->horizontalHeader()->setStretchLastSection(true);
         table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         table->setAlternatingRowColors(true);
         table->setRowCount(player->getCapturedGeneralCount());
+        table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
         int row = 0;
         for (GeneralPiece *general : player->getCapturedGenerals()) {
@@ -592,7 +592,6 @@ QGroupBox* PlayerInfoWidget::createCapturedGeneralsSection(Player *player)
             table->setItem(row, 0, new QTableWidgetItem(QString("Player %1").arg(general->getPlayer())));
             table->setItem(row, 1, new QTableWidgetItem(general->getSerialNumber()));
             table->setItem(row, 2, new QTableWidgetItem(general->getTerritoryName()));
-            table->setItem(row, 3, new QTableWidgetItem(QString("[%1, %2]").arg(general->getPosition().row).arg(general->getPosition().col)));
             row++;
         }
 
@@ -3106,6 +3105,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         // Create infantry
         for (int i = 0; i < result.infantry; ++i) {
             InfantryPiece *infantry = new InfantryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            infantry->setTerritoryName(homeProvince);
             currentPlayer->addInfantry(infantry);
         }
         if (result.infantry > 0) {
@@ -3115,6 +3115,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         // Create cavalry
         for (int i = 0; i < result.cavalry; ++i) {
             CavalryPiece *cavalry = new CavalryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            cavalry->setTerritoryName(homeProvince);
             currentPlayer->addCavalry(cavalry);
         }
         if (result.cavalry > 0) {
@@ -3124,6 +3125,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         // Create catapults
         for (int i = 0; i < result.catapults; ++i) {
             CatapultPiece *catapult = new CatapultPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            catapult->setTerritoryName(homeProvince);
             currentPlayer->addCatapult(catapult);
         }
         if (result.catapults > 0) {
@@ -3135,6 +3137,7 @@ void PlayerInfoWidget::onEndTurnClicked()
             // Create the galleys at home position (they're on the border with the sea)
             for (int i = 0; i < galleyPurchase.count; ++i) {
                 GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+                galley->setTerritoryName(homeProvince);
                 currentPlayer->addGalley(galley);
             }
 
@@ -3187,7 +3190,7 @@ QGroupBox* PlayerInfoWidget::createAllCapturedGeneralsSection()
 
     // Set vertical size policy to minimize space when empty
     m_capturedGeneralsTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    m_capturedGeneralsTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_capturedGeneralsTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
     // Disable word wrap to keep rows compact
     m_capturedGeneralsTable->setWordWrap(false);

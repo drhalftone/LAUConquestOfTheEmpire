@@ -1383,12 +1383,6 @@ void MapWidget::createMenuBar()
     );
     connect(saveAction, &QAction::triggered, this, &MapWidget::saveGame);
 
-    QAction *loadAction = fileMenu->addAction(
-        QApplication::style()->standardIcon(QStyle::SP_DialogOpenButton),
-        "&Load Game..."
-    );
-    connect(loadAction, &QAction::triggered, this, &MapWidget::loadGame);
-
     fileMenu->addSeparator();
 
     QAction *exitAction = fileMenu->addAction(
