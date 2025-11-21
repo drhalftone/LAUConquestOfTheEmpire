@@ -1,5 +1,20 @@
 #include "building.h"
 #include <QtMath>
+#include <QPixmap>
+
+// Helper function to get player color (gray for black player so icon is visible)
+static QColor getPlayerColor(QChar player)
+{
+    switch (player.toLatin1()) {
+        case 'A': return Qt::red;
+        case 'B': return Qt::green;
+        case 'C': return Qt::blue;
+        case 'D': return Qt::yellow;
+        case 'E': return QColor(128, 128, 128); // Gray instead of black
+        case 'F': return QColor(255, 165, 0); // Orange
+        default: return Qt::gray;
+    }
+}
 
 // ========== Building Base Class ==========
 
@@ -22,50 +37,26 @@ City::City(QChar owner, const Position &position, const QString &territoryName, 
 
 void City::paint(QPainter &painter, int x, int y, int width, int height) const
 {
-    // Choose color based on whether city is marked for destruction
-    QColor cityColor;
-    if (m_markedForDestruction) {
-        cityColor = QColor(200, 0, 0);  // Red for marked cities
-    } else {
-        cityColor = QColor(150, 100, 50);  // Brown for normal cities
+    // Draw city icon in top-right corner (no colored circle background)
+    int iconSize = qMin(width, height) / 3;
+    int iconX = x + width - iconSize - 2;
+    int iconY = y + 2;
+
+    // Choose icon based on fortification status
+    QString iconPath = m_isFortified ? ":/images/walledCityIcon.png" : ":/images/newCityIcon.png";
+
+    // Load and draw the icon
+    QPixmap icon(iconPath);
+    if (!icon.isNull()) {
+        QPixmap scaledIcon = icon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        painter.drawPixmap(iconX, iconY, scaledIcon);
     }
 
-    painter.setPen(Qt::black);
-    painter.setBrush(cityColor);
-
-    // Draw small building in top-right corner
-    int citySize = width / 6;
-    QRect cityRect(x + width - citySize - 2, y + 2, citySize, citySize);
-    painter.drawRect(cityRect);
-
-    // Draw roof (triangle)
-    QPolygon roof;
-    roof << QPoint(x + width - citySize - 2, y + 2)
-         << QPoint(x + width - 2, y + 2)
-         << QPoint(x + width - citySize/2 - 2, y - citySize/2 + 2);
-    painter.drawPolygon(roof);
-
-    // Draw fortification if present (wall around city)
-    if (m_isFortified) {
-        QColor wallColor = m_markedForDestruction ? QColor(200, 0, 0) : QColor(80, 80, 80);
-        painter.setPen(QPen(wallColor, 2)); // Dark gray thick line (or red if marked)
-        painter.setBrush(Qt::NoBrush);
-
-        // Draw crenelated wall around the city icon
-        int wallMargin = 1;
-        QRect wallRect(x + width - citySize - 2 - wallMargin,
-                     y + 2 - wallMargin,
-                     citySize + wallMargin * 2,
-                     citySize + wallMargin * 2);
-        painter.drawRect(wallRect);
-
-        // Draw crenelations (small rectangles on top)
-        int crenelSize = citySize / 4;
-        for (int i = 0; i < 3; ++i) {
-            int crenelX = wallRect.left() + i * (citySize / 2);
-            painter.fillRect(crenelX, wallRect.top() - crenelSize/2,
-                           crenelSize, crenelSize/2, wallColor);
-        }
+    // If marked for destruction, draw a red X over the icon
+    if (m_markedForDestruction) {
+        painter.setPen(QPen(QColor(200, 0, 0), 3));
+        painter.drawLine(iconX, iconY, iconX + iconSize, iconY + iconSize);
+        painter.drawLine(iconX + iconSize, iconY, iconX, iconY + iconSize);
     }
 }
 

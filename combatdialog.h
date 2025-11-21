@@ -13,6 +13,7 @@
 #include "player.h"
 #include "gamepiece.h"
 #include "mapwidget.h"
+#include "laurollingdiewidget.h"
 
 class CombatDialog : public QDialog
 {
@@ -35,9 +36,10 @@ public:
     CombatResult getCombatResult() const { return m_combatResult; }
 
 private slots:
-    void onAttackingTroopClicked();
-    void onDefendingTroopClicked();
+    void onAttackingGalleyClicked();
+    void onDefendingGalleyClicked();
     void onRetreatClicked();
+    void onRollComplete(int dieValue, QObject *sender);
 
 private:
     // Create the attacking side (left)
@@ -51,6 +53,12 @@ private:
 
     // Create a group box for unled troops (no general/caesar)
     QGroupBox* createUnledTroopsGroupBox(const QList<GamePiece*> &troops, bool isAttacker);
+
+    // Create a galley widget with generals underneath
+    QWidget* createGalleyWidget(GalleyPiece *galley, bool isAttacker);
+
+    // Create an empty general placeholder for galleys without passengers
+    QGroupBox* createEmptyGeneralGroupBox();
 
     // Get color for troop type
     QColor getTroopColor(GamePiece::Type type) const;
@@ -68,11 +76,14 @@ private:
     void updateAdvantageDisplay();
 
     // Combat resolution
-    bool resolveAttack(GamePiece::Type targetType, int attackerAdvantage);
+    bool resolveAttack(GamePiece::Type targetType, int attackerAdvantage, int dieRoll);
     void removeTroopButton(QPushButton *button);
 
     // Check if combat is over
     bool checkCombatEnd();
+
+    // Update galley passenger status after a piece is removed
+    void updateGalleyPassengerStatus(const QString &galleySerialNumber, bool isAttacker);
 
     Player *m_attackingPlayer;
     Player *m_defendingPlayer;
@@ -90,6 +101,10 @@ private:
     QMap<QPushButton*, GamePiece*> m_attackingTroopButtons;
     QMap<QPushButton*, GamePiece*> m_defendingTroopButtons;
 
+    // Track galley buttons separately (galleys need special handling - only targetable when empty)
+    QMap<QPushButton*, GalleyPiece*> m_attackingGalleyButtons;
+    QMap<QPushButton*, GalleyPiece*> m_defendingGalleyButtons;
+
     // Currently selected target
     QPushButton *m_selectedTarget;
     bool m_isAttackersTurn;
@@ -103,6 +118,12 @@ private:
 
     // Combat result
     CombatResult m_combatResult;
+
+    // Rolling die widget for combat resolution
+    LAURollingDieWidget *m_rollingDie;
+
+    // Pending galley button for die roll (galleys need validation before rolling)
+    QPushButton *m_pendingGalleyButton;
 };
 
 #endif // COMBATDIALOG_H

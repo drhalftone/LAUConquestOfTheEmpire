@@ -6,6 +6,7 @@
 #include <QScrollArea>
 #include <QFrame>
 #include <QFont>
+#include <QPixmap>
 
 TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
                                            const QList<GamePiece*> &availableTroops,
@@ -44,28 +45,33 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
     QVBoxLayout *scrollLayout = new QVBoxLayout(scrollWidget);
     scrollLayout->setSpacing(5);
 
-    // Create checkbox for each troop
+    // Create checkbox for each troop with icon
     for (GamePiece *piece : availableTroops) {
         QString typeName;
-        switch (piece->getType()) {
-            case GamePiece::Type::Infantry:
-                typeName = "Infantry";
-                break;
-            case GamePiece::Type::Cavalry:
-                typeName = "Cavalry";
-                break;
-            case GamePiece::Type::Catapult:
-                typeName = "Catapult";
-                break;
-            case GamePiece::Type::Galley:
-                typeName = "Galley";
-                break;
-            case GamePiece::Type::General:
-                typeName = QString("General #%1").arg(static_cast<GeneralPiece*>(piece)->getNumber());
-                break;
-            case GamePiece::Type::Caesar:
-                typeName = "Caesar";
-                break;
+        QString iconPath;
+        GamePiece::Type pieceType = piece->getType();
+
+        if (pieceType == GamePiece::Type::Infantry) {
+            typeName = "Infantry";
+            iconPath = ":/images/infantryIcon.png";
+        } else if (pieceType == GamePiece::Type::Cavalry) {
+            typeName = "Cavalry";
+            iconPath = ":/images/cavalryIcon.png";
+        } else if (pieceType == GamePiece::Type::Catapult) {
+            typeName = "Catapult";
+            iconPath = ":/images/catapultIcon.png";
+        } else if (pieceType == GamePiece::Type::Galley) {
+            typeName = "Galley";
+            iconPath = ":/images/galleyIcon.png";
+        } else if (pieceType == GamePiece::Type::General) {
+            typeName = QString("General #%1").arg(static_cast<GeneralPiece*>(piece)->getNumber());
+            iconPath = ":/images/generalIcon.png";
+        } else if (pieceType == GamePiece::Type::Caesar) {
+            typeName = "Caesar";
+            iconPath = ":/images/ceasarIcon.png";
+        } else {
+            typeName = "Unknown";
+            iconPath = ":/images/infantryIcon.png";  // fallback
         }
 
         int moves = piece->getMovesRemaining();
@@ -75,6 +81,21 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
                             .arg(moves)
                             .arg(moves == 1 ? "" : "s");
 
+        // Create horizontal layout for icon + checkbox
+        QHBoxLayout *rowLayout = new QHBoxLayout();
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(5);
+
+        // Add icon - load fresh pixmap for each row
+        QLabel *iconLabel = new QLabel();
+        QPixmap iconPixmap(iconPath);
+        if (!iconPixmap.isNull()) {
+            iconLabel->setPixmap(iconPixmap.scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        }
+        iconLabel->setFixedSize(24, 24);
+        rowLayout->addWidget(iconLabel);
+
+        // Add checkbox
         QCheckBox *checkbox = new QCheckBox(label);
 
         // Pre-check if this piece is in the current legion
@@ -88,7 +109,10 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
         }
 
         m_checkboxes[piece->getUniqueId()] = checkbox;
-        scrollLayout->addWidget(checkbox);
+        rowLayout->addWidget(checkbox);
+        rowLayout->addStretch();
+
+        scrollLayout->addLayout(rowLayout);
     }
 
     scrollLayout->addStretch();

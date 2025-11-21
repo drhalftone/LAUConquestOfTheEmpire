@@ -598,9 +598,12 @@ void Player::startTurn()
         piece->setMovesRemaining(1);
     }
 
-    // Galleys: 2 moves
+    // Galleys: 2 moves, and reset transport flag
     for (GalleyPiece *piece : m_galleys) {
         piece->setMovesRemaining(2);
+        piece->resetTransportFlag();
+        // Clear any leader aboard from previous turn (they should have disembarked)
+        piece->setLeaderAboard(0);
     }
 
     emit turnStarted();

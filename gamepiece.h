@@ -55,8 +55,8 @@ public:
     QString getTerritoryName() const { return m_territoryName; }
     void setTerritoryName(const QString &name) { m_territoryName = name; }
 
-    int getMovesRemaining() const { return m_movesRemaining; }
-    void setMovesRemaining(int moves) { m_movesRemaining = moves; }
+    double getMovesRemaining() const { return m_movesRemaining; }
+    void setMovesRemaining(double moves) { m_movesRemaining = moves; }
 
     // Galley tracking - which galley is this piece on (empty if not on a galley)
     QString getOnGalley() const { return m_onGalleySerialNumber; }
@@ -74,7 +74,7 @@ protected:
     QChar m_player;
     Position m_position;
     QString m_territoryName;           // Name of the territory this piece is in
-    int m_movesRemaining;
+    double m_movesRemaining;
     int m_uniqueId;                    // Unique 5-digit ID (type prefix + instance number)
     QString m_onGalleySerialNumber;    // Serial number of galley this piece is on (empty if not on galley)
 
@@ -218,9 +218,21 @@ public:
     bool hasLastTerritory() const { return m_lastTerritory.row != -1; }
     void clearLastTerritory() { m_lastTerritory = {-1, -1}; }
 
+    // Transport tracking (one legion per galley per turn)
+    bool hasTransportedThisTurn() const { return m_hasTransportedThisTurn; }
+    void setTransportedThisTurn(bool transported) { m_hasTransportedThisTurn = transported; }
+    void resetTransportFlag() { m_hasTransportedThisTurn = false; }
+
+    // Track which leader is currently aboard (0 = none)
+    int getLeaderAboard() const { return m_leaderAboard; }
+    void setLeaderAboard(int leaderId) { m_leaderAboard = leaderId; }
+    bool hasLeaderAboard() const { return m_leaderAboard != 0; }
+
 private:
     QList<int> m_legion;  // List of piece IDs that belong to this Galley's legion
     Position m_lastTerritory = {-1, -1};  // Previous territory (for retreat purposes)
+    bool m_hasTransportedThisTurn = false;  // True if galley has transported a legion this turn
+    int m_leaderAboard = 0;  // Unique ID of leader currently aboard (0 = none)
 };
 
 #endif // GAMEPIECE_H

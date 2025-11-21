@@ -24,6 +24,7 @@
 #include <QDialog>
 #include <QCheckBox>
 #include <QLabel>
+#include <QListWidget>
 
 PlayerInfoWidget::PlayerInfoWidget(QWidget *parent)
     : QWidget(parent)
@@ -1049,20 +1050,35 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
     for (GamePiece *leader : leaders) {
         QString leaderName;
         QIcon leaderIcon;
+        double moves = leader->getMovesRemaining();
+        QString movesStr = (moves == static_cast<int>(moves)) ? QString::number(static_cast<int>(moves)) : QString::number(moves, 'f', 1);
         if (leader->getType() == GamePiece::Type::Caesar) {
-            leaderName = QString("Caesar %1 (%2 moves)").arg(leader->getPlayer()).arg(leader->getMovesRemaining());
+            leaderName = QString("Caesar %1 (%2 moves)").arg(leader->getPlayer()).arg(movesStr);
             leaderIcon = QIcon(":/images/ceasarIcon.png");
         } else if (leader->getType() == GamePiece::Type::General) {
             GeneralPiece *general = static_cast<GeneralPiece*>(leader);
-            leaderName = QString("General %1 #%2 (%3 moves)").arg(leader->getPlayer()).arg(general->getNumber()).arg(leader->getMovesRemaining());
+            leaderName = QString("General %1 #%2 (%3 moves)").arg(leader->getPlayer()).arg(general->getNumber()).arg(movesStr);
             leaderIcon = QIcon(":/images/generalIcon.png");
         } else if (leader->getType() == GamePiece::Type::Galley) {
-            leaderName = QString("Galley %1 (%2 moves)").arg(leader->getPlayer()).arg(leader->getMovesRemaining());
+            leaderName = QString("Galley %1 (%2 moves)").arg(leader->getPlayer()).arg(movesStr);
             leaderIcon = QIcon(":/images/galleyIcon.png");
         }
 
         // Create submenu for this leader's movement options
         QMenu *leaderSubmenu = menu.addMenu(leaderIcon, leaderName);
+
+        // Check if leader is on a galley (for disembarking)
+        bool isOnGalley = leader->isOnGalley();
+        GalleyPiece *leaderGalley = nullptr;
+        if (isOnGalley && leader->getType() != GamePiece::Type::Galley) {
+            // Find the galley this leader is on
+            for (GalleyPiece *galley : player->getGalleys()) {
+                if (galley->getSerialNumber() == leader->getOnGalley()) {
+                    leaderGalley = galley;
+                    break;
+                }
+            }
+        }
 
         // Get neighbors using MapGraph
         QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
@@ -1155,8 +1171,24 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                 }
             }
 
-            // Set icon based on what we found (combat > city > flag > nothing)
-            if (hasCombat) {
+            // Check if this is a sea zone with friendly galley (for boarding)
+            bool hasGalleyToBoard = false;
+            if (isSea && leader->getType() != GamePiece::Type::Galley) {
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == destinationName &&
+                        !galley->hasTransportedThisTurn() &&
+                        !galley->hasLeaderAboard() &&
+                        galley->getMovesRemaining() >= 0.5) {
+                        hasGalleyToBoard = true;
+                        break;
+                    }
+                }
+            }
+
+            // Set icon based on what we found (galley > combat > city > flag > nothing)
+            if (hasGalleyToBoard) {
+                moveIcon = QIcon(":/images/galleyIcon.png");
+            } else if (hasCombat) {
                 moveIcon = QIcon(":/images/combatIcon.png");
             } else if (hasCity) {
                 moveIcon = QIcon(":/images/newCityIcon.png");
@@ -1177,11 +1209,44 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
             }
 
             QAction *moveToAction = leaderSubmenu->addAction(moveIcon, displayText);
-            moveToAction->setEnabled(!isSea);
+
+            // Determine what moves are allowed based on piece type and galley status
+            bool canMove = false;
+            if (leader->getType() == GamePiece::Type::Galley) {
+                canMove = isSea;  // Galleys can only move to sea
+            } else if (isOnGalley && leaderGalley) {
+                // Leader is on a galley - can only disembark to land
+                canMove = !isSea;  // Can only move to land territories
+            } else {
+                // Caesar/General on land - normally only land, but can board galleys
+                if (!isSea) {
+                    canMove = true;  // Normal land movement
+                } else {
+                    // Check if there's a friendly galley at this sea zone that can transport
+                    for (GalleyPiece *galley : player->getGalleys()) {
+                        if (galley->getTerritoryName() == destinationName &&
+                            !galley->hasTransportedThisTurn() &&
+                            !galley->hasLeaderAboard() &&
+                            galley->getMovesRemaining() >= 0.5) {
+                            canMove = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            moveToAction->setEnabled(canMove);
 
             // Connect to movement handler
-            connect(moveToAction, &QAction::triggered, [this, leader, destinationName]() {
-                moveLeaderToTerritory(leader, destinationName);
+            connect(moveToAction, &QAction::triggered, [this, leader, destinationName, isSea, player, isOnGalley, leaderGalley]() {
+                if (isOnGalley && leaderGalley && !isSea) {
+                    // Disembarking from galley to land
+                    disembarkFromGalley(leader, destinationName, leaderGalley, player);
+                } else if (isSea && leader->getType() != GamePiece::Type::Galley) {
+                    // Boarding a galley - special handling
+                    boardGalley(leader, destinationName, player);
+                } else {
+                    moveLeaderToTerritory(leader, destinationName);
+                }
             });
         }
     }
@@ -1655,8 +1720,9 @@ void PlayerInfoWidget::movePiece(GamePiece *piece, int rowDelta, int colDelta)
         }
     }
 
-    // Only transfer territory if no enemies present
-    if (!hasEnemyPieces) {
+    // Only transfer territory if no enemies present and not a sea territory
+    bool isSea = m_mapWidget && m_mapWidget->isSeaTerritory(newPos.row, newPos.col);
+    if (!hasEnemyPieces && !isSea) {
         // Check if another player owns this territory
         for (Player *otherPlayer : m_players) {
             if (otherPlayer != owningPlayer && otherPlayer->ownsTerritory(newTerritoryName)) {
@@ -1737,8 +1803,9 @@ void PlayerInfoWidget::movePieceWithoutCost(GamePiece *piece, int rowDelta, int 
         }
     }
 
-    // Only transfer territory if no enemies present
-    if (!hasEnemyPieces) {
+    // Only transfer territory if no enemies present and not a sea territory
+    bool isSea = m_mapWidget && m_mapWidget->isSeaTerritory(newPos.row, newPos.col);
+    if (!hasEnemyPieces && !isSea) {
         // Check if another player owns this territory
         for (Player *otherPlayer : m_players) {
             if (otherPlayer != owningPlayer && otherPlayer->ownsTerritory(newTerritoryName)) {
@@ -1960,9 +2027,11 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
 
         qDebug() << "Finished moving all troops";
 
-        // Claim the destination territory for the owning player
-        owningPlayer->claimTerritory(destinationTerritory);
-        qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+        // Claim the destination territory for the owning player (but not sea territories)
+        if (!m_mapWidget->isSeaTerritory(destPos.row, destPos.col)) {
+            owningPlayer->claimTerritory(destinationTerritory);
+            qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+        }
 
         // Update display
         updateAllPlayers();
@@ -1996,11 +2065,260 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
 
         qDebug() << "Moved leader" << leaderName << "(no troops available)";
 
-        // Claim the destination territory for the owning player
-        owningPlayer->claimTerritory(destinationTerritory);
-        qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+        // Claim the destination territory for the owning player (but not sea territories)
+        if (!m_mapWidget->isSeaTerritory(destPos.row, destPos.col)) {
+            owningPlayer->claimTerritory(destinationTerritory);
+            qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
+        }
 
         // Update display
+        updateAllPlayers();
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+    }
+}
+
+void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player)
+{
+    if (!leader || !player || !m_mapWidget) return;
+
+    qDebug() << "Boarding galley at" << seaTerritory;
+
+    // Find an available galley at this sea territory
+    GalleyPiece *availableGalley = nullptr;
+    for (GalleyPiece *galley : player->getGalleys()) {
+        if (galley->getTerritoryName() == seaTerritory &&
+            !galley->hasTransportedThisTurn() &&
+            !galley->hasLeaderAboard() &&
+            galley->getMovesRemaining() >= 0.5) {
+            availableGalley = galley;
+            break;
+        }
+    }
+
+    if (!availableGalley) {
+        QMessageBox::warning(this, "Cannot Board",
+            "No available galley at this sea zone.\n\n"
+            "A galley must have moves remaining and not have already transported a legion this turn.");
+        return;
+    }
+
+    // Get current position info
+    QString currentTerritory = leader->getTerritoryName();
+    Position currentPos = m_mapWidget->territoryNameToPosition(currentTerritory);
+    Position seaPos = m_mapWidget->territoryNameToPosition(seaTerritory);
+
+    // Get leader name for display
+    QString leaderName;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = QString("Caesar %1").arg(leader->getPlayer());
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+        leaderName = QString("General %1 #%2").arg(leader->getPlayer()).arg(general->getNumber());
+    }
+
+    // Get all troops at current territory
+    QList<GamePiece*> allPiecesAtTerritory = player->getPiecesAtTerritory(currentTerritory);
+    QList<GamePiece*> allTroops;
+    for (GamePiece *piece : allPiecesAtTerritory) {
+        GamePiece::Type type = piece->getType();
+        if (type == GamePiece::Type::Infantry ||
+            type == GamePiece::Type::Cavalry ||
+            type == GamePiece::Type::Catapult) {
+            allTroops.append(piece);
+        }
+    }
+
+    // Get current legion
+    QList<int> legionIds;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::General) {
+        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+    }
+
+    // Show troop selection dialog
+    QList<int> selectedTroopIds;
+    if (!allTroops.isEmpty()) {
+        TroopSelectionDialog dialog(leaderName + " - Select troops to board galley", allTroops, legionIds, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;  // User cancelled
+        }
+        selectedTroopIds = dialog.getSelectedTroopIds();
+
+        // Validate troops have moves remaining
+        for (GamePiece *troop : allTroops) {
+            if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
+                QMessageBox::warning(this, "Cannot Board",
+                    "Some selected troops have no moves remaining.\n"
+                    "Please deselect troops without moves.");
+                return;
+            }
+        }
+    }
+
+    // Update legion
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        static_cast<CaesarPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<CaesarPiece*>(leader)->setLastTerritory(currentPos);
+    } else if (leader->getType() == GamePiece::Type::General) {
+        static_cast<GeneralPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<GeneralPiece*>(leader)->setLastTerritory(currentPos);
+    }
+
+    // Move leader to sea territory (aboard galley)
+    leader->setTerritoryName(seaTerritory);
+    leader->setPosition(seaPos);
+
+    // Track that leader is on galley
+    leader->setOnGalley(availableGalley->getSerialNumber());
+
+    // Deduct 0.5 move from leader for boarding
+    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+
+    // Move selected troops to sea territory
+    for (GamePiece *troop : allTroops) {
+        if (selectedTroopIds.contains(troop->getUniqueId())) {
+            troop->setTerritoryName(seaTerritory);
+            troop->setPosition(seaPos);
+            troop->setOnGalley(availableGalley->getSerialNumber());
+            troop->setMovesRemaining(troop->getMovesRemaining() - 0.5);  // 0.5 move for boarding
+        }
+    }
+
+    // Mark galley as having leader aboard (but not yet transported - that happens on disembark)
+    availableGalley->setLeaderAboard(leader->getUniqueId());
+    availableGalley->setMovesRemaining(availableGalley->getMovesRemaining() - 0.5);  // 0.5 moves for pickup
+
+    qDebug() << "Leader" << leaderName << "boarded galley" << availableGalley->getSerialNumber()
+             << "with" << selectedTroopIds.size() << "troops";
+
+    // Update display (no disembark dialog - player will choose to disembark later)
+    updateAllPlayers();
+    if (m_mapWidget) {
+        m_mapWidget->update();
+    }
+}
+
+void PlayerInfoWidget::disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player)
+{
+    if (!leader || !galley || !player || !m_mapWidget) return;
+
+    qDebug() << "Disembarking to" << landTerritory;
+
+    Position landPos = m_mapWidget->territoryNameToPosition(landTerritory);
+    QString seaTerritory = galley->getTerritoryName();
+
+    // Get leader name for display
+    QString leaderName;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = QString("Caesar %1").arg(leader->getPlayer());
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+        leaderName = QString("General %1 #%2").arg(leader->getPlayer()).arg(general->getNumber());
+    }
+
+    // Get legion IDs
+    QList<int> legionIds;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::General) {
+        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+    }
+
+    // Move leader to land
+    leader->setTerritoryName(landTerritory);
+    leader->setPosition(landPos);
+    leader->clearGalley();
+
+    // Disembark costs 0.5 moves
+    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+
+    // Move troops to land
+    QList<GamePiece*> piecesAtSea = player->getPiecesAtTerritory(seaTerritory);
+    for (GamePiece *piece : piecesAtSea) {
+        if (legionIds.contains(piece->getUniqueId())) {
+            piece->setTerritoryName(landTerritory);
+            piece->setPosition(landPos);
+            piece->clearGalley();
+            piece->setMovesRemaining(piece->getMovesRemaining() - 0.5);  // 0.5 move for disembarking
+        }
+    }
+
+    // Mark galley as having completed transport
+    galley->setTransportedThisTurn(true);
+    galley->setLeaderAboard(0);
+    galley->setMovesRemaining(galley->getMovesRemaining() - 0.5);  // 0.5 moves for dropoff
+
+    // Claim the land territory
+    player->claimTerritory(landTerritory);
+
+    qDebug() << "Leader" << leaderName << "disembarked to" << landTerritory;
+
+    // Update display
+    updateAllPlayers();
+    if (m_mapWidget) {
+        m_mapWidget->update();
+    }
+}
+
+void PlayerInfoWidget::showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player)
+{
+    if (!leader || !galley || !player || !m_mapWidget) return;
+
+    QString seaTerritory = galley->getTerritoryName();
+
+    // Get adjacent land territories
+    QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(seaTerritory);
+
+    // Create dialog to choose destination
+    QDialog dialog(this);
+    dialog.setWindowTitle("Disembark - Choose Destination");
+    dialog.setModal(true);
+
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+    QLabel *label = new QLabel(QString("Choose a land territory to disembark to from %1:").arg(seaTerritory));
+    layout->addWidget(label);
+
+    QListWidget *listWidget = new QListWidget();
+    for (const QString &neighborName : neighbors) {
+        Position neighborPos = m_mapWidget->territoryNameToPosition(neighborName);
+        bool isSea = m_mapWidget->isSeaTerritory(neighborPos.row, neighborPos.col);
+
+        if (!isSea) {
+            // This is a land territory - valid destination
+            int value = m_mapWidget->getTerritoryValueAt(neighborPos.row, neighborPos.col);
+            QChar owner = m_mapWidget->getTerritoryOwnerAt(neighborPos.row, neighborPos.col);
+            QString ownership = (owner == '\0') ? "[Unclaimed]" : (owner == player->getId()) ? "[You]" : QString("[Player %1]").arg(owner);
+
+            QString displayText = (value > 0) ? QString("%1 (%2) %3").arg(neighborName).arg(value).arg(ownership)
+                                              : QString("%1 %2").arg(neighborName).arg(ownership);
+
+            QListWidgetItem *item = new QListWidgetItem(displayText);
+            item->setData(Qt::UserRole, neighborName);
+            listWidget->addItem(item);
+        }
+    }
+    layout->addWidget(listWidget);
+
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    QPushButton *okButton = new QPushButton("Disembark");
+    QPushButton *cancelButton = new QPushButton("Stay on Galley");
+    buttonLayout->addWidget(okButton);
+    buttonLayout->addWidget(cancelButton);
+    layout->addLayout(buttonLayout);
+
+    connect(okButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(cancelButton, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(listWidget, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+
+    if (dialog.exec() == QDialog::Accepted && listWidget->currentItem()) {
+        QString selectedTerritory = listWidget->currentItem()->data(Qt::UserRole).toString();
+        disembarkFromGalley(leader, selectedTerritory, galley, player);
+    } else {
+        // Player chose to stay on galley - update display anyway
         updateAllPlayers();
         if (m_mapWidget) {
             m_mapWidget->update();
@@ -3132,18 +3450,20 @@ void PlayerInfoWidget::onEndTurnClicked()
             qDebug() << "Player" << currentPlayer->getId() << "created" << result.catapults << "catapults at" << homeProvince;
         }
 
-        // Create galleys at specified sea borders
+        // Create galleys in the sea zone (galleys live in sea zones, not land)
         for (const PurchaseResult::GalleyPurchase &galleyPurchase : result.galleys) {
-            // Create the galleys at home position (they're on the border with the sea)
+            // Get the sea territory name for placement
+            QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col);
+            Position seaPos = {galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col};
+
             for (int i = 0; i < galleyPurchase.count; ++i) {
-                GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
-                galley->setTerritoryName(homeProvince);
+                GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), seaPos, currentPlayer);
+                galley->setTerritoryName(seaTerritoryName);
                 currentPlayer->addGalley(galley);
             }
 
-            QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col);
             qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
-                     << "galleys at" << homeProvince << "bordering sea territory" << seaTerritoryName;
+                     << "galleys in sea zone" << seaTerritoryName;
         }
     }
 

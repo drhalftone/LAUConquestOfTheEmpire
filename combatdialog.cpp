@@ -1,6 +1,7 @@
 #include "combatdialog.h"
 #include <QDebug>
 #include <QMessageBox>
+#include <QSet>
 #include <cstdlib>  // for rand()
 
 CombatDialog::CombatDialog(Player *attackingPlayer,
@@ -19,8 +20,15 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     , m_attackingHeader(nullptr)
     , m_defendingHeader(nullptr)
     , m_combatResult(CombatResult::DefenderWins)  // Default to defender wins
+    , m_rollingDie(nullptr)
+    , m_pendingGalleyButton(nullptr)
 {
     setWindowTitle("Combat Resolution");
+
+    // Create rolling die widget early - needed before buttons are created
+    m_rollingDie = new LAURollingDieWidget(1, this);
+    m_rollingDie->hide();
+    connect(m_rollingDie, &LAURollingDieWidget::rollComplete, this, &CombatDialog::onRollComplete);
 
     // Get all pieces at combat territory
     m_attackingPieces = m_attackingPlayer->getPiecesAtTerritory(combatTerritoryName);
@@ -179,8 +187,36 @@ QWidget* CombatDialog::createAttackingSide()
     QWidget *scrollContent = new QWidget();
     QHBoxLayout *legionsLayout = new QHBoxLayout(scrollContent);
 
-    // Find all leaders (Caesar, General, Galley) with their legions
+    // First, collect all galleys and find generals/caesars on each galley
+    QList<GalleyPiece*> galleys;
+    QSet<int> leadersOnGalleys;  // Track which leaders are on galleys
+
     for (GamePiece *piece : m_attackingPieces) {
+        if (piece->getType() == GamePiece::Type::Galley) {
+            GalleyPiece *galley = static_cast<GalleyPiece*>(piece);
+            galleys.append(galley);
+        }
+    }
+
+    // Find which leaders are on galleys
+    for (GamePiece *piece : m_attackingPieces) {
+        if (piece->isOnGalley()) {
+            leadersOnGalleys.insert(piece->getUniqueId());
+        }
+    }
+
+    // Create galley widgets (with generals underneath)
+    for (GalleyPiece *galley : galleys) {
+        QWidget *galleyWidget = createGalleyWidget(galley, true);
+        legionsLayout->addWidget(galleyWidget);
+    }
+
+    // Add leaders NOT on galleys (Caesar, General)
+    for (GamePiece *piece : m_attackingPieces) {
+        if (leadersOnGalleys.contains(piece->getUniqueId())) {
+            continue;  // Skip leaders on galleys (already shown under galley)
+        }
+
         if (piece->getType() == GamePiece::Type::Caesar) {
             CaesarPiece *caesar = static_cast<CaesarPiece*>(piece);
             QGroupBox *legionGroupBox = createLegionGroupBox(caesar, caesar->getLegion(), true);
@@ -189,11 +225,6 @@ QWidget* CombatDialog::createAttackingSide()
         } else if (piece->getType() == GamePiece::Type::General) {
             GeneralPiece *general = static_cast<GeneralPiece*>(piece);
             QGroupBox *legionGroupBox = createLegionGroupBox(general, general->getLegion(), true);
-            m_attackingGroupBoxes.append(legionGroupBox);
-            legionsLayout->addWidget(legionGroupBox);
-        } else if (piece->getType() == GamePiece::Type::Galley) {
-            GalleyPiece *galley = static_cast<GalleyPiece*>(piece);
-            QGroupBox *legionGroupBox = createLegionGroupBox(galley, galley->getLegion(), true);
             m_attackingGroupBoxes.append(legionGroupBox);
             legionsLayout->addWidget(legionGroupBox);
         }
@@ -225,10 +256,38 @@ QWidget* CombatDialog::createDefendingSide()
     QWidget *scrollContent = new QWidget();
     QHBoxLayout *legionsLayout = new QHBoxLayout(scrollContent);
 
-    // Find all leaders (Caesar, General, Galley) with their legions
+    // First, collect all galleys and find generals/caesars on each galley
+    QList<GalleyPiece*> galleys;
+    QSet<int> leadersOnGalleys;  // Track which leaders are on galleys
+
+    for (GamePiece *piece : m_defendingPieces) {
+        if (piece->getType() == GamePiece::Type::Galley) {
+            GalleyPiece *galley = static_cast<GalleyPiece*>(piece);
+            galleys.append(galley);
+        }
+    }
+
+    // Find which leaders are on galleys
+    for (GamePiece *piece : m_defendingPieces) {
+        if (piece->isOnGalley()) {
+            leadersOnGalleys.insert(piece->getUniqueId());
+        }
+    }
+
+    // Create galley widgets (with generals underneath)
+    for (GalleyPiece *galley : galleys) {
+        QWidget *galleyWidget = createGalleyWidget(galley, false);
+        legionsLayout->addWidget(galleyWidget);
+    }
+
+    // Find all leaders NOT on galleys (Caesar, General) and unled troops
     QList<GamePiece*> unledTroops;
 
     for (GamePiece *piece : m_defendingPieces) {
+        if (leadersOnGalleys.contains(piece->getUniqueId())) {
+            continue;  // Skip leaders on galleys (already shown under galley)
+        }
+
         if (piece->getType() == GamePiece::Type::Caesar) {
             CaesarPiece *caesar = static_cast<CaesarPiece*>(piece);
             QGroupBox *legionGroupBox = createLegionGroupBox(caesar, caesar->getLegion(), false);
@@ -237,11 +296,6 @@ QWidget* CombatDialog::createDefendingSide()
         } else if (piece->getType() == GamePiece::Type::General) {
             GeneralPiece *general = static_cast<GeneralPiece*>(piece);
             QGroupBox *legionGroupBox = createLegionGroupBox(general, general->getLegion(), false);
-            m_defendingGroupBoxes.append(legionGroupBox);
-            legionsLayout->addWidget(legionGroupBox);
-        } else if (piece->getType() == GamePiece::Type::Galley) {
-            GalleyPiece *galley = static_cast<GalleyPiece*>(piece);
-            QGroupBox *legionGroupBox = createLegionGroupBox(galley, galley->getLegion(), false);
             m_defendingGroupBoxes.append(legionGroupBox);
             legionsLayout->addWidget(legionGroupBox);
         } else if (piece->getType() == GamePiece::Type::Infantry ||
@@ -389,11 +443,11 @@ QGroupBox* CombatDialog::createLegionGroupBox(GamePiece *leader, const QList<int
                 // Store button-to-piece mapping
                 if (isAttacker) {
                     m_attackingTroopButtons[troopButton] = piece;
-                    connect(troopButton, &QPushButton::clicked, this, &CombatDialog::onAttackingTroopClicked);
                 } else {
                     m_defendingTroopButtons[troopButton] = piece;
-                    connect(troopButton, &QPushButton::clicked, this, &CombatDialog::onDefendingTroopClicked);
                 }
+                // Connect button click to rolling die widget
+                connect(troopButton, &QPushButton::clicked, m_rollingDie, &LAURollingDieWidget::startRoll);
 
                 layout->addWidget(troopButton);
                 break;
@@ -449,14 +503,122 @@ QGroupBox* CombatDialog::createUnledTroopsGroupBox(const QList<GamePiece*> &troo
         // Store button-to-piece mapping
         if (isAttacker) {
             m_attackingTroopButtons[troopButton] = piece;
-            connect(troopButton, &QPushButton::clicked, this, &CombatDialog::onAttackingTroopClicked);
         } else {
             m_defendingTroopButtons[troopButton] = piece;
-            connect(troopButton, &QPushButton::clicked, this, &CombatDialog::onDefendingTroopClicked);
         }
+        // Connect button click to rolling die widget
+        connect(troopButton, &QPushButton::clicked, m_rollingDie, &LAURollingDieWidget::startRoll);
 
         layout->addWidget(troopButton);
     }
+
+    layout->addStretch();
+
+    return groupBox;
+}
+
+QWidget* CombatDialog::createGalleyWidget(GalleyPiece *galley, bool isAttacker)
+{
+    QWidget *widget = new QWidget();
+    QVBoxLayout *mainLayout = new QVBoxLayout(widget);
+    mainLayout->setSpacing(5);
+    mainLayout->setContentsMargins(2, 2, 2, 2);
+
+    // Create galley button at top
+    QPushButton *galleyButton = new QPushButton(QString("Galley\nID: %1").arg(galley->getSerialNumber()));
+    galleyButton->setIcon(QIcon(":/images/galleyIcon.png"));
+    galleyButton->setIconSize(QSize(32, 32));
+    galleyButton->setMinimumHeight(50);
+    galleyButton->setStyleSheet("background-color: #4682B4; color: white; font-weight: bold;");  // Steel blue
+
+    // Track the galley button - galleys need validation before rolling (check for passengers)
+    if (isAttacker) {
+        m_attackingGalleyButtons[galleyButton] = galley;
+        connect(galleyButton, &QPushButton::clicked, this, &CombatDialog::onAttackingGalleyClicked);
+    } else {
+        m_defendingGalleyButtons[galleyButton] = galley;
+        connect(galleyButton, &QPushButton::clicked, this, &CombatDialog::onDefendingGalleyClicked);
+    }
+
+    mainLayout->addWidget(galleyButton);
+
+    // Find all leaders (Caesar/General) on this galley
+    QList<GamePiece*> &pieces = isAttacker ? m_attackingPieces : m_defendingPieces;
+    QList<GamePiece*> leadersOnThisGalley;
+
+    for (GamePiece *piece : pieces) {
+        if (piece->isOnGalley() && piece->getOnGalley() == galley->getSerialNumber()) {
+            if (piece->getType() == GamePiece::Type::Caesar ||
+                piece->getType() == GamePiece::Type::General) {
+                leadersOnThisGalley.append(piece);
+            }
+        }
+    }
+
+    // Create horizontal layout for generals underneath the galley
+    QHBoxLayout *generalsLayout = new QHBoxLayout();
+    generalsLayout->setSpacing(2);
+
+    if (leadersOnThisGalley.isEmpty()) {
+        // No passengers - create empty placeholder
+        QGroupBox *emptyBox = createEmptyGeneralGroupBox();
+        generalsLayout->addWidget(emptyBox);
+    } else {
+        // Add each leader with their legion
+        for (GamePiece *leader : leadersOnThisGalley) {
+            QList<int> legionIds;
+            if (leader->getType() == GamePiece::Type::Caesar) {
+                legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+            } else if (leader->getType() == GamePiece::Type::General) {
+                legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+            }
+
+            QGroupBox *legionGroupBox = createLegionGroupBox(leader, legionIds, isAttacker);
+            if (isAttacker) {
+                m_attackingGroupBoxes.append(legionGroupBox);
+            } else {
+                m_defendingGroupBoxes.append(legionGroupBox);
+            }
+            generalsLayout->addWidget(legionGroupBox);
+        }
+    }
+
+    mainLayout->addLayout(generalsLayout);
+
+    // Update galley button enabled state based on whether it has TROOPS
+    // Generals can "swim" - they don't protect the galley from being targeted
+    // Galley is targetable when it has no troops, even if general is still aboard
+    bool hasTroops = false;
+
+    // Check if there are any troops on this galley
+    for (GamePiece *piece : pieces) {
+        if (piece->isOnGalley() && piece->getOnGalley() == galley->getSerialNumber()) {
+            if (piece->getType() == GamePiece::Type::Infantry ||
+                piece->getType() == GamePiece::Type::Cavalry ||
+                piece->getType() == GamePiece::Type::Catapult) {
+                hasTroops = true;
+                break;
+            }
+        }
+    }
+
+    // Store whether galley is targetable (will be used during combat)
+    // "hasPassengers" here really means "has troops" - generals don't count
+    galleyButton->setProperty("hasPassengers", hasTroops);
+
+    return widget;
+}
+
+QGroupBox* CombatDialog::createEmptyGeneralGroupBox()
+{
+    QGroupBox *groupBox = new QGroupBox("(Empty)");
+    groupBox->setFixedWidth(150);
+    QVBoxLayout *layout = new QVBoxLayout(groupBox);
+
+    QLabel *emptyLabel = new QLabel("No passengers");
+    emptyLabel->setStyleSheet("font-size: 9pt; color: #888; font-style: italic;");
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(emptyLabel);
 
     layout->addStretch();
 
@@ -468,6 +630,14 @@ void CombatDialog::setAttackingButtonsEnabled(bool enabled)
     for (QGroupBox *groupBox : m_attackingGroupBoxes) {
         groupBox->setEnabled(enabled);
     }
+
+    // Enable/disable galley buttons - only enable if they have no passengers
+    for (auto it = m_attackingGalleyButtons.begin(); it != m_attackingGalleyButtons.end(); ++it) {
+        QPushButton *button = it.key();
+        bool hasPassengers = button->property("hasPassengers").toBool();
+        // Galley button is only enabled if the side is enabled AND it has no passengers
+        button->setEnabled(enabled && !hasPassengers);
+    }
 }
 
 void CombatDialog::setDefendingButtonsEnabled(bool enabled)
@@ -475,130 +645,275 @@ void CombatDialog::setDefendingButtonsEnabled(bool enabled)
     for (QGroupBox *groupBox : m_defendingGroupBoxes) {
         groupBox->setEnabled(enabled);
     }
+
+    // Enable/disable galley buttons - only enable if they have no passengers
+    for (auto it = m_defendingGalleyButtons.begin(); it != m_defendingGalleyButtons.end(); ++it) {
+        QPushButton *button = it.key();
+        bool hasPassengers = button->property("hasPassengers").toBool();
+        // Galley button is only enabled if the side is enabled AND it has no passengers
+        button->setEnabled(enabled && !hasPassengers);
+    }
 }
 
-void CombatDialog::onAttackingTroopClicked()
+void CombatDialog::updateGalleyPassengerStatus(const QString &galleySerialNumber, bool isAttacker)
+{
+    if (galleySerialNumber.isEmpty()) return;
+
+    // Find the galley button with this serial number
+    QMap<QPushButton*, GalleyPiece*> &galleyButtons = isAttacker ? m_attackingGalleyButtons : m_defendingGalleyButtons;
+
+    for (auto it = galleyButtons.begin(); it != galleyButtons.end(); ++it) {
+        GalleyPiece *galley = it.value();
+        if (galley && galley->getSerialNumber() == galleySerialNumber) {
+            QPushButton *button = it.key();
+
+            // Check if there are any remaining TROOPS on this galley
+            // Generals can "swim" - they don't protect the galley
+            // Galley is targetable when it has no troops, even if general is still aboard
+            bool hasTroops = false;
+            QMap<QPushButton*, GamePiece*> &troopButtons = isAttacker ? m_attackingTroopButtons : m_defendingTroopButtons;
+            for (auto troopIt = troopButtons.begin(); troopIt != troopButtons.end(); ++troopIt) {
+                GamePiece *piece = troopIt.value();
+                if (piece && piece->isOnGalley() && piece->getOnGalley() == galleySerialNumber) {
+                    hasTroops = true;
+                    break;
+                }
+            }
+
+            // Update the button property - galley is targetable when no troops aboard
+            // (generals can swim, they're dealt with at end of combat)
+            button->setProperty("hasPassengers", hasTroops);
+
+            qDebug() << "Updated galley" << galleySerialNumber << "hasTroops:" << hasTroops;
+            break;
+        }
+    }
+}
+void CombatDialog::onAttackingGalleyClicked()
 {
     QPushButton *clickedButton = qobject_cast<QPushButton*>(sender());
     if (!clickedButton) return;
 
-    // Defender selected which attacking troop to attack
-    GamePiece *attackingPiece = m_attackingTroopButtons[clickedButton];
-    if (!attackingPiece) return;
+    GalleyPiece *galley = m_attackingGalleyButtons[clickedButton];
+    if (!galley) return;
 
-    qDebug() << "Defender attacking attacking troop ID" << attackingPiece->getSerialNumber();
+    // Check if galley still has troops - if so, can't target it
+    bool hasTroops = clickedButton->property("hasPassengers").toBool();
+    if (hasTroops) {
+        QMessageBox::warning(this, "Cannot Target Galley",
+            "This galley still has troops aboard!\n\n"
+            "You must destroy all troops on the galley before you can sink it.\n"
+            "(Generals can swim - they don't protect the galley)");
+        return;
+    }
+
+    qDebug() << "Defender attacking attacking galley ID" << galley->getSerialNumber();
 
     // Disable all buttons during combat resolution
     setDefendingButtonsEnabled(false);
     setAttackingButtonsEnabled(false);
 
-    // Calculate defender's advantage
-    int advantage = getNetAdvantage(false);
-
-    // Resolve attack
-    bool isHit = resolveAttack(attackingPiece->getType(), advantage);
-
-    // Show result dialog
-    QString resultMessage;
-    if (isHit) {
-        resultMessage = QString("HIT! Attacking troop (ID: %1) has been destroyed.")
-                            .arg(attackingPiece->getSerialNumber());
-    } else {
-        resultMessage = QString("MISS! Attacking troop (ID: %1) survived.")
-                            .arg(attackingPiece->getSerialNumber());
-    }
-
-    QMessageBox::information(this, "Combat Result", resultMessage);
-
-    // After OK is clicked, remove the troop if it was hit
-    if (isHit) {
-        qDebug() << "Removing attacking troop ID" << attackingPiece->getSerialNumber();
-        // Remove the attacking troop button
-        removeTroopButton(clickedButton);
-        // Remove the piece from the player based on type
-        if (attackingPiece->getType() == GamePiece::Type::Infantry) {
-            m_attackingPlayer->removeInfantry(static_cast<InfantryPiece*>(attackingPiece));
-        } else if (attackingPiece->getType() == GamePiece::Type::Cavalry) {
-            m_attackingPlayer->removeCavalry(static_cast<CavalryPiece*>(attackingPiece));
-        } else if (attackingPiece->getType() == GamePiece::Type::Catapult) {
-            m_attackingPlayer->removeCatapult(static_cast<CatapultPiece*>(attackingPiece));
-        }
-        attackingPiece->deleteLater();  // Use deleteLater() instead of delete
-
-        // Update advantages (catapult count may have changed)
-        updateAdvantageDisplay();
-
-        // Check if combat is over
-        if (checkCombatEnd()) {
-            return;  // Dialog closed, don't re-enable buttons
-        }
-    }
-
-    // Switch back to attacker's turn
-    setDefendingButtonsEnabled(true);
-    setAttackingButtonsEnabled(false);
+    // Store button for onRollComplete and start the die roll
+    m_pendingGalleyButton = clickedButton;
+    m_rollingDie->startRoll();
 }
 
-void CombatDialog::onDefendingTroopClicked()
+void CombatDialog::onDefendingGalleyClicked()
 {
     QPushButton *clickedButton = qobject_cast<QPushButton*>(sender());
     if (!clickedButton) return;
 
-    // Attacker selected which defending troop to attack
-    GamePiece *defendingPiece = m_defendingTroopButtons[clickedButton];
-    if (!defendingPiece) return;
+    GalleyPiece *galley = m_defendingGalleyButtons[clickedButton];
+    if (!galley) return;
 
-    qDebug() << "Attacker attacking defending troop ID" << defendingPiece->getSerialNumber();
+    // Check if galley still has troops - if so, can't target it
+    bool hasTroops = clickedButton->property("hasPassengers").toBool();
+    if (hasTroops) {
+        QMessageBox::warning(this, "Cannot Target Galley",
+            "This galley still has troops aboard!\n\n"
+            "You must destroy all troops on the galley before you can sink it.\n"
+            "(Generals can swim - they don't protect the galley)");
+        return;
+    }
+
+    qDebug() << "Attacker attacking defending galley ID" << galley->getSerialNumber();
 
     // Disable all buttons during combat resolution
     setDefendingButtonsEnabled(false);
     setAttackingButtonsEnabled(false);
 
-    // Calculate attacker's advantage
-    int advantage = getNetAdvantage(true);
+    // Store button for onRollComplete and start the die roll
+    m_pendingGalleyButton = clickedButton;
+    m_rollingDie->startRoll();
+}
 
-    // Resolve attack
-    bool isHit = resolveAttack(defendingPiece->getType(), advantage);
+void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
+{
+    QPushButton *clickedButton = qobject_cast<QPushButton*>(senderObj);
 
-    // Show result dialog
-    QString resultMessage;
-    if (isHit) {
-        resultMessage = QString("HIT! Defending troop (ID: %1) has been destroyed.")
-                            .arg(defendingPiece->getSerialNumber());
-    } else {
-        resultMessage = QString("MISS! Defending troop (ID: %1) survived.")
-                            .arg(defendingPiece->getSerialNumber());
+    // If no sender from die widget, check if we have a pending galley button
+    if (!clickedButton && m_pendingGalleyButton) {
+        clickedButton = m_pendingGalleyButton;
+        m_pendingGalleyButton = nullptr;
     }
 
-    QMessageBox::information(this, "Combat Result", resultMessage);
-
-    // After OK is clicked, remove the troop if it was hit
-    if (isHit) {
-        qDebug() << "Removing defending troop ID" << defendingPiece->getSerialNumber();
-        // Remove the defending troop button
-        removeTroopButton(clickedButton);
-        // Remove the piece from the player based on type
-        if (defendingPiece->getType() == GamePiece::Type::Infantry) {
-            m_defendingPlayer->removeInfantry(static_cast<InfantryPiece*>(defendingPiece));
-        } else if (defendingPiece->getType() == GamePiece::Type::Cavalry) {
-            m_defendingPlayer->removeCavalry(static_cast<CavalryPiece*>(defendingPiece));
-        } else if (defendingPiece->getType() == GamePiece::Type::Catapult) {
-            m_defendingPlayer->removeCatapult(static_cast<CatapultPiece*>(defendingPiece));
-        }
-        defendingPiece->deleteLater();  // Use deleteLater() instead of delete
-
-        // Update advantages (catapult count may have changed)
-        updateAdvantageDisplay();
-
-        // Check if combat is over
-        if (checkCombatEnd()) {
-            return;  // Dialog closed, don't re-enable buttons
-        }
+    if (!clickedButton) {
+        qDebug() << "onRollComplete: No button found!";
+        return;
     }
 
-    // Switch to defender's turn
-    setAttackingButtonsEnabled(true);
+    qDebug() << "Roll complete! Die value:" << dieValue;
+
+    // Disable buttons during processing
     setDefendingButtonsEnabled(false);
+    setAttackingButtonsEnabled(false);
+
+    // Determine what type of target was clicked
+    bool isDefendingTroop = m_defendingTroopButtons.contains(clickedButton);
+    bool isAttackingTroop = m_attackingTroopButtons.contains(clickedButton);
+    bool isDefendingGalley = m_defendingGalleyButtons.contains(clickedButton);
+    bool isAttackingGalley = m_attackingGalleyButtons.contains(clickedButton);
+
+    if (isDefendingTroop) {
+        // Attacker attacked a defending troop
+        GamePiece *defendingPiece = m_defendingTroopButtons[clickedButton];
+        if (!defendingPiece) return;
+
+        // Calculate attacker's advantage and resolve
+        int advantage = getNetAdvantage(true);
+        bool isHit = resolveAttack(defendingPiece->getType(), advantage, dieValue);
+
+        QString resultMessage;
+        if (isHit) {
+            resultMessage = QString("HIT! Roll: %1 + Advantage: %2 = %3\n\nDefending troop (ID: %4) has been destroyed.")
+                                .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(defendingPiece->getSerialNumber());
+        } else {
+            resultMessage = QString("MISS! Roll: %1 + Advantage: %2 = %3\n\nDefending troop (ID: %4) survived.")
+                                .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(defendingPiece->getSerialNumber());
+        }
+        QMessageBox::information(this, "Combat Result", resultMessage);
+
+        if (isHit) {
+            QString galleySerial = defendingPiece->isOnGalley() ? defendingPiece->getOnGalley() : QString();
+            removeTroopButton(clickedButton);
+            if (defendingPiece->getType() == GamePiece::Type::Infantry) {
+                m_defendingPlayer->removeInfantry(static_cast<InfantryPiece*>(defendingPiece));
+            } else if (defendingPiece->getType() == GamePiece::Type::Cavalry) {
+                m_defendingPlayer->removeCavalry(static_cast<CavalryPiece*>(defendingPiece));
+            } else if (defendingPiece->getType() == GamePiece::Type::Catapult) {
+                m_defendingPlayer->removeCatapult(static_cast<CatapultPiece*>(defendingPiece));
+            }
+            defendingPiece->deleteLater();
+            if (!galleySerial.isEmpty()) {
+                updateGalleyPassengerStatus(galleySerial, false);
+            }
+            updateAdvantageDisplay();
+            if (checkCombatEnd()) return;
+        }
+        // Switch to defender's turn
+        setAttackingButtonsEnabled(true);
+        setDefendingButtonsEnabled(false);
+
+    } else if (isAttackingTroop) {
+        // Defender attacked an attacking troop
+        GamePiece *attackingPiece = m_attackingTroopButtons[clickedButton];
+        if (!attackingPiece) return;
+
+        // Calculate defender's advantage and resolve
+        int advantage = getNetAdvantage(false);
+        bool isHit = resolveAttack(attackingPiece->getType(), advantage, dieValue);
+
+        QString resultMessage;
+        if (isHit) {
+            resultMessage = QString("HIT! Roll: %1 + Advantage: %2 = %3\n\nAttacking troop (ID: %4) has been destroyed.")
+                                .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(attackingPiece->getSerialNumber());
+        } else {
+            resultMessage = QString("MISS! Roll: %1 + Advantage: %2 = %3\n\nAttacking troop (ID: %4) survived.")
+                                .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(attackingPiece->getSerialNumber());
+        }
+        QMessageBox::information(this, "Combat Result", resultMessage);
+
+        if (isHit) {
+            QString galleySerial = attackingPiece->isOnGalley() ? attackingPiece->getOnGalley() : QString();
+            removeTroopButton(clickedButton);
+            if (attackingPiece->getType() == GamePiece::Type::Infantry) {
+                m_attackingPlayer->removeInfantry(static_cast<InfantryPiece*>(attackingPiece));
+            } else if (attackingPiece->getType() == GamePiece::Type::Cavalry) {
+                m_attackingPlayer->removeCavalry(static_cast<CavalryPiece*>(attackingPiece));
+            } else if (attackingPiece->getType() == GamePiece::Type::Catapult) {
+                m_attackingPlayer->removeCatapult(static_cast<CatapultPiece*>(attackingPiece));
+            }
+            attackingPiece->deleteLater();
+            if (!galleySerial.isEmpty()) {
+                updateGalleyPassengerStatus(galleySerial, true);
+            }
+            updateAdvantageDisplay();
+            if (checkCombatEnd()) return;
+        }
+        // Switch back to attacker's turn
+        setDefendingButtonsEnabled(true);
+        setAttackingButtonsEnabled(false);
+
+    } else if (isDefendingGalley) {
+        // Attacker attacked a defending galley
+        GalleyPiece *galley = m_defendingGalleyButtons[clickedButton];
+        if (!galley) return;
+
+        // Galley combat: need 4+ to hit (no advantage modifier)
+        bool isHit = (dieValue >= 4);
+
+        QString resultMessage;
+        if (isHit) {
+            resultMessage = QString("SUNK! Roll: %1 (needed 4+)\n\nDefending galley (ID: %2) has been destroyed.")
+                                .arg(dieValue).arg(galley->getSerialNumber());
+        } else {
+            resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nDefending galley (ID: %2) survived.")
+                                .arg(dieValue).arg(galley->getSerialNumber());
+        }
+        QMessageBox::information(this, "Naval Combat Result", resultMessage);
+
+        if (isHit) {
+            clickedButton->hide();
+            clickedButton->deleteLater();
+            m_defendingGalleyButtons.remove(clickedButton);
+            m_defendingPlayer->removeGalley(galley);
+            galley->deleteLater();
+            if (checkCombatEnd()) return;
+        }
+        // Switch to defender's turn
+        setAttackingButtonsEnabled(true);
+        setDefendingButtonsEnabled(false);
+
+    } else if (isAttackingGalley) {
+        // Defender attacked an attacking galley
+        GalleyPiece *galley = m_attackingGalleyButtons[clickedButton];
+        if (!galley) return;
+
+        // Galley combat: need 4+ to hit (no advantage modifier)
+        bool isHit = (dieValue >= 4);
+
+        QString resultMessage;
+        if (isHit) {
+            resultMessage = QString("SUNK! Roll: %1 (needed 4+)\n\nAttacking galley (ID: %2) has been destroyed.")
+                                .arg(dieValue).arg(galley->getSerialNumber());
+        } else {
+            resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nAttacking galley (ID: %2) survived.")
+                                .arg(dieValue).arg(galley->getSerialNumber());
+        }
+        QMessageBox::information(this, "Naval Combat Result", resultMessage);
+
+        if (isHit) {
+            clickedButton->hide();
+            clickedButton->deleteLater();
+            m_attackingGalleyButtons.remove(clickedButton);
+            m_attackingPlayer->removeGalley(galley);
+            galley->deleteLater();
+            if (checkCombatEnd()) return;
+        }
+        // Switch back to attacker's turn
+        setDefendingButtonsEnabled(true);
+        setAttackingButtonsEnabled(false);
+    }
 }
 
 void CombatDialog::onRetreatClicked()
@@ -782,13 +1097,12 @@ void CombatDialog::updateAdvantageDisplay()
     }
 }
 
-bool CombatDialog::resolveAttack(GamePiece::Type targetType, int attackerAdvantage)
+bool CombatDialog::resolveAttack(GamePiece::Type targetType, int attackerAdvantage, int dieRoll)
 {
-    // Roll dice (1-6)
-    int roll = (qrand() % 6) + 1;
-    int modifiedRoll = roll + attackerAdvantage;
+    // Use provided die roll instead of generating one
+    int modifiedRoll = dieRoll + attackerAdvantage;
 
-    qDebug() << "Roll:" << roll << "+ Advantage:" << attackerAdvantage << "= Total:" << modifiedRoll;
+    qDebug() << "Roll:" << dieRoll << "+ Advantage:" << attackerAdvantage << "= Total:" << modifiedRoll;
 
     // Determine hit threshold based on target type
     int hitThreshold;
@@ -830,9 +1144,16 @@ bool CombatDialog::checkCombatEnd()
     bool attackerHasTroops = !m_attackingTroopButtons.isEmpty();
     bool defenderHasTroops = !m_defendingTroopButtons.isEmpty();
 
-    qDebug() << "Attacker has troops:" << attackerHasTroops << "Defender has troops:" << defenderHasTroops;
+    // Also check for galleys - generals on galleys are protected until the galley is sunk
+    bool attackerHasGalleys = !m_attackingGalleyButtons.isEmpty();
+    bool defenderHasGalleys = !m_defendingGalleyButtons.isEmpty();
 
-    if (!defenderHasTroops) {
+    qDebug() << "Attacker has troops:" << attackerHasTroops << "galleys:" << attackerHasGalleys;
+    qDebug() << "Defender has troops:" << defenderHasTroops << "galleys:" << defenderHasGalleys;
+
+    // Defender is only defeated when they have no troops AND no galleys
+    // (Generals on galleys are protected by the galley)
+    if (!defenderHasTroops && !defenderHasGalleys) {
         qDebug() << "Defender defeated - processing victory";
 
         // Remove all defeated defending troops first
@@ -1045,11 +1366,13 @@ bool CombatDialog::checkCombatEnd()
             if (choice == QMessageBox::Yes) {
                 qDebug() << "Capturing general";
                 // Capture the general
-                // Mark as captured (keeps general in original player's list)
+                // Remove from defender's generals list first
+                m_defendingPlayer->removeGeneral(general);
+                // Mark as captured
                 general->setCapturedBy(m_attackingPlayer->getId());
                 // Move to attacker's position
                 general->setPosition(combatPosition);
-                // Add to attacker's captured list (for easy reference)
+                // Add to attacker's captured list
                 m_attackingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
             } else {
@@ -1061,14 +1384,18 @@ bool CombatDialog::checkCombatEnd()
             }
         }
 
-        // Transfer territory ownership
+        // Transfer territory ownership (but not for sea territories)
         QString territoryName = m_combatTerritoryName;
+        Position combatPos = m_mapWidget->territoryNameToPosition(territoryName);
+        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
 
-        // Remove territory from defender
-        m_defendingPlayer->unclaimTerritory(territoryName);
+        if (!isSea) {
+            // Remove territory from defender
+            m_defendingPlayer->unclaimTerritory(territoryName);
 
-        // Add territory to attacker
-        m_attackingPlayer->claimTerritory(territoryName);
+            // Add territory to attacker
+            m_attackingPlayer->claimTerritory(territoryName);
+        }
 
         // Transfer any cities at this territory from defender to attacker
         City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
@@ -1127,7 +1454,8 @@ bool CombatDialog::checkCombatEnd()
         return true;
     }
 
-    if (!attackerHasTroops) {
+    // Attacker is only defeated when they have no troops AND no galleys
+    if (!attackerHasTroops && !attackerHasGalleys) {
         // Defender wins - remove all defeated attacking troops first
         qDebug() << "Defender wins - removing all defeated attacking troops";
 
@@ -1335,11 +1663,13 @@ bool CombatDialog::checkCombatEnd()
             if (choice == QMessageBox::Yes) {
                 qDebug() << "Capturing general";
                 // Capture the general
-                // Mark as captured (keeps general in original player's list)
+                // Remove from attacker's generals list first
+                m_attackingPlayer->removeGeneral(general);
+                // Mark as captured
                 general->setCapturedBy(m_defendingPlayer->getId());
                 // Keep at current position (defender's territory)
                 general->setPosition(combatPosition);
-                // Add to defender's captured list (for easy reference)
+                // Add to defender's captured list
                 m_defendingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
             } else {

@@ -22,5 +22,6 @@
         <file>images/deadIcon.png</file>
         <file>images/retreatIcon.png</file>
         <file>images/captureIcon.png</file>
+        <file>images/walledCityIcon.png</file>
     </qresource>
 </RCC>

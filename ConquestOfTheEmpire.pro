@@ -21,7 +21,8 @@ SOURCES += \
     playerinfowidget.cpp \
     troopselectiondialog.cpp \
     combatdialog.cpp \
-    citydestructiondialog.cpp
+    citydestructiondialog.cpp \
+    laurollingdiewidget.cpp
 
 HEADERS += \
     mapwidget.h \
@@ -36,7 +37,8 @@ HEADERS += \
     common.h \
     troopselectiondialog.h \
     combatdialog.h \
-    citydestructiondialog.h
+    citydestructiondialog.h \
+    laurollingdiewidget.h
 
 RESOURCES += \
     resources.qrc

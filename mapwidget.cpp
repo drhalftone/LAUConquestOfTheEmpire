@@ -5,6 +5,7 @@
 #include "building.h"
 #include "playerinfowidget.h"
 #include <QPainter>
+#include <QPixmap>
 #include <QRandomGenerator>
 #include <QMouseEvent>
 #include <QContextMenuEvent>
@@ -169,11 +170,14 @@ void MapWidget::paintEvent(QPaintEvent *event)
             painter.drawRect(x, y, m_tileWidth, m_tileHeight);
 
             // Draw thick colored border if square is owned by a player (query from Player objects)
-            QChar owner = getTerritoryOwnerAt(row, col);
-            if (owner != '\0') {
-                QColor ownerColor = getPlayerColor(owner);
-                painter.setPen(QPen(ownerColor, 8));  // Thicker border
-                painter.drawRect(x + 4, y + 4, m_tileWidth - 8, m_tileHeight - 8);
+            // Sea territories are never owned, so skip them
+            if (!isSeaTerritory(row, col)) {
+                QChar owner = getTerritoryOwnerAt(row, col);
+                if (owner != '\0') {
+                    QColor ownerColor = getPlayerColor(owner);
+                    painter.setPen(QPen(ownerColor, 8));  // Thicker border
+                    painter.drawRect(x + 4, y + 4, m_tileWidth - 8, m_tileHeight - 8);
+                }
             }
 
             // Check if this territory is disputed (has TROOPS from multiple players)
@@ -271,42 +275,8 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 painter.restore();
             }
 
-            // Draw troop counts for all players at this tile using GamePiece classes
-            // Save painter state to prevent color bleeding
-            painter.save();
-
-            // Iterate through all players to see if they have troops here
-            for (char c = 'A'; c <= 'F'; ++c) {
-                QChar player(c);
-                if (!m_playerTroops.contains(player)) continue;
-
-                const TroopCounts &troops = m_playerTroops[player][row][col];
-                ::Position pos = {row, col};  // Use the global Position from gamepiece.h
-
-                // Use GamePiece paint methods for each troop type with counts
-                if (troops.infantry > 0) {
-                    InfantryPiece infantryPiece(player, pos);
-                    infantryPiece.paint(painter, x, y, m_tileWidth, m_tileHeight, troops.infantry);
-                }
-
-                if (troops.cavalry > 0) {
-                    CavalryPiece cavalryPiece(player, pos);
-                    cavalryPiece.paint(painter, x, y, m_tileWidth, m_tileHeight, troops.cavalry);
-                }
-
-                if (troops.catapult > 0) {
-                    CatapultPiece catapultPiece(player, pos);
-                    catapultPiece.paint(painter, x, y, m_tileWidth, m_tileHeight, troops.catapult);
-                }
-
-                if (troops.galley > 0) {
-                    GalleyPiece galleyPiece(player, pos);
-                    galleyPiece.paint(painter, x, y, m_tileWidth, m_tileHeight, troops.galley);
-                }
-            }
-
-            // Restore painter state
-            painter.restore();
+            // NOTE: Troop drawing now handled by piece-based system below (getAllPieces)
+            // The old m_playerTroops count-based system is deprecated
         }
     }
 
@@ -380,12 +350,41 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 int centerX = tileCenterX + offsetX;
                 int centerY = tileCenterY + offsetY;
 
-                // Determine piece size based on type
+                // Determine piece size and icon based on type
                 int radius;
-                if (piece->getType() == GamePiece::Type::Caesar) {
-                    radius = qMin(m_tileWidth, m_tileHeight) * 0.35;  // Larger
-                } else {
-                    radius = qMin(m_tileWidth, m_tileHeight) * 0.2;   // Smaller for generals
+                QString iconPath;
+                GamePiece::Type pieceType = piece->getType();
+
+                switch (pieceType) {
+                    case GamePiece::Type::Caesar:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.35;
+                        iconPath = ":/images/ceasarIcon.png";
+                        break;
+                    case GamePiece::Type::General:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.25;
+                        iconPath = ":/images/generalIcon.png";
+                        break;
+                    case GamePiece::Type::Infantry:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.2;
+                        iconPath = ":/images/infantryIcon.png";
+                        break;
+                    case GamePiece::Type::Cavalry:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.2;
+                        iconPath = ":/images/cavalryIcon.png";
+                        break;
+                    case GamePiece::Type::Catapult:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.2;
+                        iconPath = ":/images/catapultIcon.png";
+                        break;
+                    case GamePiece::Type::Galley:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.2;
+                        iconPath = ":/images/galleyIcon.png";
+                        break;
+                    default:
+                        radius = qMin(m_tileWidth, m_tileHeight) * 0.2;
+                        iconPath = ":/images/infantryIcon.png";
+                        qDebug() << "WARNING: Unknown piece type:" << static_cast<int>(pieceType);
+                        break;
                 }
 
                 // Draw as ghost if not current player's turn
@@ -394,36 +393,32 @@ void MapWidget::paintEvent(QPaintEvent *event)
                     painter.setOpacity(0.3);
                 }
 
-                // Get player color
+                // Get player color (gray for black player so icon is visible)
                 QColor playerColor = getPlayerColor(playerId);
-
-                painter.setBrush(playerColor);
-                painter.setPen(QPen(Qt::black, 2));
-                painter.drawEllipse(QPoint(centerX, centerY), radius, radius);
-
-                // Draw text inside circle
-                QColor textColor = (playerId == 'E' || playerId == 'C') ? Qt::white : Qt::black;
-                painter.setPen(textColor);
-
-                QFont font = painter.font();
-                font.setPointSize(qMax(6, static_cast<int>(radius * 0.7)));
-                font.setBold(true);
-                painter.setFont(font);
-
-                QString label;
-                if (piece->getType() == GamePiece::Type::Caesar) {
-                    label = QString(playerId);
-                } else if (piece->getType() == GamePiece::Type::General) {
-                    // For generals, get the general number
-                    GeneralPiece *general = static_cast<GeneralPiece*>(piece);
-                    label = QString::number(general->getNumber());
-                } else {
-                    // For other pieces, just show player ID
-                    label = QString(playerId);
+                if (playerId == 'E') {
+                    playerColor = QColor(128, 128, 128);  // Gray instead of black
                 }
 
-                painter.drawText(QRect(centerX - radius, centerY - radius, radius * 2, radius * 2),
-                                Qt::AlignCenter, label);
+                // Load and draw the icon
+                QPixmap icon(iconPath);
+                if (!icon.isNull()) {
+                    // Scale icon to fit (about 70% of diameter)
+                    int iconSize = static_cast<int>(radius * 1.4);
+                    QPixmap scaledIcon = icon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+                    // Draw flat oval pedestal at bottom of icon (35% height, 80% width)
+                    int ovalHeight = static_cast<int>(scaledIcon.height() * 0.35);
+                    int ovalWidth = static_cast<int>(radius * 0.8);
+                    int ovalCenterY = centerY + scaledIcon.height() / 2 - ovalHeight / 2;
+                    painter.setBrush(playerColor);
+                    painter.setPen(QPen(Qt::black, 2));
+                    painter.drawEllipse(QPoint(centerX, ovalCenterY), ovalWidth, ovalHeight / 2);
+
+                    // Draw the icon centered above the pedestal
+                    int iconX = centerX - scaledIcon.width() / 2;
+                    int iconY = centerY - scaledIcon.height() / 2;
+                    painter.drawPixmap(iconX, iconY, scaledIcon);
+                }
 
                 if (isGhost) {
                     painter.setOpacity(1.0);

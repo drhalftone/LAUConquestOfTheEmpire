@@ -189,33 +189,45 @@ void PurchaseDialog::setupUI()
     scrollLayout->addWidget(troopsGroup);
 
     // ===== CITIES SECTION =====
-    if (!m_cityOptions.isEmpty()) {
-        QGroupBox *citiesGroup = new QGroupBox("New Cities");
-        QVBoxLayout *citiesLayout = new QVBoxLayout();
+    // Combine new cities and fortifications into one group with two columns
+    if (!m_cityOptions.isEmpty() || !m_fortificationOptions.isEmpty()) {
+        QGroupBox *citiesGroup = new QGroupBox("Cities");
+        QGridLayout *citiesLayout = new QGridLayout();
 
+        // Column headers
+        QLabel *newCitiesHeader = new QLabel("New Cities");
+        QFont headerFont = newCitiesHeader->font();
+        headerFont.setBold(true);
+        newCitiesHeader->setFont(headerFont);
+        citiesLayout->addWidget(newCitiesHeader, 0, 0, 1, 3);
+
+        QLabel *fortifiedHeader = new QLabel("Fortified Cities");
+        fortifiedHeader->setFont(headerFont);
+        citiesLayout->addWidget(fortifiedHeader, 0, 4, 1, 3);
+
+        int gridRow = 1;
+
+        // Add new city options - each territory can have city (left) OR fortified city (right)
         for (const CityPlacementOption &option : m_cityOptions) {
-            QHBoxLayout *cityRow = new QHBoxLayout();
-
-            // City icon
+            // Left column: City icon + checkbox + price
             QLabel *cityIcon = new QLabel();
             cityIcon->setPixmap(QPixmap(":/images/newCityIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            cityRow->addWidget(cityIcon);
+            citiesLayout->addWidget(cityIcon, gridRow, 0);
 
-            // Regular city checkbox
             QCheckBox *cityCheckbox = new QCheckBox(QString("City at %1").arg(option.territoryName));
             connect(cityCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
             m_cityCheckboxes[cityCheckbox] = option;
-            cityRow->addWidget(cityCheckbox);
-            cityRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST))));
+            citiesLayout->addWidget(cityCheckbox, gridRow, 1);
+            citiesLayout->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST))), gridRow, 2);
 
-            cityRow->addSpacing(20);
+            // Spacer column
+            citiesLayout->setColumnMinimumWidth(3, 30);
 
-            // Wall icon for fortified city
+            // Right column: Wall icon + fortified checkbox + price
             QLabel *wallIcon = new QLabel();
             wallIcon->setPixmap(QPixmap(":/images/wallIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            cityRow->addWidget(wallIcon);
+            citiesLayout->addWidget(wallIcon, gridRow, 4);
 
-            // Fortified city checkbox
             QCheckBox *fortifiedCheckbox = new QCheckBox(QString("Fortified City at %1").arg(option.territoryName));
             connect(fortifiedCheckbox, &QCheckBox::toggled, this, [this, cityCheckbox, fortifiedCheckbox]() {
                 // If fortified is checked, uncheck regular
@@ -231,48 +243,36 @@ void PurchaseDialog::setupUI()
                 }
             });
             m_fortifiedCityCheckboxes[fortifiedCheckbox] = option;
-            cityRow->addWidget(fortifiedCheckbox);
-            cityRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST))));
+            citiesLayout->addWidget(fortifiedCheckbox, gridRow, 5);
+            citiesLayout->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST))), gridRow, 6);
 
-            cityRow->addStretch();
-            citiesLayout->addLayout(cityRow);
+            gridRow++;
+        }
+
+        // Add fortification options for existing cities (walls only, no new city)
+        // These go in the right column with blank left column
+        for (const FortificationOption &option : m_fortificationOptions) {
+            // Left column: blank (columns 0, 1, 2)
+
+            // Spacer column
+            citiesLayout->setColumnMinimumWidth(3, 30);
+
+            // Right column: Wall icon + fortification checkbox + price
+            QLabel *wallIcon = new QLabel();
+            wallIcon->setPixmap(QPixmap(":/images/wallIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            citiesLayout->addWidget(wallIcon, gridRow, 4);
+
+            QCheckBox *fortCheckbox = new QCheckBox(QString("Add walls at %1").arg(option.territoryName));
+            connect(fortCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
+            m_fortificationCheckboxes[fortCheckbox] = option;
+            citiesLayout->addWidget(fortCheckbox, gridRow, 5);
+            citiesLayout->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(FORTIFICATION_BASE_COST))), gridRow, 6);
+
+            gridRow++;
         }
 
         citiesGroup->setLayout(citiesLayout);
         scrollLayout->addWidget(citiesGroup);
-    }
-
-    // ===== FORTIFICATIONS SECTION (for existing cities) =====
-    if (!m_fortificationOptions.isEmpty()) {
-        QGroupBox *fortificationsGroup = new QGroupBox("Fortify Existing Cities");
-        QVBoxLayout *fortificationsLayout = new QVBoxLayout();
-
-        for (const FortificationOption &option : m_fortificationOptions) {
-            QHBoxLayout *fortRow = new QHBoxLayout();
-
-            // Wall icon
-            QLabel *wallIcon = new QLabel();
-            QPixmap wallPixmap(":/images/wallIcon.png");
-            if (!wallPixmap.isNull()) {
-                wallIcon->setPixmap(wallPixmap.scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            } else {
-                wallIcon->setText("[W]"); // Fallback if icon doesn't load
-            }
-            fortRow->addWidget(wallIcon);
-
-            QCheckBox *fortCheckbox = new QCheckBox(QString("Add walls to city at %1").arg(option.territoryName));
-            connect(fortCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
-            m_fortificationCheckboxes[fortCheckbox] = option;
-
-            fortRow->addWidget(fortCheckbox);
-            fortRow->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(FORTIFICATION_BASE_COST))));
-            fortRow->addStretch();
-
-            fortificationsLayout->addLayout(fortRow);
-        }
-
-        fortificationsGroup->setLayout(fortificationsLayout);
-        scrollLayout->addWidget(fortificationsGroup);
     }
 
     // ===== GALLEYS SECTION =====

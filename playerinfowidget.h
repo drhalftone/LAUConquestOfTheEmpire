@@ -69,6 +69,11 @@ private:
     void moveLeaderWithTroops(GamePiece *leader, int rowDelta, int colDelta);
     void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);  // Territory-based movement
 
+    // Galley transport functions
+    void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley
+    void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);  // Leader disembarks
+    void showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player);  // Show dialog to choose disembark location
+
     // Leader movement via road (only costs 1 movement point)
     void moveLeaderViaRoad(GamePiece *leader, const Position &destination);
 

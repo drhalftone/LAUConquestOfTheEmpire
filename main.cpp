@@ -173,6 +173,86 @@ int main(int argc, char *argv[])
             QString toTerritory = mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
             qDebug() << "  Road:" << fromTerritory << "->" << toTerritory;
         }
+
+        // === COMBAT TESTING: Set up immediate combat scenario ===
+        qDebug() << "=== COMBAT TESTING: Setting up naval combat scenario ===";
+
+        // Find a sea territory adjacent to Player A's home
+        QString seaTerritory;
+        Position seaPos = {-1, -1};
+        for (const QString &neighbor : neighbors) {
+            Position pos = mapWidget->territoryNameToPosition(neighbor);
+            if (mapWidget->isSeaTerritory(pos.row, pos.col)) {
+                seaTerritory = neighbor;
+                seaPos = pos;
+                break;
+            }
+        }
+
+        if (!seaTerritory.isEmpty() && players.size() >= 2) {
+            Player *playerB = players[1];
+
+            qDebug() << "Setting up combat at sea territory:" << seaTerritory;
+
+            // Create galleys for both players at the sea territory
+            GalleyPiece *galleyA = new GalleyPiece(playerA->getId(), seaPos, playerA);
+            galleyA->setTerritoryName(seaTerritory);
+            playerA->addGalley(galleyA);
+
+            GalleyPiece *galleyB = new GalleyPiece(playerB->getId(), seaPos, playerB);
+            galleyB->setTerritoryName(seaTerritory);
+            playerB->addGalley(galleyB);
+
+            // Put a general on Player A's galley with some troops
+            GeneralPiece *generalA = playerA->getGenerals().first();
+            if (generalA) {
+                generalA->setPosition(seaPos);
+                generalA->setTerritoryName(seaTerritory);
+                generalA->setOnGalley(galleyA->getSerialNumber());
+
+                // Move some infantry to the galley
+                QList<int> legionIds;
+                int troopCount = 0;
+                for (InfantryPiece *inf : playerA->getInfantry()) {
+                    if (troopCount < 3) {
+                        inf->setPosition(seaPos);
+                        inf->setTerritoryName(seaTerritory);
+                        inf->setOnGalley(galleyA->getSerialNumber());
+                        legionIds.append(inf->getUniqueId());
+                        troopCount++;
+                    }
+                }
+                generalA->setLegion(legionIds);
+                qDebug() << "Player A general on galley with" << troopCount << "troops";
+            }
+
+            // Put a general on Player B's galley with some troops
+            GeneralPiece *generalB = playerB->getGenerals().first();
+            if (generalB) {
+                generalB->setPosition(seaPos);
+                generalB->setTerritoryName(seaTerritory);
+                generalB->setOnGalley(galleyB->getSerialNumber());
+
+                // Move some infantry to the galley
+                QList<int> legionIds;
+                int troopCount = 0;
+                for (InfantryPiece *inf : playerB->getInfantry()) {
+                    if (troopCount < 2) {
+                        inf->setPosition(seaPos);
+                        inf->setTerritoryName(seaTerritory);
+                        inf->setOnGalley(galleyB->getSerialNumber());
+                        legionIds.append(inf->getUniqueId());
+                        troopCount++;
+                    }
+                }
+                generalB->setLegion(legionIds);
+                qDebug() << "Player B general on galley with" << troopCount << "troops";
+            }
+
+            qDebug() << "Naval combat ready at" << seaTerritory << "- right-click to start combat!";
+        } else {
+            qDebug() << "Could not find suitable sea territory for combat testing";
+        }
     }
 
     // Update the map to show initial territory ownership
