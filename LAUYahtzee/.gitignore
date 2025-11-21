@@ -1,0 +1,47 @@
+# Qt project files
+*.pro.user
+*.pro.user.*
+
+# Build directories
+build/
+build-*/
+debug/
+release/
+
+# Object files
+*.o
+*.obj
+
+# MOC files
+moc_*.cpp
+moc_*.h
+
+# UI files
+ui_*.h
+
+# Qt resource files
+*.qrc.depends
+*.qrc
+
+# Executables
+*.exe
+*.app
+
+# Libraries
+*.lib
+*.a
+*.so
+*.dll
+*.dylib
+
+# Makefiles
+Makefile
+Makefile.*
+
+# IDE files
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
