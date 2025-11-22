@@ -484,6 +484,30 @@ int Player::getPieceCountAtTerritory(const QString &territoryName) const
     return getPiecesAtTerritory(territoryName).size();
 }
 
+GamePiece* Player::getPieceByUniqueId(int uniqueId) const
+{
+    // Search through all piece types
+    for (InfantryPiece *piece : m_infantry) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    for (CavalryPiece *piece : m_cavalry) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    for (CatapultPiece *piece : m_catapults) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    for (GalleyPiece *piece : m_galleys) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    for (GeneralPiece *piece : m_generals) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    for (CaesarPiece *piece : m_caesars) {
+        if (piece->getUniqueId() == uniqueId) return piece;
+    }
+    return nullptr;
+}
+
 int Player::getBuildingCountAtTerritory(const QString &territoryName) const
 {
     return getBuildingsAtTerritory(territoryName).size();

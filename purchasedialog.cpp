@@ -9,6 +9,7 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPainter>
+#include <QApplication>
 
 PurchaseDialog::PurchaseDialog(QChar player,
                                int availableMoney,
@@ -518,6 +519,13 @@ void PurchaseDialog::onPurchaseClicked()
         return;
     }
 
+    // In AI mode, skip the confirmation dialog
+    if (m_aiAutoMode) {
+        qDebug() << "AI Auto-Mode: Skipping confirmation dialog, accepting purchase directly";
+        accept();
+        return;
+    }
+
     // Create custom confirmation dialog with icon collages
     QDialog confirmDialog(this);
     confirmDialog.setWindowTitle("Confirm Purchase");
@@ -708,4 +716,172 @@ void PurchaseDialog::onPurchaseClicked()
     if (confirmDialog.exec() == QDialog::Accepted) {
         accept();
     }
+}
+
+// =============================================================================
+// AI Integration
+// =============================================================================
+
+QList<PurchaseDialog::PurchaseMenuItem> PurchaseDialog::getAvailableItems() const
+{
+    QList<PurchaseMenuItem> items;
+
+    // Infantry
+    if (m_availableInfantry > 0) {
+        PurchaseMenuItem item;
+        item.itemType = "Infantry";
+        item.currentPrice = getCurrentPrice(INFANTRY_BASE_COST);
+        item.maxQuantity = qMin(m_availableInfantry, m_availableMoney / item.currentPrice);
+        item.location = "Home Province";
+        items.append(item);
+    }
+
+    // Cavalry
+    if (m_availableCavalry > 0) {
+        PurchaseMenuItem item;
+        item.itemType = "Cavalry";
+        item.currentPrice = getCurrentPrice(CAVALRY_BASE_COST);
+        item.maxQuantity = qMin(m_availableCavalry, m_availableMoney / item.currentPrice);
+        item.location = "Home Province";
+        items.append(item);
+    }
+
+    // Catapults
+    if (m_availableCatapults > 0) {
+        PurchaseMenuItem item;
+        item.itemType = "Catapult";
+        item.currentPrice = getCurrentPrice(CATAPULT_BASE_COST);
+        item.maxQuantity = qMin(m_availableCatapults, m_availableMoney / item.currentPrice);
+        item.location = "Home Province";
+        items.append(item);
+    }
+
+    // Cities (one per territory option)
+    int cityPrice = getCurrentPrice(CITY_BASE_COST);
+    for (const CityPlacementOption &option : m_cityOptions) {
+        PurchaseMenuItem item;
+        item.itemType = "City";
+        item.currentPrice = cityPrice;
+        item.maxQuantity = (m_availableMoney >= cityPrice) ? 1 : 0;
+        item.location = option.territoryName;
+        item.position = option.position;
+        items.append(item);
+    }
+
+    // Fortified Cities (one per territory option)
+    int fortifiedCityPrice = getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST);
+    for (const CityPlacementOption &option : m_cityOptions) {
+        PurchaseMenuItem item;
+        item.itemType = "FortifiedCity";
+        item.currentPrice = fortifiedCityPrice;
+        item.maxQuantity = (m_availableMoney >= fortifiedCityPrice) ? 1 : 0;
+        item.location = option.territoryName;
+        item.position = option.position;
+        items.append(item);
+    }
+
+    // Fortifications for existing cities
+    int fortificationPrice = getCurrentPrice(FORTIFICATION_BASE_COST);
+    for (const FortificationOption &option : m_fortificationOptions) {
+        PurchaseMenuItem item;
+        item.itemType = "Fortification";
+        item.currentPrice = fortificationPrice;
+        item.maxQuantity = (m_availableMoney >= fortificationPrice) ? 1 : 0;
+        item.location = option.territoryName;
+        item.position = option.position;
+        items.append(item);
+    }
+
+    // Galleys (per sea border)
+    int galleyPrice = getCurrentPrice(GALLEY_BASE_COST);
+    int galleysAvailableToBuy = qMin(m_availableGalleys, MAX_GALLEYS - m_currentGalleyCount);
+    for (const GalleyPlacementOption &option : m_galleyOptions) {
+        PurchaseMenuItem item;
+        item.itemType = "Galley";
+        item.currentPrice = galleyPrice;
+        item.maxQuantity = qMin(galleysAvailableToBuy, m_availableMoney / galleyPrice);
+        item.location = QString("%1 (%2)").arg(option.seaTerritoryName).arg(option.direction);
+        item.position = option.seaPosition;
+        items.append(item);
+    }
+
+    return items;
+}
+
+void PurchaseDialog::setupAIAutoMode(int delayMs, const QMap<QString, int> &purchases)
+{
+    // Set AI mode flag to skip confirmation dialog
+    m_aiAutoMode = true;
+
+    // First timer: set the values so user can see them
+    QTimer::singleShot(delayMs, this, [this, purchases, delayMs]() {
+        qDebug() << "AI Auto-Mode: Interacting with purchase dialog";
+
+        // Set troop quantities
+        if (purchases.contains("Infantry") && m_infantrySpinBox) {
+            int qty = purchases["Infantry"];
+            m_infantrySpinBox->setValue(qty);
+            qDebug() << "AI Auto-Mode: Setting infantry to" << qty;
+        }
+        if (purchases.contains("Cavalry") && m_cavalrySpinBox) {
+            int qty = purchases["Cavalry"];
+            m_cavalrySpinBox->setValue(qty);
+            qDebug() << "AI Auto-Mode: Setting cavalry to" << qty;
+        }
+        if (purchases.contains("Catapult") && m_catapultSpinBox) {
+            int qty = purchases["Catapult"];
+            m_catapultSpinBox->setValue(qty);
+            qDebug() << "AI Auto-Mode: Setting catapults to" << qty;
+        }
+
+        // Check city checkboxes
+        for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
+            QString key = QString("City:%1").arg(it.value().territoryName);
+            if (purchases.contains(key) && purchases[key] > 0) {
+                it.key()->setChecked(true);
+                qDebug() << "AI Auto-Mode: Checking city at" << it.value().territoryName;
+            }
+        }
+
+        // Check fortified city checkboxes
+        for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
+            QString key = QString("FortifiedCity:%1").arg(it.value().territoryName);
+            if (purchases.contains(key) && purchases[key] > 0) {
+                it.key()->setChecked(true);
+                qDebug() << "AI Auto-Mode: Checking fortified city at" << it.value().territoryName;
+            }
+        }
+
+        // Check fortification checkboxes
+        for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
+            QString key = QString("Fortification:%1").arg(it.value().territoryName);
+            if (purchases.contains(key) && purchases[key] > 0) {
+                it.key()->setChecked(true);
+                qDebug() << "AI Auto-Mode: Checking fortification at" << it.value().territoryName;
+            }
+        }
+
+        // Set galley quantities
+        for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+            QString key = QString("Galley:%1").arg(it.value().seaTerritoryName);
+            if (purchases.contains(key)) {
+                it.key()->setValue(purchases[key]);
+                qDebug() << "AI Auto-Mode: Setting galleys at" << it.value().seaTerritoryName << "to" << purchases[key];
+            }
+        }
+
+        // Update totals display
+        updateTotals();
+
+        // Second timer: click the purchase button
+        // Since m_aiAutoMode is set, onPurchaseClicked() will skip confirmation and accept directly
+        QTimer::singleShot(delayMs, this, [this]() {
+            qDebug() << "AI Auto-Mode: Clicking purchase button";
+            if (m_purchaseButton) {
+                m_purchaseButton->click();
+            } else {
+                accept();
+            }
+        });
+    });
 }

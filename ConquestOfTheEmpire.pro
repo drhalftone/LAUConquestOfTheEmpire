@@ -22,7 +22,9 @@ SOURCES += \
     troopselectiondialog.cpp \
     combatdialog.cpp \
     citydestructiondialog.cpp \
-    laurollingdiewidget.cpp
+    laurollingdiewidget.cpp \
+    aiplayer.cpp \
+    aidebugwidget.cpp
 
 HEADERS += \
     mapwidget.h \
@@ -38,7 +40,9 @@ HEADERS += \
     troopselectiondialog.h \
     combatdialog.h \
     citydestructiondialog.h \
-    laurollingdiewidget.h
+    laurollingdiewidget.h \
+    aiplayer.h \
+    aidebugwidget.h
 
 RESOURCES += \
     resources.qrc

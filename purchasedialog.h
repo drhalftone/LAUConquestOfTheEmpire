@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QMap>
 #include <QString>
+#include <QTimer>
 #include "common.h"
 
 // Structure to hold information about territories available for city placement
@@ -78,6 +79,23 @@ public:
     // Get the purchase result
     PurchaseResult getPurchaseResult() const;
 
+    // === AI Integration ===
+    // Structure representing an item the AI can purchase
+    struct PurchaseMenuItem {
+        QString itemType;       // "Infantry", "Cavalry", "Catapult", "Galley", "City", "FortifiedCity", "Fortification"
+        int currentPrice;       // Price with inflation applied
+        int maxQuantity;        // Max that can be bought (limited by money and availability)
+        QString location;       // For placed items (city territory, galley sea border)
+        Position position;      // Grid position for placed items
+    };
+
+    // Get the menu of available items for AI to read
+    QList<PurchaseMenuItem> getAvailableItems() const;
+
+    // AI auto-mode: programmatically make purchases and accept dialog
+    // purchases maps item description to quantity (e.g., "Infantry" -> 2, "City:Roma" -> 1)
+    void setupAIAutoMode(int delayMs, const QMap<QString, int> &purchases);
+
 private slots:
     void updateTotals();
     void onPurchaseClicked();
@@ -135,6 +153,9 @@ private:
 
     // Purchase button
     QPushButton *m_purchaseButton;
+
+    // AI mode flag - skip confirmation dialog
+    bool m_aiAutoMode = false;
 };
 
 #endif // PURCHASEDIALOG_H

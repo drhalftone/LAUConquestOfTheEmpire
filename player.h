@@ -100,6 +100,9 @@ public:
     // Count pieces at a specific location
     int getPieceCountAtTerritory(const QString &territoryName) const;
 
+    // Find a piece by its unique ID (searches all piece types)
+    GamePiece* getPieceByUniqueId(int uniqueId) const;
+
     // Count buildings at a specific location
     int getBuildingCountAtTerritory(const QString &territoryName) const;
 
@@ -150,6 +153,7 @@ public:
     void startTurn();  // Called at the beginning of player's turn - resets movement for all pieces
     void endTurn();    // Called at the end of player's turn
     bool isMyTurn() const { return m_isMyTurn; }
+    void setMyTurn(bool isMyTurn) { m_isMyTurn = isMyTurn; }  // Set turn state without resetting movement
 
     // Tax collection - called at end of turn to collect taxes from owned territories
     // Returns the amount collected

@@ -214,3 +214,31 @@ void TroopSelectionDialog::updateSelectionCount()
         }
     }
 }
+
+void TroopSelectionDialog::setupAIAutoMode(int delayMs, const QList<int> &troopsToSelect)
+{
+    QTimer::singleShot(delayMs, this, [this, troopsToSelect]() {
+        qDebug() << "AI Auto-Mode: Interacting with troop selection dialog";
+
+        // First uncheck all checkboxes
+        for (auto it = m_checkboxes.begin(); it != m_checkboxes.end(); ++it) {
+            it.value()->setChecked(false);
+        }
+
+        // Then check the specified troops
+        for (int troopId : troopsToSelect) {
+            if (m_checkboxes.contains(troopId)) {
+                qDebug() << "AI Auto-Mode: Selecting troop ID" << troopId;
+                m_checkboxes[troopId]->setChecked(true);
+            }
+        }
+
+        // Update the count display
+        updateSelectionCount();
+
+        qDebug() << "AI Auto-Mode: Accepting dialog with" << troopsToSelect.size() << "troops selected";
+
+        // Accept the dialog (like clicking OK)
+        accept();
+    });
+}

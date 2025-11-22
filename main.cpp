@@ -4,6 +4,8 @@
 #include "scorewindow.h"
 #include "walletwindow.h"
 #include "combatdialog.h"
+#include "aiplayer.h"
+#include "aidebugwidget.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
@@ -97,9 +99,9 @@ int main(int argc, char *argv[])
         QVector<MapWidget::HomeProvinceInfo> homeProvinces = mapWidget->getRandomHomeProvinces();
 
         // Create players with the home provinces from the map
-        // DEBUG: Only 2 players for testing (original: 6 players)
+        // DEBUG: Only 1 player for testing AI movement (original: 6 players)
         QList<QChar> playerIds = {'A', 'B', 'C', 'D', 'E', 'F'};
-        int numPlayers = 2;  // DEBUG: reduced from 6
+        int numPlayers = 1;  // DEBUG: reduced to 1 for AI testing
 
         for (int i = 0; i < numPlayers && i < homeProvinces.size(); ++i) {
             Player *player = new Player(
@@ -116,15 +118,13 @@ int main(int argc, char *argv[])
     mapWidget->setPlayers(players);
     mapWidget->show();
 
-    // Start the current player's turn (only for new games, not loaded games)
+    // NOTE: We delay startTurn() until after AI setup so the signal connection exists
+    // Just set up the current player index for now
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
-        if (!loadGame) {
-            // New game - start the first player's turn
-            players[currentPlayerIndex]->startTurn();
-            mapWidget->setAtStartOfTurn(true);  // At the start of the turn
+        if (loadGame) {
+            // Loaded game - set turn state without resetting movement points
+            players[currentPlayerIndex]->setMyTurn(true);
         }
-        // For loaded games, the player's movement points are already loaded from file
-        // No need to call startTurn() which would reset them
         mapWidget->setCurrentPlayerIndex(currentPlayerIndex);
     }
 
@@ -247,9 +247,51 @@ int main(int argc, char *argv[])
         });
     }
 
+    // ========================================================================
+    // AI PLAYER SETUP (for testing)
+    // ========================================================================
+    QList<AIPlayer*> aiPlayers;
+    QList<AIDebugWidget*> debugWidgets;
+
+    // Create AI controller and debug widget for each player
+    for (int i = 0; i < players.size(); ++i) {
+        Player *player = players[i];
+
+        // Create AI player controller
+        AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+        ai->setStrategy(AIPlayer::Strategy::Economic);  // Prioritize highest value territories
+        ai->setDelayMs(1000);   // 1 second delay so you can see dialogs
+        ai->setStepMode(true);  // Step mode - click "Step" button to advance
+        aiPlayers.append(ai);
+
+        // Create debug widget for this AI
+        AIDebugWidget *debugWidget = new AIDebugWidget();
+        debugWidget->setAIPlayer(ai);
+        debugWidget->move(900 + i * 50, 100 + i * 50);  // Offset each window slightly
+        debugWidget->show();
+        debugWidgets.append(debugWidget);
+
+        // Connect player's turn signal to AI execution
+        // When player's turn starts, trigger the AI
+        QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+        qDebug() << "Created AI player and debug widget for Player" << player->getId();
+    }
+
+    // NOW start the first player's turn (after AI connections are set up)
+    if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
+        if (!loadGame) {
+            qDebug() << "Starting first player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
+            players[currentPlayerIndex]->startTurn();
+            mapWidget->setAtStartOfTurn(true);
+        }
+    }
+
     int result = a.exec();
 
     // Clean up
+    qDeleteAll(aiPlayers);
+    qDeleteAll(debugWidgets);
     qDeleteAll(players);
     delete infoWidget;
     delete mapWidget;

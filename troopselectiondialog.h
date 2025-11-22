@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QList>
 #include <QMap>
+#include <QTimer>
 #include "gamepiece.h"
 
 class TroopSelectionDialog : public QDialog
@@ -22,6 +23,10 @@ public:
 
     // Get the list of piece IDs that were checked
     QList<int> getSelectedTroopIds() const;
+
+    // AI Integration: Setup auto-mode to programmatically interact with dialog
+    // After delayMs, the AI will check the specified troops and accept the dialog
+    void setupAIAutoMode(int delayMs, const QList<int> &troopsToSelect);
 
 private slots:
     void onCheckboxToggled();
