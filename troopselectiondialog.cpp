@@ -14,6 +14,7 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
                                            QWidget *parent)
     : QDialog(parent)
     , m_troops(availableTroops)
+    , m_countLabel(nullptr)
 {
     setWindowTitle(QString("Select Troops for %1").arg(leaderName));
     setModal(true);
@@ -29,10 +30,17 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
     titleLabel->setFont(titleFont);
     mainLayout->addWidget(titleLabel);
 
-    // Instruction
-    QLabel *instructionLabel = new QLabel("Check the troops you want to move with this leader.\nTroops with 0 moves cannot move.");
+    // Instruction with limit info
+    QLabel *instructionLabel = new QLabel(QString("Check the troops you want to move with this leader.\nMaximum %1 troops per legion. Troops with 0 moves cannot move.").arg(MAX_LEGION_SIZE));
     instructionLabel->setWordWrap(true);
     mainLayout->addWidget(instructionLabel);
+
+    // Selection count label
+    m_countLabel = new QLabel();
+    QFont countFont = m_countLabel->font();
+    countFont.setBold(true);
+    m_countLabel->setFont(countFont);
+    mainLayout->addWidget(m_countLabel);
 
     mainLayout->addSpacing(10);
 
@@ -112,8 +120,14 @@ TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
         rowLayout->addWidget(checkbox);
         rowLayout->addStretch();
 
+        // Connect checkbox to update selection count and enforce limit
+        connect(checkbox, &QCheckBox::toggled, this, &TroopSelectionDialog::onCheckboxToggled);
+
         scrollLayout->addLayout(rowLayout);
     }
+
+    // Initialize the selection count display
+    updateSelectionCount();
 
     scrollLayout->addStretch();
     scrollWidget->setLayout(scrollLayout);
@@ -158,4 +172,45 @@ QList<int> TroopSelectionDialog::getSelectedTroopIds() const
     }
 
     return selectedIds;
+}
+
+void TroopSelectionDialog::onCheckboxToggled()
+{
+    updateSelectionCount();
+}
+
+void TroopSelectionDialog::updateSelectionCount()
+{
+    int selectedCount = 0;
+    for (auto it = m_checkboxes.begin(); it != m_checkboxes.end(); ++it) {
+        if (it.value()->isChecked()) {
+            selectedCount++;
+        }
+    }
+
+    // Update the count label
+    QString countText = QString("Selected: %1 / %2").arg(selectedCount).arg(MAX_LEGION_SIZE);
+    if (selectedCount > MAX_LEGION_SIZE) {
+        m_countLabel->setText(countText + " (TOO MANY!)");
+        m_countLabel->setStyleSheet("color: red;");
+    } else if (selectedCount == MAX_LEGION_SIZE) {
+        m_countLabel->setText(countText);
+        m_countLabel->setStyleSheet("color: orange;");
+    } else {
+        m_countLabel->setText(countText);
+        m_countLabel->setStyleSheet("color: green;");
+    }
+
+    // Enable/disable unchecked checkboxes based on whether limit is reached
+    bool atLimit = (selectedCount >= MAX_LEGION_SIZE);
+    for (auto it = m_checkboxes.begin(); it != m_checkboxes.end(); ++it) {
+        QCheckBox *checkbox = it.value();
+        if (!checkbox->isChecked()) {
+            // Disable unchecked boxes if at limit
+            checkbox->setEnabled(!atLimit);
+        } else {
+            // Always keep checked boxes enabled so user can uncheck them
+            checkbox->setEnabled(true);
+        }
+    }
 }

@@ -19,8 +19,9 @@ class MapWidget : public QWidget
 public:
     explicit MapWidget(QWidget *parent = nullptr);
 
-    static constexpr int COLUMNS = 12;
-    static constexpr int ROWS = 8;
+    // DEBUG: Smaller map for testing (original: 12x8)
+    static constexpr int COLUMNS = 7;
+    static constexpr int ROWS = 5;
 
     enum class TileType {
         Land,

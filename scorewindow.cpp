@@ -2,17 +2,38 @@
 #include <QPainter>
 #include <QFont>
 
-ScoreWindow::ScoreWindow(QWidget *parent)
+ScoreWindow::ScoreWindow(int numPlayers, QWidget *parent)
     : QWidget(parent)
+    , m_numPlayers(numPlayers)
 {
     setWindowTitle("Player Scores");
     setWindowFlags(Qt::Tool | Qt::WindowStaysOnTopHint);
-    resize(800, 120);  // Wider, shorter for single row
 
-    // Initialize scores to 0
-    for (char c = 'A'; c <= 'F'; ++c) {
-        m_scores[QChar(c)] = 0;
+    initializePlayers();
+}
+
+void ScoreWindow::initializePlayers()
+{
+    m_playerIds.clear();
+    m_scores.clear();
+
+    // Initialize player IDs and scores based on number of players
+    for (int i = 0; i < m_numPlayers && i < 6; ++i) {
+        QChar playerId = QChar('A' + i);
+        m_playerIds.append(playerId);
+        m_scores[playerId] = 0;
     }
+
+    // Resize window based on number of players (minimum width per player)
+    int windowWidth = qMax(400, m_numPlayers * 130);
+    resize(windowWidth, 120);
+}
+
+void ScoreWindow::setNumPlayers(int numPlayers)
+{
+    m_numPlayers = numPlayers;
+    initializePlayers();
+    update();
 }
 
 void ScoreWindow::updateScores(const QMap<QChar, int> &scores)
@@ -35,18 +56,17 @@ void ScoreWindow::paintEvent(QPaintEvent *event)
     painter.setFont(titleFont);
     painter.drawText(rect().adjusted(0, 5, 0, 0), Qt::AlignHCenter | Qt::AlignTop, "Player Scores");
 
-    // Calculate layout for single row (1 row, 6 columns)
+    // Calculate layout for single row based on number of players
     int startY = 30;
-    int cellWidth = width() / 6;
+    int cellWidth = m_numPlayers > 0 ? width() / m_numPlayers : width();
     int cellHeight = height() - startY - 10;
 
-    // Draw scores in a single row (1x6)
-    const QString players = "ABCDEF";
-    for (int i = 0; i < 6; ++i) {
+    // Draw scores in a single row
+    for (int i = 0; i < m_playerIds.size(); ++i) {
         int x = i * cellWidth;
         int y = startY;
 
-        QChar player = players[i];
+        QChar player = m_playerIds[i];
 
         // Get player color (dark)
         QColor playerColorDark;

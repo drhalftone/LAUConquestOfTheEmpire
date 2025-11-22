@@ -434,15 +434,15 @@ void MapWidget::paintEvent(QPaintEvent *event)
 
     // Draw player scores at the bottom
     int scoreY = menuBarHeight + (ROWS * m_tileHeight);
-    int cellWidth = width() / 6;
+    int numPlayers = m_players.size() > 0 ? m_players.size() : 1;
+    int cellWidth = width() / numPlayers;
     int cellHeight = scoreBarHeight - 10;
 
-    const QString players = "ABCDEF";
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < m_players.size(); ++i) {
         int x = i * cellWidth;
         int y = scoreY + 5;
 
-        QChar player = players[i];
+        QChar player = m_players[i]->getId();
 
         // Get player color (dark)
         QColor playerColorDark = getPlayerColor(player);
@@ -806,33 +806,38 @@ QVector<MapWidget::Piece*> MapWidget::getPiecesAtPosition(const Position &pos, Q
 void MapWidget::mousePressEvent(QMouseEvent *event)
 {
     // Handle right-click for territory movement menu
-    if (event->button() == Qt::RightButton && m_playerInfoWidget) {
-        // Get menu bar height
-        int menuBarHeight = m_menuBar ? m_menuBar->height() : 0;
+    if (event->button() == Qt::RightButton) {
+        // Accept the event to prevent contextMenuEvent from also firing
+        event->accept();
 
-        // Calculate which tile was clicked (adjust for menu bar)
-        int clickX = event->pos().x();
-        int clickY = event->pos().y() - menuBarHeight;
+        if (m_playerInfoWidget) {
+            // Get menu bar height
+            int menuBarHeight = m_menuBar ? m_menuBar->height() : 0;
 
-        int col = clickX / m_tileWidth;
-        int row = clickY / m_tileHeight;
+            // Calculate which tile was clicked (adjust for menu bar)
+            int clickX = event->pos().x();
+            int clickY = event->pos().y() - menuBarHeight;
 
-        // Check if click is within valid map bounds
-        if (row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
-            QString territoryName = getTerritoryNameAt(row, col);
+            int col = clickX / m_tileWidth;
+            int row = clickY / m_tileHeight;
 
-            // Get current player
-            QChar currentPlayer = '\0';
-            if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
-                currentPlayer = m_players[m_currentPlayerIndex]->getId();
-            }
+            // Check if click is within valid map bounds
+            if (row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+                QString territoryName = getTerritoryNameAt(row, col);
 
-            if (currentPlayer != '\0') {
-                // Convert click position to global screen coordinates for menu
-                QPoint globalPos = mapToGlobal(event->pos());
+                // Get current player
+                QChar currentPlayer = '\0';
+                if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+                    currentPlayer = m_players[m_currentPlayerIndex]->getId();
+                }
 
-                // Delegate to PlayerInfoWidget to handle the right-click
-                m_playerInfoWidget->handleTerritoryRightClick(territoryName, globalPos, currentPlayer);
+                if (currentPlayer != '\0') {
+                    // Convert click position to global screen coordinates for menu
+                    QPoint globalPos = mapToGlobal(event->pos());
+
+                    // Delegate to PlayerInfoWidget to handle the right-click
+                    m_playerInfoWidget->handleTerritoryRightClick(territoryName, globalPos, currentPlayer);
+                }
             }
         }
     }
@@ -852,8 +857,9 @@ void MapWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void MapWidget::contextMenuEvent(QContextMenuEvent *event)
 {
-    Q_UNUSED(event);
-    // Context menus removed - turn management now handled by PlayerInfoWidget
+    // Right-click context menus are handled by mousePressEvent -> handleTerritoryRightClick
+    // This prevents duplicate menus from appearing
+    event->accept();
 }
 
 bool MapWidget::event(QEvent *event)
@@ -1422,12 +1428,16 @@ void MapWidget::resizeEvent(QResizeEvent *event)
 void MapWidget::closeEvent(QCloseEvent *event)
 {
     // Warn user about losing game progress
-    QMessageBox::StandardButton reply;
-    reply = QMessageBox::warning(this, "Exit Game",
-                                "Closing the map will exit the game.\n\n"
-                                "All unsaved progress will be lost!\n\n"
-                                "Do you want to save your game before exiting?",
-                                QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Exit Game");
+    msgBox.setText("Closing the map will exit the game.\n\n"
+                   "All unsaved progress will be lost!\n\n"
+                   "Do you want to save your game before exiting?");
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    msgBox.setDefaultButton(QMessageBox::Save);
+
+    int reply = msgBox.exec();
 
     if (reply == QMessageBox::Save) {
         // Try to save the game
@@ -1438,12 +1448,15 @@ void MapWidget::closeEvent(QCloseEvent *event)
             qApp->quit();
         } else {
             // Save was blocked due to mid-turn, ask if they still want to exit
-            QMessageBox::StandardButton confirmExit;
-            confirmExit = QMessageBox::question(this, "Exit Without Saving",
-                                                "Cannot save mid-turn.\n\n"
-                                                "Do you still want to exit and lose your progress?",
-                                                QMessageBox::Yes | QMessageBox::No);
-            if (confirmExit == QMessageBox::Yes) {
+            QMessageBox confirmBox(this);
+            confirmBox.setWindowTitle("Exit Without Saving");
+            confirmBox.setText("Cannot save mid-turn.\n\n"
+                               "Do you still want to exit and lose your progress?");
+            confirmBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            confirmBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            confirmBox.setDefaultButton(QMessageBox::No);
+
+            if (confirmBox.exec() == QMessageBox::Yes) {
                 event->accept();
                 qApp->quit();
             } else {
@@ -1464,9 +1477,12 @@ void MapWidget::saveGame()
 {
     // Check if we're at the start of a turn
     if (!m_isAtStartOfTurn) {
-        QMessageBox::warning(this, "Cannot Save",
-                           "You can only save at the start of a player's turn.\n"
-                           "Please finish the current turn before saving.");
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Save");
+        msgBox.setText("You can only save at the start of a player's turn.\n"
+                       "Please finish the current turn before saving.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
         return;
     }
 
@@ -1701,11 +1717,17 @@ void MapWidget::saveGame()
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
-        QMessageBox::information(this, "Game Saved",
-                               QString("Game saved successfully to:\n%1").arg(fileName));
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Game Saved");
+        msgBox.setText(QString("Game saved successfully to:\n%1").arg(fileName));
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
     } else {
-        QMessageBox::critical(this, "Save Failed",
-                            QString("Failed to save game to:\n%1").arg(fileName));
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Save Failed");
+        msgBox.setText(QString("Failed to save game to:\n%1").arg(fileName));
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
     }
 }
 
@@ -1731,8 +1753,11 @@ void MapWidget::loadGame()
 
     QFile file(fileName);
     if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::critical(this, "Load Failed",
-                            QString("Failed to open file:\n%1").arg(fileName));
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Load Failed");
+        msgBox.setText(QString("Failed to open file:\n%1").arg(fileName));
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
         return;
     }
 
@@ -1741,14 +1766,20 @@ void MapWidget::loadGame()
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull() || !doc.isObject()) {
-        QMessageBox::critical(this, "Load Failed",
-                            "Invalid save file format.");
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Load Failed");
+        msgBox.setText("Invalid save file format.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
         return;
     }
 
-    QMessageBox::information(this, "Load Not Implemented",
-                           "Loading games is not yet fully implemented.\n"
-                           "This will require recreating the entire game state.");
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Load Not Implemented");
+    msgBox.setText("Loading games is not yet fully implemented.\n"
+                   "This will require recreating the entire game state.");
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.exec();
 
     // TODO: Implement full game state restoration
     // This is complex because we need to:
@@ -1761,27 +1792,31 @@ void MapWidget::loadGame()
 
 void MapWidget::showAbout()
 {
-    QMessageBox::about(this, "About Conquest of the Empire",
-                      "<h3>Conquest of the Empire</h3>"
-                      "<p>A strategic board game of territorial conquest.</p>"
-                      "<p><b>Game Features:</b></p>"
-                      "<ul>"
-                      "<li>6 Player support (A-F)</li>"
-                      "<li>Multiple unit types: Caesar, Generals, Infantry, Cavalry, Catapults, Galleys</li>"
-                      "<li>Territory control and taxation</li>"
-                      "<li>Cities, roads, and fortifications</li>"
-                      "<li>Combat system with general capture and ransom</li>"
-                      "<li>Economic management</li>"
-                      "</ul>"
-                      "<p><b>How to Play:</b></p>"
-                      "<ul>"
-                      "<li>Move your pieces by dragging them on the map</li>"
-                      "<li>Right-click pieces for context menus with special actions</li>"
-                      "<li>Collect taxes from owned territories at the end of your turn</li>"
-                      "<li>Purchase new units and buildings with your wealth</li>"
-                      "<li>Capture enemy generals and negotiate ransoms</li>"
-                      "</ul>"
-                      "<p>Developed with Qt C++</p>");
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("About Conquest of the Empire");
+    msgBox.setTextFormat(Qt::RichText);
+    msgBox.setText("<h3>Conquest of the Empire</h3>"
+                   "<p>A strategic board game of territorial conquest.</p>"
+                   "<p><b>Game Features:</b></p>"
+                   "<ul>"
+                   "<li>6 Player support (A-F)</li>"
+                   "<li>Multiple unit types: Caesar, Generals, Infantry, Cavalry, Catapults, Galleys</li>"
+                   "<li>Territory control and taxation</li>"
+                   "<li>Cities, roads, and fortifications</li>"
+                   "<li>Combat system with general capture and ransom</li>"
+                   "<li>Economic management</li>"
+                   "</ul>"
+                   "<p><b>How to Play:</b></p>"
+                   "<ul>"
+                   "<li>Move your pieces by dragging them on the map</li>"
+                   "<li>Right-click pieces for context menus with special actions</li>"
+                   "<li>Collect taxes from owned territories at the end of your turn</li>"
+                   "<li>Purchase new units and buildings with your wealth</li>"
+                   "<li>Capture enemy generals and negotiate ransoms</li>"
+                   "</ul>"
+                   "<p>Developed with Qt C++</p>");
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.exec();
 }
 
 void MapWidget::setTerritoryAt(int row, int col, const QString &name, int value, bool isLand)

@@ -30,6 +30,9 @@ public:
     void updatePlayerInfo(Player *player);
     void updateAllPlayers();
 
+    // End turn - can be called externally (e.g., from map context menu)
+    void endTurn();
+
     // Handle right-click on territory in map
     void handleTerritoryRightClick(const QString &territoryName, const QPoint &globalPos, QChar currentPlayer);
 
@@ -70,7 +73,8 @@ private:
     void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);  // Territory-based movement
 
     // Galley transport functions
-    void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley
+    void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley (auto-select)
+    void boardGalleySpecific(GamePiece *leader, const QString &seaTerritory, Player *player, GalleyPiece *galley);  // Leader boards specific galley
     void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);  // Leader disembarks
     void showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player);  // Show dialog to choose disembark location
 

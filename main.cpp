@@ -30,7 +30,7 @@ int main(int argc, char *argv[])
     startupDialog.setWindowTitle("Conquest of the Empire");
     startupDialog.setText("Welcome to Conquest of the Empire!");
     startupDialog.setInformativeText("Would you like to start a new game or load a saved game?");
-    startupDialog.setIcon(QMessageBox::Question);
+    startupDialog.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     QPushButton *newGameButton = startupDialog.addButton("New Game", QMessageBox::AcceptRole);
     QPushButton *loadGameButton = startupDialog.addButton("Load Game", QMessageBox::ActionRole);
@@ -78,9 +78,12 @@ int main(int argc, char *argv[])
     // If loading a game, load from file
     if (loadGame) {
         if (!loadGameFromFile(loadFileName, mapWidget, players, currentPlayerIndex)) {
-            QMessageBox::critical(nullptr, "Load Failed",
-                                 "Failed to load game from file.\n\n"
-                                 "Starting a new game instead.");
+            QMessageBox msgBox;
+            msgBox.setWindowTitle("Load Failed");
+            msgBox.setText("Failed to load game from file.\n\n"
+                           "Starting a new game instead.");
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             loadGame = false;
         }
     }
@@ -94,9 +97,11 @@ int main(int argc, char *argv[])
         QVector<MapWidget::HomeProvinceInfo> homeProvinces = mapWidget->getRandomHomeProvinces();
 
         // Create players with the home provinces from the map
+        // DEBUG: Only 2 players for testing (original: 6 players)
         QList<QChar> playerIds = {'A', 'B', 'C', 'D', 'E', 'F'};
+        int numPlayers = 2;  // DEBUG: reduced from 6
 
-        for (int i = 0; i < 6 && i < homeProvinces.size(); ++i) {
+        for (int i = 0; i < numPlayers && i < homeProvinces.size(); ++i) {
             Player *player = new Player(
                 playerIds[i],
                 homeProvinces[i].name  // Only need territory name now
@@ -123,138 +128,6 @@ int main(int argc, char *argv[])
         mapWidget->setCurrentPlayerIndex(currentPlayerIndex);
     }
 
-    // FOR TESTING: Create three cities adjacent to Player A's home city to test road functionality
-    if (!loadGame && players.size() >= 1) {
-        Player *playerA = players[0];
-        QString homeTerritory = playerA->getHomeProvinceName();
-        Position homePos = mapWidget->territoryNameToPosition(homeTerritory);
-
-        qDebug() << "=== TESTING: Setting up Player A with 3 adjacent cities ===";
-        qDebug() << "Player A home territory:" << homeTerritory << "at position" << homePos.row << "," << homePos.col;
-
-        // Get neighbors of home territory
-        QList<QString> neighbors = mapWidget->getGraph()->getNeighbors(homeTerritory);
-        qDebug() << "Home territory neighbors:" << neighbors;
-
-        // Take first 3 neighbors (or however many exist)
-        int citiesCreated = 0;
-        for (int i = 0; i < qMin(3, neighbors.size()); ++i) {
-            QString neighborTerritory = neighbors[i];
-            Position neighborPos = mapWidget->territoryNameToPosition(neighborTerritory);
-
-            // Skip if it's a sea territory
-            if (mapWidget->isSeaTerritory(neighborPos.row, neighborPos.col)) {
-                qDebug() << "  Skipping sea territory:" << neighborTerritory;
-                continue;
-            }
-
-            qDebug() << "  Creating city at" << neighborTerritory << "(" << neighborPos.row << "," << neighborPos.col << ")";
-
-            // Claim the territory
-            playerA->claimTerritory(neighborTerritory);
-
-            // Create a city
-            City *city = new City(playerA->getId(), neighborPos, neighborTerritory, false, playerA);
-            playerA->addCity(city);
-
-            citiesCreated++;
-        }
-
-        qDebug() << "Created" << citiesCreated << "cities for Player A";
-
-        // Update roads - this should create roads between home and the new cities
-        mapWidget->updateRoads();
-
-        qDebug() << "Player A now has" << playerA->getRoads().size() << "roads";
-        for (Road *road : playerA->getRoads()) {
-            Position fromPos = road->getFromPosition();
-            Position toPos = road->getToPosition();
-            QString fromTerritory = road->getTerritoryName();
-            QString toTerritory = mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
-            qDebug() << "  Road:" << fromTerritory << "->" << toTerritory;
-        }
-
-        // === COMBAT TESTING: Set up immediate combat scenario ===
-        qDebug() << "=== COMBAT TESTING: Setting up naval combat scenario ===";
-
-        // Find a sea territory adjacent to Player A's home
-        QString seaTerritory;
-        Position seaPos = {-1, -1};
-        for (const QString &neighbor : neighbors) {
-            Position pos = mapWidget->territoryNameToPosition(neighbor);
-            if (mapWidget->isSeaTerritory(pos.row, pos.col)) {
-                seaTerritory = neighbor;
-                seaPos = pos;
-                break;
-            }
-        }
-
-        if (!seaTerritory.isEmpty() && players.size() >= 2) {
-            Player *playerB = players[1];
-
-            qDebug() << "Setting up combat at sea territory:" << seaTerritory;
-
-            // Create galleys for both players at the sea territory
-            GalleyPiece *galleyA = new GalleyPiece(playerA->getId(), seaPos, playerA);
-            galleyA->setTerritoryName(seaTerritory);
-            playerA->addGalley(galleyA);
-
-            GalleyPiece *galleyB = new GalleyPiece(playerB->getId(), seaPos, playerB);
-            galleyB->setTerritoryName(seaTerritory);
-            playerB->addGalley(galleyB);
-
-            // Put a general on Player A's galley with some troops
-            GeneralPiece *generalA = playerA->getGenerals().first();
-            if (generalA) {
-                generalA->setPosition(seaPos);
-                generalA->setTerritoryName(seaTerritory);
-                generalA->setOnGalley(galleyA->getSerialNumber());
-
-                // Move some infantry to the galley
-                QList<int> legionIds;
-                int troopCount = 0;
-                for (InfantryPiece *inf : playerA->getInfantry()) {
-                    if (troopCount < 3) {
-                        inf->setPosition(seaPos);
-                        inf->setTerritoryName(seaTerritory);
-                        inf->setOnGalley(galleyA->getSerialNumber());
-                        legionIds.append(inf->getUniqueId());
-                        troopCount++;
-                    }
-                }
-                generalA->setLegion(legionIds);
-                qDebug() << "Player A general on galley with" << troopCount << "troops";
-            }
-
-            // Put a general on Player B's galley with some troops
-            GeneralPiece *generalB = playerB->getGenerals().first();
-            if (generalB) {
-                generalB->setPosition(seaPos);
-                generalB->setTerritoryName(seaTerritory);
-                generalB->setOnGalley(galleyB->getSerialNumber());
-
-                // Move some infantry to the galley
-                QList<int> legionIds;
-                int troopCount = 0;
-                for (InfantryPiece *inf : playerB->getInfantry()) {
-                    if (troopCount < 2) {
-                        inf->setPosition(seaPos);
-                        inf->setTerritoryName(seaTerritory);
-                        inf->setOnGalley(galleyB->getSerialNumber());
-                        legionIds.append(inf->getUniqueId());
-                        troopCount++;
-                    }
-                }
-                generalB->setLegion(legionIds);
-                qDebug() << "Player B general on galley with" << troopCount << "troops";
-            }
-
-            qDebug() << "Naval combat ready at" << seaTerritory << "- right-click to start combat!";
-        } else {
-            qDebug() << "Could not find suitable sea territory for combat testing";
-        }
-    }
-
     // Update the map to show initial territory ownership
     mapWidget->update();
 
@@ -267,7 +140,7 @@ int main(int argc, char *argv[])
 
     // Create score window (kept for backward compatibility but can be removed)
     // Scores are now shown in the MapWidget
-    ScoreWindow *scoreWindow = new ScoreWindow();
+    ScoreWindow *scoreWindow = new ScoreWindow(players.size());
     scoreWindow->setWindowTitle("Territory Scores");
     // Don't show it by default since scores are in map widget now
     // scoreWindow->show();

@@ -186,8 +186,8 @@ QGroupBox* PlayerInfoWidget::createEconomicsSection(Player *player)
         const QList<QString> &territories = player->getOwnedTerritories();
         for (const QString &territoryName : territories) {
             // Find the territory position by searching the map
-            for (int row = 0; row < 8; ++row) {
-                for (int col = 0; col < 12; ++col) {
+            for (int row = 0; row < MapWidget::ROWS; ++row) {
+                for (int col = 0; col < MapWidget::COLUMNS; ++col) {
                     if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
                         totalTaxValue += m_mapWidget->getTerritoryValueAt(row, col);
                         break;
@@ -999,12 +999,6 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
         }
     }
 
-    // Don't show menu for disputed territories (combat zone)
-    if (isDisputed) {
-        qDebug() << "Territory is disputed - not showing movement menu";
-        return;
-    }
-
     // Find the current player
     Player *player = nullptr;
     for (Player *p : m_players) {
@@ -1016,35 +1010,44 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
 
     if (!player) {
         qDebug() << "Could not find player" << currentPlayer;
+        // Still show basic menu even without valid player
+        QMenu menu(this);
+        menu.setTitle(QString("Territory: %1").arg(territoryName));
+        menu.addAction("Show Player Info", this, [this]() {
+            show(); raise(); activateWindow();
+        });
+        QAction *endTurnAction = menu.addAction("End Turn");
+        connect(endTurnAction, &QAction::triggered, this, &PlayerInfoWidget::endTurn, Qt::QueuedConnection);
+        menu.exec(globalPos);
         return;
     }
 
     // Find all leaders at this territory belonging to current player
+    // Skip movement options for disputed territories (combat zone)
     QList<GamePiece*> leaders;
-    QList<GamePiece*> piecesAtTerritory = player->getPiecesAtTerritory(territoryName);
+    if (!isDisputed) {
+        QList<GamePiece*> piecesAtTerritory = player->getPiecesAtTerritory(territoryName);
 
-    for (GamePiece *piece : piecesAtTerritory) {
-        GamePiece::Type type = piece->getType();
-        if (type == GamePiece::Type::Caesar ||
-            type == GamePiece::Type::General ||
-            type == GamePiece::Type::Galley) {
-            // Only include leaders with moves remaining
-            if (piece->getMovesRemaining() > 0) {
-                leaders.append(piece);
+        for (GamePiece *piece : piecesAtTerritory) {
+            GamePiece::Type type = piece->getType();
+            if (type == GamePiece::Type::Caesar ||
+                type == GamePiece::Type::General ||
+                type == GamePiece::Type::Galley) {
+                // Only include leaders with moves remaining
+                if (piece->getMovesRemaining() > 0) {
+                    leaders.append(piece);
+                }
             }
         }
-    }
-
-    if (leaders.isEmpty()) {
-        qDebug() << "No movable leaders found at" << territoryName;
-        return;
+    } else {
+        qDebug() << "Territory is disputed - skipping movement options";
     }
 
     qDebug() << "Found" << leaders.size() << "movable leaders at" << territoryName;
 
     // Create main menu
     QMenu menu(this);
-    menu.setTitle(QString("Leaders at %1").arg(territoryName));
+    menu.setTitle(QString("Territory: %1").arg(territoryName));
 
     // Add each leader with their movement submenu
     for (GamePiece *leader : leaders) {
@@ -1091,15 +1094,30 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
         visited.insert(territoryName);
         toVisit.append(territoryName);
 
-        // BFS through road network
-        while (!toVisit.isEmpty()) {
+        // BFS through road network (with safety limit)
+        int maxIterations = 100;  // Safety limit to prevent infinite loops
+        int iterations = 0;
+        while (!toVisit.isEmpty() && iterations < maxIterations) {
+            iterations++;
             QString currentTerritory = toVisit.takeFirst();
 
             // Look through all roads for connections from currentTerritory
             for (Road *road : player->getRoads()) {
                 QString territory1 = road->getTerritoryName();  // "from" territory
                 Position toPos = road->getToPosition();
+
+                // Validate position bounds
+                if (toPos.row < 0 || toPos.row >= MapWidget::ROWS ||
+                    toPos.col < 0 || toPos.col >= MapWidget::COLUMNS) {
+                    continue;
+                }
+
                 QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);  // "to" territory
+
+                // Skip if either territory name is empty
+                if (territory1.isEmpty() || territory2.isEmpty()) {
+                    continue;
+                }
 
                 QString nextTerritory;
                 if (territory1 == currentTerritory && !visited.contains(territory2)) {
@@ -1148,17 +1166,13 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                     QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(destinationName);
                     if (!enemyPieces.isEmpty()) {
                         hasCombat = true;
-                        qDebug() << "  Combat detected at" << destinationName << "- enemy pieces from player" << p->getId();
                         break;
                     }
                 }
             }
             if (!hasCombat && owner != '\0' && owner != player->getId()) {
                 hasCombat = true;  // Enemy-owned territory
-                qDebug() << "  Combat detected at" << destinationName << "- enemy-owned territory by player" << owner;
             }
-
-            qDebug() << "  Icon decision for" << destinationName << "- hasCombat:" << hasCombat << "hasCity:" << hasCity << "owner:" << owner;
 
             // Check for city (any player)
             if (!hasCombat) {
@@ -1208,10 +1222,10 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                 }
             }
 
-            QAction *moveToAction = leaderSubmenu->addAction(moveIcon, displayText);
-
             // Determine what moves are allowed based on piece type and galley status
             bool canMove = false;
+            QList<GalleyPiece*> availableGalleys;  // For sea territories with multiple galleys
+
             if (leader->getType() == GamePiece::Type::Galley) {
                 canMove = isSea;  // Galleys can only move to sea
             } else if (isOnGalley && leaderGalley) {
@@ -1222,32 +1236,53 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                 if (!isSea) {
                     canMove = true;  // Normal land movement
                 } else {
-                    // Check if there's a friendly galley at this sea zone that can transport
+                    // Collect all friendly galleys at this sea zone that can transport
                     for (GalleyPiece *galley : player->getGalleys()) {
                         if (galley->getTerritoryName() == destinationName &&
                             !galley->hasTransportedThisTurn() &&
                             !galley->hasLeaderAboard() &&
                             galley->getMovesRemaining() >= 0.5) {
+                            availableGalleys.append(galley);
                             canMove = true;
-                            break;
                         }
                     }
                 }
             }
-            moveToAction->setEnabled(canMove);
 
-            // Connect to movement handler
-            connect(moveToAction, &QAction::triggered, [this, leader, destinationName, isSea, player, isOnGalley, leaderGalley]() {
-                if (isOnGalley && leaderGalley && !isSea) {
-                    // Disembarking from galley to land
-                    disembarkFromGalley(leader, destinationName, leaderGalley, player);
-                } else if (isSea && leader->getType() != GamePiece::Type::Galley) {
-                    // Boarding a galley - special handling
-                    boardGalley(leader, destinationName, player);
-                } else {
-                    moveLeaderToTerritory(leader, destinationName);
+            // If multiple galleys available, create a submenu for galley selection
+            if (availableGalleys.size() > 1) {
+                QMenu *galleySubmenu = leaderSubmenu->addMenu(moveIcon, displayText);
+                for (GalleyPiece *galley : availableGalleys) {
+                    QString galleyText = QString("Board Galley %1 (%2 moves)")
+                        .arg(galley->getSerialNumber())
+                        .arg(galley->getMovesRemaining());
+                    QAction *galleyAction = galleySubmenu->addAction(QIcon(":/images/galleyIcon.png"), galleyText);
+                    connect(galleyAction, &QAction::triggered, [this, leader, destinationName, player, galley]() {
+                        boardGalleySpecific(leader, destinationName, player, galley);
+                    });
                 }
-            });
+            } else {
+                // Single destination or single galley - use regular action
+                QAction *moveToAction = leaderSubmenu->addAction(moveIcon, displayText);
+                moveToAction->setEnabled(canMove);
+
+                // Connect to movement handler
+                connect(moveToAction, &QAction::triggered, [this, leader, destinationName, isSea, player, isOnGalley, leaderGalley, availableGalleys]() {
+                    if (isOnGalley && leaderGalley && !isSea) {
+                        // Disembarking from galley to land
+                        disembarkFromGalley(leader, destinationName, leaderGalley, player);
+                    } else if (isSea && leader->getType() != GamePiece::Type::Galley) {
+                        // Boarding a galley - use the single available galley directly
+                        if (availableGalleys.size() == 1) {
+                            boardGalleySpecific(leader, destinationName, player, availableGalleys.first());
+                        } else {
+                            boardGalley(leader, destinationName, player);
+                        }
+                    } else {
+                        moveLeaderToTerritory(leader, destinationName);
+                    }
+                });
+            }
         }
     }
 
@@ -1279,10 +1314,23 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
         });
     }
 
-    // Show the menu (only if there are leaders or a city)
-    if (!leaders.isEmpty() || city) {
-        menu.exec(globalPos);
-    }
+    // Add separator before global actions
+    menu.addSeparator();
+
+    // Add "Show Player Info" action
+    QAction *showPlayerInfoAction = menu.addAction("Show Player Info");
+    connect(showPlayerInfoAction, &QAction::triggered, this, [this]() {
+        show();
+        raise();
+        activateWindow();
+    });
+
+    // Add "End Turn" action (queued connection allows menu to close first)
+    QAction *endTurnAction = menu.addAction("End Turn");
+    connect(endTurnAction, &QAction::triggered, this, &PlayerInfoWidget::endTurn, Qt::QueuedConnection);
+
+    // Always show the menu
+    menu.exec(globalPos);
 }
 
 // OLD GRID-BASED CODE REMOVED BELOW - Now using MapGraph for neighbor lookup
@@ -1943,11 +1991,14 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
 
             // If moving into combat, validate that troops are selected
             if (movingIntoCombat && selectedTroopIds.isEmpty()) {
-                QMessageBox::warning(this, "Cannot Move",
-                    QString("%1 cannot move into combat without troops!\n\n"
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Move");
+                msgBox.setText(QString("%1 cannot move into combat without troops!\n\n"
                             "Leaders must have at least one troop in their legion to enter combat.\n\n"
                             "Please select at least one troop or cancel the move.")
                     .arg(leaderName));
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
                 // Loop will continue - show dialog again
                 continue;
             }
@@ -1971,10 +2022,13 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
                     troopNames.append(QString("%1 #%2").arg(typeName).arg(troop->getSerialNumber()));
                 }
 
-                QMessageBox::warning(this, "Cannot Move",
-                    QString("The following troops have no moves remaining and cannot move:\n\n%1\n\n"
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Move");
+                msgBox.setText(QString("The following troops have no moves remaining and cannot move:\n\n%1\n\n"
                             "Please deselect these troops or try again.")
                     .arg(troopNames.join("\n")));
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
                 // Loop will continue - show dialog again
             } else {
                 // Valid selection - all selected troops have moves
@@ -2041,10 +2095,13 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
     } else {
         // No troops available, check if moving into combat
         if (movingIntoCombat) {
-            QMessageBox::warning(this, "Cannot Move",
-                QString("%1 cannot move into combat without troops!\n\n"
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle("Cannot Move");
+            msgBox.setText(QString("%1 cannot move into combat without troops!\n\n"
                         "Leaders must have at least one troop in their legion to enter combat.")
                 .arg(leaderName));
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             return;
         }
 
@@ -2085,23 +2142,60 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
 
     qDebug() << "Boarding galley at" << seaTerritory;
 
-    // Find an available galley at this sea territory
-    GalleyPiece *availableGalley = nullptr;
+    // Find all available galleys at this sea territory
+    QList<GalleyPiece*> availableGalleys;
     for (GalleyPiece *galley : player->getGalleys()) {
         if (galley->getTerritoryName() == seaTerritory &&
             !galley->hasTransportedThisTurn() &&
             !galley->hasLeaderAboard() &&
             galley->getMovesRemaining() >= 0.5) {
-            availableGalley = galley;
-            break;
+            availableGalleys.append(galley);
+        }
+    }
+
+    if (availableGalleys.isEmpty()) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("No available galley at this sea zone.\n\n"
+                       "A galley must have moves remaining and not have already transported a legion this turn.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
+
+    // Select which galley to board
+    GalleyPiece *availableGalley = nullptr;
+    if (availableGalleys.size() == 1) {
+        // Only one galley available, use it
+        availableGalley = availableGalleys.first();
+    } else {
+        // Multiple galleys - let user choose
+        QStringList galleyOptions;
+        for (GalleyPiece *galley : availableGalleys) {
+            QString option = QString("Galley %1 (%2 moves remaining)")
+                .arg(galley->getSerialNumber())
+                .arg(galley->getMovesRemaining());
+            galleyOptions.append(option);
+        }
+
+        bool ok;
+        QString selected = QInputDialog::getItem(this, "Select Galley",
+            QString("Multiple galleys available at %1.\nSelect which galley to board:").arg(seaTerritory),
+            galleyOptions, 0, false, &ok);
+
+        if (!ok || selected.isEmpty()) {
+            return;  // User cancelled
+        }
+
+        // Find the selected galley
+        int selectedIndex = galleyOptions.indexOf(selected);
+        if (selectedIndex >= 0 && selectedIndex < availableGalleys.size()) {
+            availableGalley = availableGalleys[selectedIndex];
         }
     }
 
     if (!availableGalley) {
-        QMessageBox::warning(this, "Cannot Board",
-            "No available galley at this sea zone.\n\n"
-            "A galley must have moves remaining and not have already transported a legion this turn.");
-        return;
+        return;  // Should not happen, but safety check
     }
 
     // Get current position info
@@ -2150,9 +2244,12 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
         // Validate troops have moves remaining
         for (GamePiece *troop : allTroops) {
             if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
-                QMessageBox::warning(this, "Cannot Board",
-                    "Some selected troops have no moves remaining.\n"
-                    "Please deselect troops without moves.");
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Board");
+                msgBox.setText("Some selected troops have no moves remaining.\n"
+                               "Please deselect troops without moves.");
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
                 return;
             }
         }
@@ -2195,6 +2292,122 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
              << "with" << selectedTroopIds.size() << "troops";
 
     // Update display (no disembark dialog - player will choose to disembark later)
+    updateAllPlayers();
+    if (m_mapWidget) {
+        m_mapWidget->update();
+    }
+}
+
+void PlayerInfoWidget::boardGalleySpecific(GamePiece *leader, const QString &seaTerritory, Player *player, GalleyPiece *galley)
+{
+    if (!leader || !player || !galley || !m_mapWidget) return;
+
+    qDebug() << "Boarding specific galley" << galley->getSerialNumber() << "at" << seaTerritory;
+
+    // Verify the galley is still available
+    if (galley->hasTransportedThisTurn() || galley->hasLeaderAboard() || galley->getMovesRemaining() < 0.5) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("This galley is no longer available for boarding.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
+
+    // Get current position info
+    QString currentTerritory = leader->getTerritoryName();
+    Position currentPos = m_mapWidget->territoryNameToPosition(currentTerritory);
+    Position seaPos = m_mapWidget->territoryNameToPosition(seaTerritory);
+
+    // Get leader name for display
+    QString leaderName;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = QString("Caesar %1").arg(leader->getPlayer());
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+        leaderName = QString("General %1 #%2").arg(leader->getPlayer()).arg(general->getNumber());
+    }
+
+    // Get all troops at current territory
+    QList<GamePiece*> allPiecesAtTerritory = player->getPiecesAtTerritory(currentTerritory);
+    QList<GamePiece*> allTroops;
+    for (GamePiece *piece : allPiecesAtTerritory) {
+        GamePiece::Type type = piece->getType();
+        if (type == GamePiece::Type::Infantry ||
+            type == GamePiece::Type::Cavalry ||
+            type == GamePiece::Type::Catapult) {
+            allTroops.append(piece);
+        }
+    }
+
+    // Get current legion
+    QList<int> legionIds;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::General) {
+        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+    }
+
+    // Show troop selection dialog
+    QList<int> selectedTroopIds;
+    if (!allTroops.isEmpty()) {
+        TroopSelectionDialog dialog(leaderName + " - Select troops to board galley " + galley->getSerialNumber(), allTroops, legionIds, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;  // User cancelled
+        }
+        selectedTroopIds = dialog.getSelectedTroopIds();
+
+        // Validate troops have moves remaining
+        for (GamePiece *troop : allTroops) {
+            if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Board");
+                msgBox.setText("Some selected troops have no moves remaining.\n"
+                               "Please deselect troops without moves.");
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
+                return;
+            }
+        }
+    }
+
+    // Update legion
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        static_cast<CaesarPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<CaesarPiece*>(leader)->setLastTerritory(currentPos);
+    } else if (leader->getType() == GamePiece::Type::General) {
+        static_cast<GeneralPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<GeneralPiece*>(leader)->setLastTerritory(currentPos);
+    }
+
+    // Move leader to sea territory (aboard galley)
+    leader->setTerritoryName(seaTerritory);
+    leader->setPosition(seaPos);
+
+    // Track that leader is on galley
+    leader->setOnGalley(galley->getSerialNumber());
+
+    // Deduct 0.5 move from leader for boarding
+    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+
+    // Move selected troops to sea territory
+    for (GamePiece *troop : allTroops) {
+        if (selectedTroopIds.contains(troop->getUniqueId())) {
+            troop->setTerritoryName(seaTerritory);
+            troop->setPosition(seaPos);
+            troop->setOnGalley(galley->getSerialNumber());
+            troop->setMovesRemaining(troop->getMovesRemaining() - 0.5);  // 0.5 move for boarding
+        }
+    }
+
+    // Mark galley as having leader aboard (but not yet transported - that happens on disembark)
+    galley->setLeaderAboard(leader->getUniqueId());
+    galley->setMovesRemaining(galley->getMovesRemaining() - 0.5);  // 0.5 moves for pickup
+
+    qDebug() << "Leader" << leaderName << "boarded galley" << galley->getSerialNumber()
+             << "with" << selectedTroopIds.size() << "troops";
+
+    // Update display
     updateAllPlayers();
     if (m_mapWidget) {
         m_mapWidget->update();
@@ -2423,9 +2636,12 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
 
         // If moving into combat, validate that legion is not empty
         if (hasEnemies && selectedTroopIds.isEmpty()) {
-            QMessageBox::warning(dialog, "Cannot Enter Combat",
-                "Cannot enter combat without troops.\n\n"
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Enter Combat");
+            msgBox.setText("Cannot enter combat without troops.\n\n"
                 "A General/Caesar cannot fight alone. Please select at least one troop to form a legion.");
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             // Dialog stays open, loop continues
             continue;
         }
@@ -2456,7 +2672,11 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
             QString errorMsg = "The following troops have no moves remaining:\n\n";
             errorMsg += troopsWithoutMoves.join("\n");
             errorMsg += "\n\nPlease uncheck troops without moves and try again.";
-            QMessageBox::warning(dialog, "Cannot Move", errorMsg);
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Move");
+            msgBox.setText(errorMsg);
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             // Dialog stays open, loop continues
         } else {
             // All validation passed
@@ -2518,9 +2738,12 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
                                  .arg(ourTroops.join(", "))
                                  .arg(enemyTroops.join(", "));
 
-        QMessageBox::StandardButton reply = QMessageBox::question(this, "Enter Combat", warningMsg,
-                                                                   QMessageBox::Yes | QMessageBox::No);
-        if (reply != QMessageBox::Yes) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Enter Combat");
+        msgBox.setText(warningMsg);
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        if (msgBox.exec() != QMessageBox::Yes) {
             delete dialog;
             return;  // User cancelled combat entry
         }
@@ -2669,9 +2892,12 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
 
         // If moving into combat, validate that legion is not empty
         if (hasEnemies && selectedTroopIds.isEmpty()) {
-            QMessageBox::warning(dialog, "Cannot Enter Combat",
-                "Cannot enter combat without troops.\n\n"
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Enter Combat");
+            msgBox.setText("Cannot enter combat without troops.\n\n"
                 "A General/Caesar cannot fight alone. Please select at least one troop to form a legion.");
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             // Dialog stays open, loop continues
             continue;
         }
@@ -2702,7 +2928,11 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
             QString errorMsg = "The following troops have no moves remaining:\n\n";
             errorMsg += troopsWithoutMoves.join("\n");
             errorMsg += "\n\nPlease uncheck troops without moves and try again.";
-            QMessageBox::warning(dialog, "Cannot Move", errorMsg);
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Move");
+            msgBox.setText(errorMsg);
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
             // Dialog stays open, loop continues
         } else {
             // All validation passed
@@ -2764,9 +2994,12 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
                                  .arg(ourTroops.join(", "))
                                  .arg(enemyTroops.join(", "));
 
-        QMessageBox::StandardButton reply = QMessageBox::question(this, "Enter Combat (Via Road)", warningMsg,
-                                                                   QMessageBox::Yes | QMessageBox::No);
-        if (reply != QMessageBox::Yes) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Enter Combat (Via Road)");
+        msgBox.setText(warningMsg);
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        if (msgBox.exec() != QMessageBox::Yes) {
             delete dialog;
             return;  // User cancelled combat entry
         }
@@ -2843,7 +3076,7 @@ QString PlayerInfoWidget::getTerritoryNameAt(int row, int col) const
 
 QString PlayerInfoWidget::getTroopInfoAt(int row, int col) const
 {
-    if (row < 0 || row >= 8 || col < 0 || col >= 12) {
+    if (row < 0 || row >= MapWidget::ROWS || col < 0 || col >= MapWidget::COLUMNS) {
         return "";
     }
 
@@ -2981,6 +3214,15 @@ void PlayerInfoWidget::closeEvent(QCloseEvent *event)
 {
     saveSettings();
     event->accept();
+}
+
+void PlayerInfoWidget::endTurn()
+{
+    // Public method to end turn - shows the widget and triggers the end turn logic
+    show();
+    raise();
+    activateWindow();
+    onEndTurnClicked();
 }
 
 void PlayerInfoWidget::onEndTurnClicked()
