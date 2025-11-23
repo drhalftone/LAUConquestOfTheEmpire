@@ -22,7 +22,8 @@ PurchaseDialog::PurchaseDialog(QChar player,
                                int availableCavalry,
                                int availableCatapults,
                                int availableGalleys,
-                               QWidget *parent)
+                               QWidget *parent,
+                               bool combatUnitsOnly)
     : QDialog(parent)
     , m_player(player)
     , m_availableMoney(availableMoney)
@@ -36,8 +37,13 @@ PurchaseDialog::PurchaseDialog(QChar player,
     , m_cityOptions(cityOptions)
     , m_fortificationOptions(fortificationOptions)
     , m_galleyOptions(galleyOptions)
+    , m_combatUnitsOnly(combatUnitsOnly)
 {
-    setWindowTitle(QString("Purchase Phase - Player %1").arg(player));
+    if (combatUnitsOnly) {
+        setWindowTitle(QString("Build Your Army - Player %1").arg(player));
+    } else {
+        setWindowTitle(QString("Purchase Phase - Player %1").arg(player));
+    }
     setModal(true);
     setWindowFlags(windowFlags() & ~Qt::WindowCloseButtonHint);
     resize(700, 600);
@@ -105,7 +111,10 @@ void PurchaseDialog::setupUI()
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
     // Title
-    QLabel *titleLabel = new QLabel(QString("Player %1 - Purchase Units & Buildings").arg(m_player));
+    QString titleText = m_combatUnitsOnly
+        ? QString("Player %1 - Build Your Army").arg(m_player)
+        : QString("Player %1 - Purchase Units & Buildings").arg(m_player);
+    QLabel *titleLabel = new QLabel(titleText);
     QFont titleFont = titleLabel->font();
     titleFont.setPointSize(16);
     titleFont.setBold(true);
@@ -191,7 +200,8 @@ void PurchaseDialog::setupUI()
 
     // ===== CITIES SECTION =====
     // Combine new cities and fortifications into one group with two columns
-    if (!m_cityOptions.isEmpty() || !m_fortificationOptions.isEmpty()) {
+    // Skip if in combat units only mode
+    if (!m_combatUnitsOnly && (!m_cityOptions.isEmpty() || !m_fortificationOptions.isEmpty())) {
         QGroupBox *citiesGroup = new QGroupBox("Cities");
         QGridLayout *citiesLayout = new QGridLayout();
 
@@ -277,7 +287,8 @@ void PurchaseDialog::setupUI()
     }
 
     // ===== GALLEYS SECTION =====
-    if (!m_galleyOptions.isEmpty()) {
+    // Skip if in combat units only mode
+    if (!m_combatUnitsOnly && !m_galleyOptions.isEmpty()) {
         QGroupBox *galleysGroup = new QGroupBox(
             QString("Galleys (Naval Units) - You own %1/%2, %3 available in box")
             .arg(m_currentGalleyCount)
@@ -519,17 +530,15 @@ void PurchaseDialog::onPurchaseClicked()
         return;
     }
 
-    // In AI mode, skip the confirmation dialog
-    if (m_aiAutoMode) {
-        qDebug() << "AI Auto-Mode: Skipping confirmation dialog, accepting purchase directly";
-        accept();
-        return;
-    }
-
     // Create custom confirmation dialog with icon collages
     QDialog confirmDialog(this);
-    confirmDialog.setWindowTitle("Confirm Purchase");
+    confirmDialog.setWindowTitle(m_aiAutoMode ? "AI Purchase Summary" : "Confirm Purchase");
     confirmDialog.setModal(true);
+
+    // In AI mode, auto-close after delay so observers can see
+    if (m_aiAutoMode) {
+        QTimer::singleShot(1500, &confirmDialog, &QDialog::accept);
+    }
 
     QVBoxLayout *mainLayout = new QVBoxLayout(&confirmDialog);
 
@@ -698,18 +707,24 @@ void PurchaseDialog::onPurchaseClicked()
 
     mainLayout->addSpacing(10);
 
-    QLabel *questionLabel = new QLabel("Are you sure you want to complete this purchase?");
+    QLabel *questionLabel = new QLabel(m_aiAutoMode ?
+        "AI has completed purchasing." :
+        "Are you sure you want to complete this purchase?");
     mainLayout->addWidget(questionLabel);
 
     // Buttons
     QHBoxLayout *buttonLayout = new QHBoxLayout();
-    QPushButton *yesButton = new QPushButton("Yes");
-    QPushButton *noButton = new QPushButton("No");
+    QPushButton *yesButton = new QPushButton(m_aiAutoMode ? "OK" : "Yes");
     connect(yesButton, &QPushButton::clicked, &confirmDialog, &QDialog::accept);
-    connect(noButton, &QPushButton::clicked, &confirmDialog, &QDialog::reject);
     buttonLayout->addStretch();
     buttonLayout->addWidget(yesButton);
-    buttonLayout->addWidget(noButton);
+
+    if (!m_aiAutoMode) {
+        QPushButton *noButton = new QPushButton("No");
+        connect(noButton, &QPushButton::clicked, &confirmDialog, &QDialog::reject);
+        buttonLayout->addWidget(noButton);
+    }
+
     buttonLayout->addStretch();
     mainLayout->addLayout(buttonLayout);
 
@@ -828,8 +843,8 @@ void PurchaseDialog::setupAIAutoMode(int delayMs, const QMap<QString, int> &purc
             m_cavalrySpinBox->setValue(qty);
             qDebug() << "AI Auto-Mode: Setting cavalry to" << qty;
         }
-        if (purchases.contains("Catapult") && m_catapultSpinBox) {
-            int qty = purchases["Catapult"];
+        if (purchases.contains("Catapults") && m_catapultSpinBox) {
+            int qty = purchases["Catapults"];
             m_catapultSpinBox->setValue(qty);
             qDebug() << "AI Auto-Mode: Setting catapults to" << qty;
         }

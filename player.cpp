@@ -2,13 +2,13 @@
 #include "mapwidget.h"
 #include <QDebug>
 
-Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
+Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool minimalSetup)
     : QObject(parent)
     , m_id(id)
     , m_color(getColorForPlayer(id))
     , m_wallet(100)  // Start each player with 100 talents
     , m_homeProvinceName(homeProvinceName)
-    , m_hasHomeFortifiedCity(true)  // Every player starts with a fortified city
+    , m_hasHomeFortifiedCity(!minimalSetup)  // Only if not minimal setup
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()
 {
     qDebug() << "Creating Player" << m_id << "with home province:" << m_homeProvinceName;
@@ -22,6 +22,11 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent)
     caesar->setTerritoryName(m_homeProvinceName);
     qDebug() << "  Caesar created, territory name:" << caesar->getTerritoryName();
     m_caesars.append(caesar);
+
+    // Skip the rest for minimal setup (Quick Battle mode)
+    if (minimalSetup) {
+        return;
+    }
 
     // Create 6 Generals at home province (per 1984 rules)
     for (int i = 1; i <= 6; ++i) {

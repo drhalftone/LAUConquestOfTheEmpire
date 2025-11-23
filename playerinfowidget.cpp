@@ -26,6 +26,8 @@
 #include <QMessageBox>
 #include <QDialog>
 #include <QCheckBox>
+#include <QRandomGenerator>
+#include <QSet>
 #include <QLabel>
 #include <QListWidget>
 
@@ -2758,6 +2760,24 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
     // Show troop selection dialog and loop until valid or cancelled
     TroopSelectionDialog *dialog = new TroopSelectionDialog(leaderName, troopsAtPosition, currentLegion, this);
 
+    // AI Auto-Mode: setup timer to interact with dialog and accept
+    if (m_aiAutoMode && m_aiPlayer) {
+        // Use AIPlayer's decideLegionComposition() for intelligent troop selection
+        QList<int> troopsToSelect = m_aiPlayer->decideLegionComposition(leader, troopsAtPosition);
+        qDebug() << "AI Auto-Mode (road): Legion composition decided -" << troopsToSelect.size() << "troop(s) selected";
+        dialog->setupAIAutoMode(m_aiAutoModeDelayMs, troopsToSelect);
+    } else if (m_aiAutoMode) {
+        // Fallback: select all troops in the general's current legion that have moves
+        QList<int> troopsToSelect;
+        for (GamePiece *troop : troopsAtPosition) {
+            if (currentLegion.contains(troop->getUniqueId()) && troop->getMovesRemaining() > 0) {
+                troopsToSelect.append(troop->getUniqueId());
+            }
+        }
+        qDebug() << "AI Auto-Mode (road fallback): Selecting" << troopsToSelect.size() << "legion troop(s)";
+        dialog->setupAIAutoMode(m_aiAutoModeDelayMs, troopsToSelect);
+    }
+
     bool validSelection = false;
     QList<int> selectedTroopIds;
 
@@ -2772,6 +2792,13 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const Position &dest
 
         // If moving into combat, validate that legion is not empty
         if (hasEnemies && selectedTroopIds.isEmpty()) {
+            // AI auto-mode: just cancel the move instead of showing error dialog
+            if (m_aiAutoMode) {
+                qDebug() << "AI Auto-Mode (road): Cannot move into combat without troops, cancelling";
+                delete dialog;
+                return;
+            }
+
             QMessageBox msgBox(dialog);
             msgBox.setWindowTitle("Cannot Enter Combat");
             msgBox.setText("Cannot enter combat without troops.\n\n"
@@ -3515,64 +3542,109 @@ void PlayerInfoWidget::onEndTurnClicked()
 
     // AI Auto-Mode: Decide what to purchase and interact with dialog
     if (m_aiAutoMode) {
-        qDebug() << "AI Auto-Mode: Deciding purchases...";
+        qDebug() << "AI Auto-Mode: Deciding purchases (random selection)...";
 
         // Get available items from the dialog
         QList<PurchaseDialog::PurchaseMenuItem> menu = purchaseDialog->getAvailableItems();
 
-        // Simple rule: Buy up to 2 of each troop type
-        // Priority: Catapults > Cavalry > Infantry
         QMap<QString, int> purchases;
         int remainingMoney = currentPlayer->getWallet();
 
-        // Find prices and availability from menu
-        int catapultPrice = 0, cavalryPrice = 0, infantryPrice = 0;
-        int catapultMax = 0, cavalryMax = 0, infantryMax = 0;
+        // Track what we've already purchased (for one-time items like cities)
+        QSet<QString> purchasedLocations;  // Tracks "City:Roma", "FortifiedCity:Roma", etc.
 
+        // Track troop purchase counts against max quantity
+        QMap<QString, int> troopPurchaseCounts;  // "Infantry" -> count purchased so far
+
+        // Build a map of troop prices and max quantities for quick lookup
+        QMap<QString, int> troopPrices;
+        QMap<QString, int> troopMaxQuantities;
         for (const PurchaseDialog::PurchaseMenuItem &item : menu) {
-            if (item.itemType == "Catapult") {
-                catapultPrice = item.currentPrice;
-                catapultMax = item.maxQuantity;
-            } else if (item.itemType == "Cavalry") {
-                cavalryPrice = item.currentPrice;
-                cavalryMax = item.maxQuantity;
-            } else if (item.itemType == "Infantry") {
-                infantryPrice = item.currentPrice;
-                infantryMax = item.maxQuantity;
+            if (item.itemType == "Infantry" || item.itemType == "Cavalry" || item.itemType == "Catapult") {
+                troopPrices[item.itemType] = item.currentPrice;
+                troopMaxQuantities[item.itemType] = item.maxQuantity;
             }
         }
 
-        // Buy catapults first (up to 2)
-        if (catapultPrice > 0 && catapultMax > 0) {
-            int qty = qMin(2, qMin(catapultMax, remainingMoney / catapultPrice));
-            if (qty > 0) {
-                purchases["Catapult"] = qty;
-                remainingMoney -= qty * catapultPrice;
-                qDebug() << "AI Auto-Mode: Will buy" << qty << "catapult(s) for" << qty * catapultPrice;
+        // Keep buying random affordable items until we can't afford anything
+        bool canBuySomething = true;
+        while (canBuySomething && remainingMoney > 0) {
+            // Build list of currently affordable items
+            QList<int> affordableIndices;
+            for (int i = 0; i < menu.size(); ++i) {
+                const PurchaseDialog::PurchaseMenuItem &item = menu[i];
+
+                // Skip if we can't afford it
+                if (item.currentPrice > remainingMoney) continue;
+
+                // Generate the purchase key for this item
+                QString purchaseKey;
+                if (item.itemType == "Infantry" || item.itemType == "Cavalry" || item.itemType == "Catapult") {
+                    purchaseKey = item.itemType;
+                    // Check if we've already bought the max quantity
+                    if (troopPurchaseCounts.value(purchaseKey, 0) >= troopMaxQuantities.value(purchaseKey, 0)) {
+                        continue;
+                    }
+                } else if (item.itemType == "City" || item.itemType == "FortifiedCity") {
+                    purchaseKey = QString("%1:%2").arg(item.itemType).arg(item.location);
+                    // One-time purchase - skip if already bought
+                    if (purchasedLocations.contains(purchaseKey)) continue;
+                    // Also skip FortifiedCity if we already bought City at same location
+                    if (item.itemType == "FortifiedCity" && purchasedLocations.contains(QString("City:%1").arg(item.location))) continue;
+                    // Also skip City if we already bought FortifiedCity at same location
+                    if (item.itemType == "City" && purchasedLocations.contains(QString("FortifiedCity:%1").arg(item.location))) continue;
+                } else if (item.itemType == "Fortification") {
+                    purchaseKey = QString("Fortification:%1").arg(item.location);
+                    // One-time purchase - skip if already bought
+                    if (purchasedLocations.contains(purchaseKey)) continue;
+                } else if (item.itemType == "Galley") {
+                    // For galleys, extract just the sea territory name (not the direction)
+                    QString seaTerritory = item.location.split(" (").first();
+                    purchaseKey = QString("Galley:%1").arg(seaTerritory);
+                    // TODO: Track galley counts per location if needed
+                }
+
+                affordableIndices.append(i);
             }
+
+            if (affordableIndices.isEmpty()) {
+                canBuySomething = false;
+                break;
+            }
+
+            // Randomly select one affordable item
+            int randomIndex = QRandomGenerator::global()->bounded(affordableIndices.size());
+            int menuIndex = affordableIndices[randomIndex];
+            const PurchaseDialog::PurchaseMenuItem &selectedItem = menu[menuIndex];
+
+            // Generate the purchase key and add to purchases
+            QString purchaseKey;
+            if (selectedItem.itemType == "Infantry" || selectedItem.itemType == "Cavalry" || selectedItem.itemType == "Catapult") {
+                purchaseKey = selectedItem.itemType;
+                purchases[purchaseKey] = purchases.value(purchaseKey, 0) + 1;
+                troopPurchaseCounts[purchaseKey] = troopPurchaseCounts.value(purchaseKey, 0) + 1;
+                qDebug() << "AI Auto-Mode: Will buy 1" << purchaseKey << "for" << selectedItem.currentPrice;
+            } else if (selectedItem.itemType == "City" || selectedItem.itemType == "FortifiedCity") {
+                purchaseKey = QString("%1:%2").arg(selectedItem.itemType).arg(selectedItem.location);
+                purchases[purchaseKey] = 1;
+                purchasedLocations.insert(purchaseKey);
+                qDebug() << "AI Auto-Mode: Will buy" << selectedItem.itemType << "at" << selectedItem.location << "for" << selectedItem.currentPrice;
+            } else if (selectedItem.itemType == "Fortification") {
+                purchaseKey = QString("Fortification:%1").arg(selectedItem.location);
+                purchases[purchaseKey] = 1;
+                purchasedLocations.insert(purchaseKey);
+                qDebug() << "AI Auto-Mode: Will buy Fortification at" << selectedItem.location << "for" << selectedItem.currentPrice;
+            } else if (selectedItem.itemType == "Galley") {
+                QString seaTerritory = selectedItem.location.split(" (").first();
+                purchaseKey = QString("Galley:%1").arg(seaTerritory);
+                purchases[purchaseKey] = purchases.value(purchaseKey, 0) + 1;
+                qDebug() << "AI Auto-Mode: Will buy Galley at" << seaTerritory << "for" << selectedItem.currentPrice;
+            }
+
+            remainingMoney -= selectedItem.currentPrice;
         }
 
-        // Then cavalry (up to 2)
-        if (cavalryPrice > 0 && cavalryMax > 0) {
-            int qty = qMin(2, qMin(cavalryMax, remainingMoney / cavalryPrice));
-            if (qty > 0) {
-                purchases["Cavalry"] = qty;
-                remainingMoney -= qty * cavalryPrice;
-                qDebug() << "AI Auto-Mode: Will buy" << qty << "cavalry for" << qty * cavalryPrice;
-            }
-        }
-
-        // Then infantry (up to 2)
-        if (infantryPrice > 0 && infantryMax > 0) {
-            int qty = qMin(2, qMin(infantryMax, remainingMoney / infantryPrice));
-            if (qty > 0) {
-                purchases["Infantry"] = qty;
-                remainingMoney -= qty * infantryPrice;
-                qDebug() << "AI Auto-Mode: Will buy" << qty << "infantry for" << qty * infantryPrice;
-            }
-        }
-
-        qDebug() << "AI Auto-Mode: Total purchases:" << purchases.size() << "items";
+        qDebug() << "AI Auto-Mode: Total purchases:" << purchases.size() << "types, remaining money:" << remainingMoney;
         purchaseDialog->setupAIAutoMode(m_aiAutoModeDelayMs, purchases);
     }
 
@@ -4137,12 +4209,14 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
         return false;
     }
 
-    // Validate the move using getMovesForLeader
+    // Validate the move using getMovesForLeader and check if it's via road
     QList<MoveOption> validMoves = getMovesForLeader(leader);
     bool isValidMove = false;
+    bool isViaRoad = false;
     for (const MoveOption &move : validMoves) {
         if (move.destinationTerritory == destinationTerritory) {
             isValidMove = true;
+            isViaRoad = move.isViaRoad;
             break;
         }
     }
@@ -4155,11 +4229,18 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
     QString fromTerritory = leader->getTerritoryName();
     int movesBefore = leader->getMovesRemaining();
 
-    qDebug() << "AI Move:" << leader->getSerialNumber() << "from" << fromTerritory << "to" << destinationTerritory;
+    qDebug() << "AI Move:" << leader->getSerialNumber() << "from" << fromTerritory << "to" << destinationTerritory
+             << (isViaRoad ? "[via road]" : "");
 
-    // Call the standard moveLeaderToTerritory method
-    // AI auto-mode will auto-dismiss the troop selection dialog
-    moveLeaderToTerritory(leader, destinationTerritory);
+    // Use appropriate movement method based on whether it's via road
+    if (isViaRoad) {
+        // Road movement - get destination position and use moveLeaderViaRoad
+        Position destPos = m_mapWidget->territoryNameToPosition(destinationTerritory);
+        moveLeaderViaRoad(leader, destPos);
+    } else {
+        // Normal adjacent movement
+        moveLeaderToTerritory(leader, destinationTerritory);
+    }
 
     // Check if move actually happened (territory changed)
     bool moveSucceeded = (leader->getTerritoryName() == destinationTerritory) &&

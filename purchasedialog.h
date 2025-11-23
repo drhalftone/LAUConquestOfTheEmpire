@@ -74,7 +74,8 @@ public:
                            int availableCavalry,
                            int availableCatapults,
                            int availableGalleys,
-                           QWidget *parent = nullptr);
+                           QWidget *parent = nullptr,
+                           bool combatUnitsOnly = false);
 
     // Get the purchase result
     PurchaseResult getPurchaseResult() const;
@@ -156,6 +157,9 @@ private:
 
     // AI mode flag - skip confirmation dialog
     bool m_aiAutoMode = false;
+
+    // Combat units only mode - hide cities/galleys/fortifications
+    bool m_combatUnitsOnly = false;
 };
 
 #endif // PURCHASEDIALOG_H

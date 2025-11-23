@@ -35,13 +35,23 @@ public:
     // Get the result of the combat
     CombatResult getCombatResult() const { return m_combatResult; }
 
+    // Set up AI control for one or both sides
+    void setupAIMode(bool attackerIsAI, bool defenderIsAI, int delayMs = 1000);
+
+protected:
+    void done(int result) override;
+
 private slots:
+    void makeAIMove();
     void onAttackingGalleyClicked();
     void onDefendingGalleyClicked();
     void onRetreatClicked();
     void onRollComplete(int dieValue, QObject *sender);
 
 private:
+    // Show combat result message with icon
+    void showCombatResult(const QString &title, const QString &message);
+
     // Create the attacking side (left)
     QWidget* createAttackingSide();
 
@@ -124,6 +134,15 @@ private:
 
     // Pending galley button for die roll (galleys need validation before rolling)
     QPushButton *m_pendingGalleyButton;
+
+    // AI control
+    bool m_attackerIsAI = false;
+    bool m_defenderIsAI = false;
+    int m_aiDelayMs = 1000;
+
+    // Track the button being attacked (for visual feedback)
+    QPushButton *m_targetedButton = nullptr;
+    QString m_targetedButtonOriginalStyle;
 };
 
 #endif // COMBATDIALOG_H

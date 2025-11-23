@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QMessageBox>
 #include <QSet>
+#include <QTimer>
 #include <cstdlib>  // for rand()
 
 CombatDialog::CombatDialog(Player *attackingPlayer,
@@ -165,6 +166,95 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     // Initialize button states - only defender's troops are clickable
     setAttackingButtonsEnabled(false);  // Disable attacker's troops (not used in combat)
     setDefendingButtonsEnabled(true);   // Enable defender's troops for attacker to target
+}
+
+void CombatDialog::showCombatResult(const QString &title, const QString &message)
+{
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(title);
+    msgBox.setText(message);
+    msgBox.setIconPixmap(QPixmap(":/images/combatIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+
+    // Auto-close after delay if both players are AI
+    if (m_attackerIsAI && m_defenderIsAI) {
+        QTimer::singleShot(1500, &msgBox, &QMessageBox::accept);
+    }
+
+    msgBox.exec();
+}
+
+void CombatDialog::setupAIMode(bool attackerIsAI, bool defenderIsAI, int delayMs)
+{
+    m_attackerIsAI = attackerIsAI;
+    m_defenderIsAI = defenderIsAI;
+    m_aiDelayMs = delayMs;
+
+    // If attacker is AI, start the first move after a delay
+    // (Attacker goes first, targeting defender's troops)
+    if (m_attackerIsAI) {
+        QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+    }
+}
+
+void CombatDialog::makeAIMove()
+{
+    // Determine which buttons are valid targets based on whose turn it is
+    QList<QPushButton*> validTargets;
+
+    if (m_isAttackersTurn) {
+        // Attacker's turn - can target defender's troops (enabled buttons)
+        for (auto it = m_defendingTroopButtons.begin(); it != m_defendingTroopButtons.end(); ++it) {
+            if (it.key()->isEnabled()) {
+                validTargets.append(it.key());
+            }
+        }
+    } else {
+        // Defender's turn - can target attacker's troops (enabled buttons)
+        for (auto it = m_attackingTroopButtons.begin(); it != m_attackingTroopButtons.end(); ++it) {
+            if (it.key()->isEnabled()) {
+                validTargets.append(it.key());
+            }
+        }
+    }
+
+    if (validTargets.isEmpty()) {
+        qDebug() << "AI: No valid targets available";
+        return;
+    }
+
+    // Prioritize catapults - they give +1 advantage bonus
+    QList<QPushButton*> catapultTargets;
+    QMap<QPushButton*, GamePiece*> &targetMap = m_isAttackersTurn ? m_defendingTroopButtons : m_attackingTroopButtons;
+
+    for (QPushButton *btn : validTargets) {
+        GamePiece *piece = targetMap.value(btn);
+        if (piece && piece->getType() == GamePiece::Type::Catapult) {
+            catapultTargets.append(btn);
+        }
+    }
+
+    // Pick from catapults if available, otherwise random target
+    QPushButton *targetButton;
+    if (!catapultTargets.isEmpty()) {
+        int targetIndex = rand() % catapultTargets.size();
+        targetButton = catapultTargets[targetIndex];
+        qDebug() << "AI: Prioritizing catapult target" << targetIndex + 1 << "of" << catapultTargets.size();
+    } else {
+        int targetIndex = rand() % validTargets.size();
+        targetButton = validTargets[targetIndex];
+        qDebug() << "AI: Selecting random target" << targetIndex + 1 << "of" << validTargets.size();
+    }
+
+    // Visual feedback: highlight the button as "pressed" and keep it pressed
+    m_targetedButton = targetButton;
+    m_targetedButtonOriginalStyle = targetButton->styleSheet();
+    targetButton->setDown(true);
+    targetButton->setStyleSheet(m_targetedButtonOriginalStyle + " border: 3px solid yellow;");
+
+    // After a delay, click the button (button stays pressed until die roll completes)
+    QTimer::singleShot(500, this, [this, targetButton]() {
+        targetButton->click();
+    });
 }
 
 QWidget* CombatDialog::createAttackingSide()
@@ -791,7 +881,14 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             resultMessage = QString("MISS! Roll: %1 + Advantage: %2 = %3\n\nDefending troop (ID: %4) survived.")
                                 .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(defendingPiece->getSerialNumber());
         }
-        QMessageBox::information(this, "Combat Result", resultMessage);
+        showCombatResult("Combat Result", resultMessage);
+
+        // Release the targeted button visual feedback
+        if (m_targetedButton) {
+            m_targetedButton->setDown(false);
+            m_targetedButton->setStyleSheet(m_targetedButtonOriginalStyle);
+            m_targetedButton = nullptr;
+        }
 
         if (isHit) {
             QString galleySerial = defendingPiece->isOnGalley() ? defendingPiece->getOnGalley() : QString();
@@ -811,8 +908,12 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             if (checkCombatEnd()) return;
         }
         // Switch to defender's turn
+        m_isAttackersTurn = false;
         setAttackingButtonsEnabled(true);
         setDefendingButtonsEnabled(false);
+        if (m_defenderIsAI) {
+            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+        }
 
     } else if (isAttackingTroop) {
         // Defender attacked an attacking troop
@@ -831,7 +932,14 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             resultMessage = QString("MISS! Roll: %1 + Advantage: %2 = %3\n\nAttacking troop (ID: %4) survived.")
                                 .arg(dieValue).arg(advantage).arg(dieValue + advantage).arg(attackingPiece->getSerialNumber());
         }
-        QMessageBox::information(this, "Combat Result", resultMessage);
+        showCombatResult("Combat Result", resultMessage);
+
+        // Release the targeted button visual feedback
+        if (m_targetedButton) {
+            m_targetedButton->setDown(false);
+            m_targetedButton->setStyleSheet(m_targetedButtonOriginalStyle);
+            m_targetedButton = nullptr;
+        }
 
         if (isHit) {
             QString galleySerial = attackingPiece->isOnGalley() ? attackingPiece->getOnGalley() : QString();
@@ -851,8 +959,12 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             if (checkCombatEnd()) return;
         }
         // Switch back to attacker's turn
+        m_isAttackersTurn = true;
         setDefendingButtonsEnabled(true);
         setAttackingButtonsEnabled(false);
+        if (m_attackerIsAI) {
+            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+        }
 
     } else if (isDefendingGalley) {
         // Attacker attacked a defending galley
@@ -870,7 +982,14 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nDefending galley (ID: %2) survived.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         }
-        QMessageBox::information(this, "Naval Combat Result", resultMessage);
+        showCombatResult("Naval Combat Result", resultMessage);
+
+        // Release the targeted button visual feedback
+        if (m_targetedButton) {
+            m_targetedButton->setDown(false);
+            m_targetedButton->setStyleSheet(m_targetedButtonOriginalStyle);
+            m_targetedButton = nullptr;
+        }
 
         if (isHit) {
             clickedButton->hide();
@@ -881,8 +1000,12 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             if (checkCombatEnd()) return;
         }
         // Switch to defender's turn
+        m_isAttackersTurn = false;
         setAttackingButtonsEnabled(true);
         setDefendingButtonsEnabled(false);
+        if (m_defenderIsAI) {
+            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+        }
 
     } else if (isAttackingGalley) {
         // Defender attacked an attacking galley
@@ -900,7 +1023,14 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nAttacking galley (ID: %2) survived.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         }
-        QMessageBox::information(this, "Naval Combat Result", resultMessage);
+        showCombatResult("Naval Combat Result", resultMessage);
+
+        // Release the targeted button visual feedback
+        if (m_targetedButton) {
+            m_targetedButton->setDown(false);
+            m_targetedButton->setStyleSheet(m_targetedButtonOriginalStyle);
+            m_targetedButton = nullptr;
+        }
 
         if (isHit) {
             clickedButton->hide();
@@ -911,8 +1041,12 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
             if (checkCombatEnd()) return;
         }
         // Switch back to attacker's turn
+        m_isAttackersTurn = true;
         setDefendingButtonsEnabled(true);
         setAttackingButtonsEnabled(false);
+        if (m_attackerIsAI) {
+            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+        }
     }
 }
 
@@ -1210,15 +1344,21 @@ bool CombatDialog::checkCombatEnd()
         if (!defeatedCaesars.isEmpty()) {
             qDebug() << "Caesar captured! Complete takeover initiated.";
 
-            QMessageBox::information(this, "Caesar Captured!",
-                QString("Player %1's Caesar has been captured by Player %2!\n\n"
+            QMessageBox captureMsg(this);
+            captureMsg.setWindowTitle("Caesar Killed!");
+            captureMsg.setText(QString("Player %1's Caesar has been killed by Player %2!\n\n"
                         "Player %2 takes over ALL of Player %1's:\n"
                         "• Territories\n"
                         "• Cities\n"
-                        "• Pieces (except Caesar - killed)\n"
+                        "• Pieces (except Caesar)\n"
                         "• Money + 100 talent bonus")
                 .arg(m_defendingPlayer->getId())
                 .arg(m_attackingPlayer->getId()));
+            captureMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            if (m_attackerIsAI && m_defenderIsAI) {
+                QTimer::singleShot(2000, &captureMsg, &QMessageBox::accept);
+            }
+            captureMsg.exec();
 
             // Transfer all money + 100 bonus
             int capturedMoney = m_defendingPlayer->getWallet();
@@ -1327,8 +1467,11 @@ bool CombatDialog::checkCombatEnd()
                 .arg(generals.size())
                 .arg(infantry.size() + cavalry.size() + catapults.size() + galleys.size())
                 .arg(capturedMoney + 100));
-            eliminationMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            eliminationMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
             eliminationMsg.setStandardButtons(QMessageBox::Ok);
+            if (m_attackerIsAI && m_defenderIsAI) {
+                QTimer::singleShot(2000, &eliminationMsg, &QMessageBox::accept);
+            }
             eliminationMsg.exec();
 
             accept();
@@ -1351,17 +1494,37 @@ bool CombatDialog::checkCombatEnd()
         for (GeneralPiece *general : defeatedGenerals) {
             qDebug() << "Processing defeated general" << general->getPlayer() << "#" << general->getNumber();
 
-            QMessageBox msgBox(this);
-            msgBox.setWindowTitle("Capture or Kill General?");
-            msgBox.setText(QString("Defender's General %1 #%2 has been defeated.\n\nDo you want to capture this general?")
-                .arg(general->getPlayer())
-                .arg(general->getNumber()));
-            QPushButton *captureButton = msgBox.addButton("Capture", QMessageBox::YesRole);
-            QPushButton *killButton = msgBox.addButton("Kill", QMessageBox::NoRole);
-            msgBox.exec();
+            bool aiDecides = m_attackerIsAI;  // Attacker wins, so attacker decides
+            QMessageBox::StandardButton choice;
 
-            QMessageBox::StandardButton choice = (msgBox.clickedButton() == captureButton)
-                ? QMessageBox::Yes : QMessageBox::No;
+            if (aiDecides) {
+                // AI always captures (more strategic value)
+                choice = QMessageBox::Yes;
+
+                // Show brief notification
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("AI Capturing General");
+                msgBox.setText(QString("Defender's General %1 #%2 has been defeated.\n\nAI chooses to capture.")
+                    .arg(general->getPlayer())
+                    .arg(general->getNumber()));
+                msgBox.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.addButton(QMessageBox::Ok);
+                QTimer::singleShot(1500, &msgBox, &QMessageBox::accept);
+                msgBox.exec();
+            } else {
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Capture or Kill General?");
+                msgBox.setText(QString("Defender's General %1 #%2 has been defeated.\n\nDo you want to capture this general?")
+                    .arg(general->getPlayer())
+                    .arg(general->getNumber()));
+                msgBox.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                QPushButton *captureButton = msgBox.addButton("Capture", QMessageBox::YesRole);
+                msgBox.addButton("Kill", QMessageBox::NoRole);
+                msgBox.exec();
+
+                choice = (msgBox.clickedButton() == captureButton)
+                    ? QMessageBox::Yes : QMessageBox::No;
+            }
 
             if (choice == QMessageBox::Yes) {
                 qDebug() << "Capturing general";
@@ -1511,15 +1674,21 @@ bool CombatDialog::checkCombatEnd()
         if (!defeatedCaesars.isEmpty()) {
             qDebug() << "Caesar captured! Complete takeover initiated.";
 
-            QMessageBox::information(this, "Caesar Captured!",
-                QString("Player %1's Caesar has been captured by Player %2!\n\n"
+            QMessageBox captureMsg(this);
+            captureMsg.setWindowTitle("Caesar Killed!");
+            captureMsg.setText(QString("Player %1's Caesar has been killed by Player %2!\n\n"
                         "Player %2 takes over ALL of Player %1's:\n"
                         "• Territories\n"
                         "• Cities\n"
-                        "• Pieces (except Caesar - killed)\n"
+                        "• Pieces (except Caesar)\n"
                         "• Money + 100 talent bonus")
                 .arg(m_attackingPlayer->getId())
                 .arg(m_defendingPlayer->getId()));
+            captureMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            if (m_attackerIsAI && m_defenderIsAI) {
+                QTimer::singleShot(2000, &captureMsg, &QMessageBox::accept);
+            }
+            captureMsg.exec();
 
             // Transfer all money + 100 bonus
             int capturedMoney = m_attackingPlayer->getWallet();
@@ -1612,8 +1781,9 @@ bool CombatDialog::checkCombatEnd()
                 caesar->deleteLater();
             }
 
-            QMessageBox::information(this, "Complete Takeover",
-                QString("Player %1 has been eliminated!\n\n"
+            QMessageBox takeoverMsg(this);
+            takeoverMsg.setWindowTitle("Complete Takeover");
+            takeoverMsg.setText(QString("Player %1 has been eliminated!\n\n"
                         "Player %2 gained:\n"
                         "• %3 territories\n"
                         "• %4 cities\n"
@@ -1627,6 +1797,11 @@ bool CombatDialog::checkCombatEnd()
                 .arg(generals.size())
                 .arg(infantry.size() + cavalry.size() + catapults.size() + galleys.size())
                 .arg(capturedMoney + 100));
+            takeoverMsg.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            if (m_attackerIsAI && m_defenderIsAI) {
+                QTimer::singleShot(2000, &takeoverMsg, &QMessageBox::accept);
+            }
+            takeoverMsg.exec();
 
             accept();
             return true;
@@ -1648,17 +1823,37 @@ bool CombatDialog::checkCombatEnd()
         for (GeneralPiece *general : defeatedGenerals) {
             qDebug() << "Processing defeated general" << general->getPlayer() << "#" << general->getNumber();
 
-            QMessageBox msgBox(this);
-            msgBox.setWindowTitle("Capture or Kill General?");
-            msgBox.setText(QString("Attacker's General %1 #%2 has been defeated.\n\nDo you want to capture this general?")
-                .arg(general->getPlayer())
-                .arg(general->getNumber()));
-            QPushButton *captureButton = msgBox.addButton("Capture", QMessageBox::YesRole);
-            QPushButton *killButton = msgBox.addButton("Kill", QMessageBox::NoRole);
-            msgBox.exec();
+            bool aiDecides = m_defenderIsAI;  // Defender wins, so defender decides
+            QMessageBox::StandardButton choice;
 
-            QMessageBox::StandardButton choice = (msgBox.clickedButton() == captureButton)
-                ? QMessageBox::Yes : QMessageBox::No;
+            if (aiDecides) {
+                // AI always captures (more strategic value)
+                choice = QMessageBox::Yes;
+
+                // Show brief notification
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("AI Capturing General");
+                msgBox.setText(QString("Attacker's General %1 #%2 has been defeated.\n\nAI chooses to capture.")
+                    .arg(general->getPlayer())
+                    .arg(general->getNumber()));
+                msgBox.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.addButton(QMessageBox::Ok);
+                QTimer::singleShot(1500, &msgBox, &QMessageBox::accept);
+                msgBox.exec();
+            } else {
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Capture or Kill General?");
+                msgBox.setText(QString("Attacker's General %1 #%2 has been defeated.\n\nDo you want to capture this general?")
+                    .arg(general->getPlayer())
+                    .arg(general->getNumber()));
+                msgBox.setIconPixmap(QPixmap(":/images/captureIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                QPushButton *captureButton = msgBox.addButton("Capture", QMessageBox::YesRole);
+                msgBox.addButton("Kill", QMessageBox::NoRole);
+                msgBox.exec();
+
+                choice = (msgBox.clickedButton() == captureButton)
+                    ? QMessageBox::Yes : QMessageBox::No;
+            }
 
             if (choice == QMessageBox::Yes) {
                 qDebug() << "Capturing general";
@@ -1714,4 +1909,13 @@ QColor CombatDialog::getTroopColor(GamePiece::Type type) const
     default:
         return QColor(Qt::white);
     }
+}
+
+void CombatDialog::done(int result)
+{
+    // Hide the rolling die widget before closing
+    if (m_rollingDie) {
+        m_rollingDie->hide();
+    }
+    QDialog::done(result);
 }

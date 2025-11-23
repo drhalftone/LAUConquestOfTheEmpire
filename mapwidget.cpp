@@ -831,7 +831,7 @@ void MapWidget::mousePressEvent(QMouseEvent *event)
                     currentPlayer = m_players[m_currentPlayerIndex]->getId();
                 }
 
-                if (currentPlayer != '\0') {
+                if (currentPlayer != '\0' && m_playerInfoWidget) {
                     // Convert click position to global screen coordinates for menu
                     QPoint globalPos = mapToGlobal(event->pos());
 

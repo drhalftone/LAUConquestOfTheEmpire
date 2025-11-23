@@ -437,14 +437,78 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
     QString leaderName = "Unknown";
 
     int legionSize = 0;
+    QList<int> currentLegion;
     if (leader->getType() == GamePiece::Type::Caesar) {
         leaderName = "Caesar";
-        legionSize = static_cast<CaesarPiece*>(leader)->getLegion().size();
+        currentLegion = static_cast<CaesarPiece*>(leader)->getLegion();
+        legionSize = currentLegion.size();
     } else if (leader->getType() == GamePiece::Type::General) {
         GeneralPiece *gen = qobject_cast<GeneralPiece*>(leader);
         if (gen) {
             leaderName = QString("General %1").arg(gen->getNumber());
-            legionSize = gen->getLegion().size();
+            currentLegion = gen->getLegion();
+            legionSize = currentLegion.size();
+        }
+    }
+
+    // Count unassigned troops in the same territory that could be picked up
+    int availableUnassignedTroops = 0;
+    if (m_player && legionSize == 0) {
+        // Build set of all troop IDs in ANY general's legion
+        QSet<int> assignedTroopIds;
+        for (GeneralPiece *g : m_player->getGenerals()) {
+            for (int id : g->getLegion()) {
+                assignedTroopIds.insert(id);
+            }
+        }
+        // Count unassigned troops in this territory with moves remaining
+        QList<GamePiece*> troopsHere = m_player->getPiecesAtTerritory(currentTerritory);
+        for (GamePiece *troop : troopsHere) {
+            if (troop->getType() == GamePiece::Type::Infantry ||
+                troop->getType() == GamePiece::Type::Cavalry ||
+                troop->getType() == GamePiece::Type::Catapult) {
+                if (!assignedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() > 0) {
+                    availableUnassignedTroops++;
+                }
+            }
+        }
+    }
+
+    // Effective troop count includes current legion + available unassigned troops
+    int effectiveTroopCount = legionSize + availableUnassignedTroops;
+
+    // Check if general should return to capital to pick up troops
+    QString homeTerritory = m_player ? m_player->getHomeProvinceName() : "";
+    int unassignedAtHome = 0;
+    bool shouldReturnToCapital = false;
+
+    if (m_player && legionSize < 6) {  // Has space in legion
+        // Calculate quota to see if below
+        int totalTroops = m_player->getInfantryCount() + m_player->getCavalryCount() + m_player->getCatapultCount();
+        int numGenerals = m_player->getGenerals().size();
+        if (numGenerals == 0) numGenerals = 1;
+        int quota = totalTroops / numGenerals;
+
+        // Count unassigned troops at home territory
+        QSet<int> assignedIds;
+        for (GeneralPiece *g : m_player->getGenerals()) {
+            for (int id : g->getLegion()) assignedIds.insert(id);
+        }
+        QList<GamePiece*> homeTroops = m_player->getPiecesAtTerritory(homeTerritory);
+        for (GamePiece *troop : homeTroops) {
+            if ((troop->getType() == GamePiece::Type::Infantry ||
+                 troop->getType() == GamePiece::Type::Cavalry ||
+                 troop->getType() == GamePiece::Type::Catapult) &&
+                !assignedIds.contains(troop->getUniqueId())) {
+                unassignedAtHome++;
+            }
+        }
+
+        // Should return if below quota and there are troops waiting at home
+        shouldReturnToCapital = (legionSize < quota) && (unassignedAtHome > 0) && (currentTerritory != homeTerritory);
+        if (shouldReturnToCapital) {
+            log(QString("  General %1 should return to capital (legion: %2, quota: %3, unassigned at home: %4)")
+                .arg(leaderName).arg(legionSize).arg(quota).arg(unassignedAtHome));
         }
     }
 
@@ -482,10 +546,18 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
             move.moveType = "Reinforce";
             move.reason = QString("Move to own territory%1")
                 .arg(option.isViaRoad ? " [via road]" : "");
+
+            // Boost score significantly if moving to home territory to pick up troops
+            if (shouldReturnToCapital && option.destinationTerritory == homeTerritory) {
+                move.score = 200;  // Higher than Expand (100-110)
+                move.moveType = "ReturnHome";
+                move.reason = QString("Return to capital to pick up troops (%1 unassigned)")
+                    .arg(unassignedAtHome);
+            }
         } else if (option.owner == '\0') {
-            // Unclaimed territory - expand (but only if general has troops)
-            if (legionSize == 0) {
-                // General without troops cannot claim territory - skip this move
+            // Unclaimed territory - expand (but only if general has or can get troops)
+            if (effectiveTroopCount == 0) {
+                // General without troops (and none available) cannot claim territory - skip this move
                 continue;
             }
             move.score = scoreExpandMove(option.destinationTerritory, state);
@@ -716,8 +788,12 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *general, const QList<Gam
         quota += 1;  // This general gets one extra from the remainder
     }
 
-    log(QString("Legion Building: General %1 - Current legion: %2, Quota: %3, Total troops: %4")
-        .arg(generalNumber).arg(currentLegionSize).arg(quota).arg(totalTroops));
+    log(QString("Legion Building: General %1 - Current legion: %2, Quota: %3, Total troops: %4, NumGenerals: %5")
+        .arg(generalNumber).arg(currentLegionSize).arg(quota).arg(totalTroops).arg(numGenerals));
+    log(QString("  Infantry: %1, Cavalry: %2, Catapults: %3")
+        .arg(m_player->getInfantryCount())
+        .arg(m_player->getCavalryCount())
+        .arg(m_player->getCatapultCount()));
 
     // Build set of all troop IDs in ANY general's legion (to identify assigned troops)
     QSet<int> assignedTroopIds;
@@ -726,50 +802,87 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *general, const QList<Gam
             assignedTroopIds.insert(id);
         }
     }
+    log(QString("  Total assigned troops across all generals: %1").arg(assignedTroopIds.size()));
+    log(QString("  Available troops in dialog: %1").arg(availableTroops.size()));
 
-    // Process each available troop
+    // Separate troops by category for balanced selection
+    QList<GamePiece*> unassignedInfantry;
+    QList<GamePiece*> unassignedCavalry;
+    QList<GamePiece*> unassignedCatapults;
+
+    // First pass: add permanent legion members and categorize unassigned troops
     for (GamePiece *troop : availableTroops) {
         int troopId = troop->getUniqueId();
 
         // Rule 1: If troop is in THIS general's legion, always select it (permanent)
         if (currentLegion.contains(troopId)) {
             troopsToSelect.append(troopId);
-            log(QString("  Troop %1: In this general's legion - SELECTED (permanent)")
-                .arg(troopId));
+            log(QString("  Troop %1: In this general's legion - SELECTED (permanent)").arg(troopId));
             continue;
         }
 
-        // Rule 2: If troop is in ANOTHER general's legion, don't select it
+        // Rule 2: If troop is in ANOTHER general's legion, skip it
         if (assignedTroopIds.contains(troopId)) {
-            log(QString("  Troop %1: In another general's legion - SKIP")
-                .arg(troopId));
+            log(QString("  Troop %1: In another general's legion - SKIP").arg(troopId));
             continue;
         }
 
-        // Rule 3: Troop is unassigned - check if general has space AND is below quota
-        bool hasSpace = currentLegionSize < 6;  // Max 6 troops per legion
-        bool belowQuota = currentLegionSize < quota;
-
-        if (hasSpace && belowQuota) {
-            // Also check that troop has moves remaining
-            if (troop->getMovesRemaining() > 0) {
-                troopsToSelect.append(troopId);
-                currentLegionSize++;  // Update for next iteration
-                log(QString("  Troop %1: Unassigned, has space & below quota - SELECTED")
-                    .arg(troopId));
-            } else {
-                log(QString("  Troop %1: Unassigned but no moves remaining - SKIP")
-                    .arg(troopId));
+        // Rule 3: Categorize unassigned troops with moves remaining
+        if (troop->getMovesRemaining() > 0) {
+            if (troop->getType() == GamePiece::Type::Infantry) {
+                unassignedInfantry.append(troop);
+            } else if (troop->getType() == GamePiece::Type::Cavalry) {
+                unassignedCavalry.append(troop);
+            } else if (troop->getType() == GamePiece::Type::Catapult) {
+                unassignedCatapults.append(troop);
             }
         } else {
-            log(QString("  Troop %1: Unassigned but at capacity (space=%2, belowQuota=%3) - SKIP")
-                .arg(troopId).arg(hasSpace).arg(belowQuota));
+            log(QString("  Troop %1: Unassigned but no moves remaining - SKIP").arg(troopId));
         }
     }
 
-    log(QString("Legion Building: Selected %1 troops for General %2")
-        .arg(troopsToSelect.size()).arg(generalNumber));
+    log(QString("  Unassigned available: %1 infantry, %2 cavalry, %3 catapults")
+        .arg(unassignedInfantry.size()).arg(unassignedCavalry.size()).arg(unassignedCatapults.size()));
 
+    // Second pass: balanced selection from unassigned troops (catapult > cavalry > infantry priority)
+    currentLegionSize = troopsToSelect.size();  // Update after adding permanent members
+    int iInf = 0, iCav = 0, iCat = 0;
+
+    while (currentLegionSize < 6 && currentLegionSize < quota) {
+        bool addedAny = false;
+
+        // Try to add one catapult
+        if (iCat < unassignedCatapults.size() && currentLegionSize < 6 && currentLegionSize < quota) {
+            GamePiece *troop = unassignedCatapults[iCat++];
+            troopsToSelect.append(troop->getUniqueId());
+            currentLegionSize++;
+            log(QString("  Troop %1 (Catapult): Unassigned, balanced selection - SELECTED").arg(troop->getUniqueId()));
+            addedAny = true;
+        }
+
+        // Try to add one cavalry
+        if (iCav < unassignedCavalry.size() && currentLegionSize < 6 && currentLegionSize < quota) {
+            GamePiece *troop = unassignedCavalry[iCav++];
+            troopsToSelect.append(troop->getUniqueId());
+            currentLegionSize++;
+            log(QString("  Troop %1 (Cavalry): Unassigned, balanced selection - SELECTED").arg(troop->getUniqueId()));
+            addedAny = true;
+        }
+
+        // Try to add one infantry
+        if (iInf < unassignedInfantry.size() && currentLegionSize < 6 && currentLegionSize < quota) {
+            GamePiece *troop = unassignedInfantry[iInf++];
+            troopsToSelect.append(troop->getUniqueId());
+            currentLegionSize++;
+            log(QString("  Troop %1 (Infantry): Unassigned, balanced selection - SELECTED").arg(troop->getUniqueId()));
+            addedAny = true;
+        }
+
+        // If we couldn't add any, we're out of unassigned troops
+        if (!addedAny) break;
+    }
+
+    log(QString("Legion Building: Selected %1 troops for General %2").arg(troopsToSelect.size()).arg(generalNumber));
     return troopsToSelect;
 }
 

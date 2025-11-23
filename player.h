@@ -15,7 +15,8 @@ class Player : public QObject
 
 public:
     // Constructor - automatically creates Caesar, 5 Generals, and fortified city at home province
-    explicit Player(QChar id, const QString &homeProvinceName, QObject *parent = nullptr);
+    // Set minimalSetup=true to only create Caesar (for Quick Battle mode)
+    explicit Player(QChar id, const QString &homeProvinceName, QObject *parent = nullptr, bool minimalSetup = false);
     ~Player();
 
     // Player identification
