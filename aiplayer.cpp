@@ -190,11 +190,13 @@ void AIPlayer::executeMovementPhase()
     m_lastGameState = readGameState();
 
     // Find GENERALS (not Caesars) with moves remaining AND whose legion can move
+    // NOTE: We use piece->getMovesRemaining() instead of UI-displayed movesRemaining
+    // because the UI tables may not be refreshed after startTurn() resets moves
     QList<LeaderInfo> generalsWithMoves;
     for (const LeaderInfo &leader : m_lastGameState.leaders) {
-        if (leader.movesRemaining > 0 &&
-            leader.piece &&
-            leader.piece->getType() == GamePiece::Type::General) {
+        if (leader.piece &&
+            leader.piece->getType() == GamePiece::Type::General &&
+            leader.piece->getMovesRemaining() > 0) {
             // Also check if the general's legion can move (all troops have moves)
             if (canGeneralMove(leader.piece)) {
                 generalsWithMoves.append(leader);
@@ -227,19 +229,31 @@ void AIPlayer::executeMovementPhase()
         return;
     }
 
-    // Select a random move (no combat filtering - single player test mode)
+    // Log all available moves with scores for debugging
+    log(QString("%1: Evaluating %2 move options:").arg(general.name).arg(moves.size()));
+    for (const MoveEvaluation &m : moves) {
+        log(QString("  -> %1: %2 (score=%3)")
+            .arg(m.targetTerritory)
+            .arg(m.moveType)
+            .arg(m.score));
+    }
+
+    // Select best move based on strategy (picks highest score)
     MoveEvaluation selectedMove = selectBestMove(moves);
     emit moveSelected(selectedMove);
 
-    log(QString("Selected move for %1: %2 -> %3 (%4)")
+    log(QString("Selected move for %1: %2 -> %3 (%4, score=%5)")
         .arg(general.name)
         .arg(selectedMove.fromTerritory)
         .arg(selectedMove.targetTerritory)
-        .arg(selectedMove.moveType));
+        .arg(selectedMove.moveType)
+        .arg(selectedMove.score));
 
     // Skip if "Stay" was selected
     if (selectedMove.targetTerritory == selectedMove.fromTerritory) {
         log(QString("%1: Staying at %2").arg(general.name).arg(selectedMove.fromTerritory));
+        // Consume all moves so this general won't be considered again this turn
+        general.piece->setMovesRemaining(0);
         scheduleNextAction([this]() {
             executeMovementPhase();
         });
@@ -345,8 +359,8 @@ AIPlayer::GameState AIPlayer::readGameState()
     // Find enemy territories by scanning the map
     // (This info isn't directly in PlayerInfoWidget, so we read from MapWidget)
     if (m_mapWidget) {
-        for (int row = 0; row < MapWidget::ROWS; ++row) {
-            for (int col = 0; col < MapWidget::COLUMNS; ++col) {
+        for (int row = 0; row < m_mapWidget->rows(); ++row) {
+            for (int col = 0; col < m_mapWidget->cols(); ++col) {
                 QChar owner = m_mapWidget->getTerritoryOwnerAt(row, col);
                 if (owner != '\0' && owner != playerId) {
                     QString territoryName = m_mapWidget->getTerritoryNameAt(row, col);
@@ -378,6 +392,8 @@ AIPlayer::GameState AIPlayer::readGameState()
                 if (caesar->getSerialNumber() == uiLeader.serialNumber) {
                     info.piece = caesar;
                     info.legionSize = caesar->getLegion().size();
+                    // Use actual piece moves (UI may not be updated after startTurn)
+                    info.movesRemaining = static_cast<int>(caesar->getMovesRemaining());
                     break;
                 }
             }
@@ -387,6 +403,8 @@ AIPlayer::GameState AIPlayer::readGameState()
                     info.piece = general;
                     info.name = QString("General %1").arg(general->getNumber());
                     info.legionSize = general->getLegion().size();
+                    // Use actual piece moves (UI may not be updated after startTurn)
+                    info.movesRemaining = static_cast<int>(general->getMovesRemaining());
                     break;
                 }
             }
@@ -547,12 +565,28 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
             move.reason = QString("Move to own territory%1")
                 .arg(option.isViaRoad ? " [via road]" : "");
 
-            // Boost score significantly if moving to home territory to pick up troops
+            // Boost score if moving to home territory to pick up troops
+            // But scale based on how desperately the general needs troops
             if (shouldReturnToCapital && option.destinationTerritory == homeTerritory) {
-                move.score = 200;  // Higher than Expand (100-110)
+                // If general has very few troops (0-1), high priority to return
+                // If general has 2+ troops, lower priority - they can fight
+                if (legionSize <= 1) {
+                    move.score = 200;  // Urgent - need troops badly
+                } else if (legionSize == 2) {
+                    move.score = 80;  // Moderate - could use more troops
+                } else {
+                    move.score = 45;  // Low - already have enough to fight (below Attack)
+                }
                 move.moveType = "ReturnHome";
-                move.reason = QString("Return to capital to pick up troops (%1 unassigned)")
-                    .arg(unassignedAtHome);
+                move.reason = QString("Return to capital to pick up troops (%1 unassigned, legion: %2)")
+                    .arg(unassignedAtHome).arg(legionSize);
+            }
+
+            // If general has no troops and can't expand, don't waste moves reinforcing
+            // Score lower than Stay (10) so they don't bounce between territories
+            if (effectiveTroopCount == 0 && unassignedAtHome == 0) {
+                move.score = 5;  // Lower than Stay
+                move.reason = "No troops - staying is better";
             }
         } else if (option.owner == '\0') {
             // Unclaimed territory - expand (but only if general has or can get troops)
@@ -630,7 +664,7 @@ int AIPlayer::scoreAttackMove(const QString &target, const GameState &state)
             baseScore = 30;
             break;
         case Strategy::Economic:
-            baseScore = 40;
+            baseScore = 55;  // Higher than before - Economic still wants to expand/attack
             break;
         default:
             break;
@@ -698,8 +732,36 @@ bool AIPlayer::isAdjacentToEnemy(const QString &territory)
 void AIPlayer::handleCombatDialog(CombatDialog *dialog)
 {
     Q_UNUSED(dialog)
-    log("Combat dialog opened - AI combat not yet implemented");
-    // TODO: Implement combat AI
+    log("Combat dialog opened - AI handling combat");
+}
+
+int AIPlayer::selectCombatTarget(const QList<GamePiece::Type> &targetTypes)
+{
+    if (targetTypes.isEmpty()) {
+        return -1;
+    }
+
+    // Prioritize catapults - they give +1 advantage bonus
+    QList<int> catapultIndices;
+    for (int i = 0; i < targetTypes.size(); ++i) {
+        if (targetTypes[i] == GamePiece::Type::Catapult) {
+            catapultIndices.append(i);
+        }
+    }
+
+    // If catapults available, pick one randomly
+    if (!catapultIndices.isEmpty()) {
+        int idx = rand() % catapultIndices.size();
+        log(QString("AI targeting catapult (priority target) %1 of %2")
+            .arg(idx + 1).arg(catapultIndices.size()));
+        return catapultIndices[idx];
+    }
+
+    // Otherwise pick random target
+    int idx = rand() % targetTypes.size();
+    log(QString("AI targeting random unit %1 of %2")
+        .arg(idx + 1).arg(targetTypes.size()));
+    return idx;
 }
 
 void AIPlayer::handlePurchaseDialog(PurchaseDialog *dialog)

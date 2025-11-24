@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSet>
 
 // Forward declaration
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex);
@@ -228,23 +229,18 @@ int main(int argc, char *argv[])
     for (Player *player : players) {
         QObject::connect(player, &Player::territoryClaimed, scoreWindow, updateScores);
         QObject::connect(player, &Player::territoryUnclaimed, scoreWindow, updateScores);
-        QObject::connect(player, &Player::buildingAdded, scoreWindow, [updateScores, mapWidget](Building *building) {
+        QObject::connect(player, &Player::buildingAdded, scoreWindow, [updateScores](Building *building) {
             Q_UNUSED(building);
             updateScores();
-            mapWidget->updateRoads();  // Check for new roads when buildings added
+            // Note: Roads are updated at start of turn, not when buildings change ownership
         });
         QObject::connect(player, &Player::buildingRemoved, scoreWindow, [updateScores](Building *building) {
             Q_UNUSED(building);
             updateScores();
         });
 
-        // Also update roads when territory ownership changes
-        QObject::connect(player, &Player::territoryClaimed, mapWidget, [mapWidget]() {
-            mapWidget->updateRoads();
-        });
-        QObject::connect(player, &Player::territoryUnclaimed, mapWidget, [mapWidget]() {
-            mapWidget->updateRoads();
-        });
+        // Note: Roads are updated at start of turn, not when territory ownership changes mid-turn
+        // This prevents roads from appearing before combat is resolved
     }
 
     // ========================================================================
@@ -264,6 +260,9 @@ int main(int argc, char *argv[])
         ai->setStepMode(true);  // Step mode - click "Step" button to advance
         aiPlayers.append(ai);
 
+        // Register AI player with PlayerInfoWidget for combat handling
+        infoWidget->registerAIPlayer(player->getId(), ai);
+
         // Create debug widget for this AI
         AIDebugWidget *debugWidget = new AIDebugWidget();
         debugWidget->setAIPlayer(ai);
@@ -278,13 +277,12 @@ int main(int argc, char *argv[])
         qDebug() << "Created AI player and debug widget for Player" << player->getId();
     }
 
-    // NOW start the first player's turn (after AI connections are set up)
+    // NOW start the current player's turn (after AI connections are set up)
+    // This applies to both new games and loaded games
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
-        if (!loadGame) {
-            qDebug() << "Starting first player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
-            players[currentPlayerIndex]->startTurn();
-            mapWidget->setAtStartOfTurn(true);
-        }
+        qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
+        players[currentPlayerIndex]->startTurn();
+        mapWidget->setAtStartOfTurn(true);
     }
 
     int result = a.exec();
@@ -325,7 +323,17 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
     // Create map widget (will initialize with random map, but we'll override it)
     mapWidget = new MapWidget();
 
-    // Clear the random map and restore territories from save file
+    // Read map dimensions from mapSettings (if present)
+    int mapRows = MapWidget::DEFAULT_ROWS;
+    int mapCols = MapWidget::DEFAULT_COLUMNS;
+    if (gameState.contains("mapSettings")) {
+        QJsonObject mapSettings = gameState["mapSettings"].toObject();
+        mapRows = mapSettings["rows"].toInt(MapWidget::DEFAULT_ROWS);
+        mapCols = mapSettings["cols"].toInt(MapWidget::DEFAULT_COLUMNS);
+    }
+
+    // Set map size and clear
+    mapWidget->setMapSize(mapRows, mapCols);
     mapWidget->clearMap();
 
     QJsonArray territoriesArray = gameState["territories"].toArray();
@@ -549,66 +557,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
             player->addGalley(galley);
         }
 
-        // Restore legions for Caesars (note: we can't use saved piece IDs since pieces have new IDs)
-        // We need to rebuild legions based on position matching
-        // This is a limitation - we'll restore legion composition by finding pieces at the same location
-        for (const QJsonValue &caesarValue : caesarsArray) {
-            QJsonObject caesarObj = caesarValue.toObject();
-            CaesarPiece *caesar = caesarMap[caesarObj["serialNumber"].toString()];
-
-            if (caesar) {
-                // Find all troops at same position as Caesar
-                Position caesarPos = caesar->getPosition();
-                QList<int> legion;
-
-                for (InfantryPiece *troop : player->getInfantry()) {
-                    if (troop->getPosition().row == caesarPos.row && troop->getPosition().col == caesarPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-                for (CavalryPiece *troop : player->getCavalry()) {
-                    if (troop->getPosition().row == caesarPos.row && troop->getPosition().col == caesarPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-                for (CatapultPiece *troop : player->getCatapults()) {
-                    if (troop->getPosition().row == caesarPos.row && troop->getPosition().col == caesarPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-
-                caesar->setLegion(legion);
-            }
-        }
-
-        // Restore legions for Generals
-        for (const QJsonValue &generalValue : generalsArray) {
-            QJsonObject generalObj = generalValue.toObject();
-            GeneralPiece *general = generalMap[generalObj["serialNumber"].toString()];
-
-            if (general) {
-                Position generalPos = general->getPosition();
-                QList<int> legion;
-
-                for (InfantryPiece *troop : player->getInfantry()) {
-                    if (troop->getPosition().row == generalPos.row && troop->getPosition().col == generalPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-                for (CavalryPiece *troop : player->getCavalry()) {
-                    if (troop->getPosition().row == generalPos.row && troop->getPosition().col == generalPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-                for (CatapultPiece *troop : player->getCatapults()) {
-                    if (troop->getPosition().row == generalPos.row && troop->getPosition().col == generalPos.col) {
-                        legion.append(troop->getUniqueId());
-                    }
-                }
-
-                general->setLegion(legion);
-            }
-        }
+        // Don't assign legions on load - let generals start with empty legions
+        // They will pick up troops via the legion composition dialog when they move
+        // This ensures fair distribution based on the AI's quota system
 
         // Restore legions for Galleys
         for (const QJsonValue &galleyValue : galleysArray) {
@@ -616,36 +567,36 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
             GalleyPiece *galley = galleyMap[galleyObj["serialNumber"].toString()];
 
             if (galley) {
-                Position galleyPos = galley->getPosition();
+                QString galleyTerritory = galley->getTerritoryName();
                 QList<int> legion;
 
-                // Add all pieces on this galley
+                // Add all pieces on this galley (they have onGalley set)
                 for (CaesarPiece *piece : player->getCaesars()) {
-                    if (piece->getPosition().row == galleyPos.row && piece->getPosition().col == galleyPos.col &&
+                    if (piece->getTerritoryName() == galleyTerritory &&
                         !piece->getOnGalley().isEmpty()) {
                         legion.append(piece->getUniqueId());
                     }
                 }
                 for (GeneralPiece *piece : player->getGenerals()) {
-                    if (piece->getPosition().row == galleyPos.row && piece->getPosition().col == galleyPos.col &&
+                    if (piece->getTerritoryName() == galleyTerritory &&
                         !piece->getOnGalley().isEmpty()) {
                         legion.append(piece->getUniqueId());
                     }
                 }
                 for (InfantryPiece *troop : player->getInfantry()) {
-                    if (troop->getPosition().row == galleyPos.row && troop->getPosition().col == galleyPos.col &&
+                    if (troop->getTerritoryName() == galleyTerritory &&
                         !troop->getOnGalley().isEmpty()) {
                         legion.append(troop->getUniqueId());
                     }
                 }
                 for (CavalryPiece *troop : player->getCavalry()) {
-                    if (troop->getPosition().row == galleyPos.row && troop->getPosition().col == galleyPos.col &&
+                    if (troop->getTerritoryName() == galleyTerritory &&
                         !troop->getOnGalley().isEmpty()) {
                         legion.append(troop->getUniqueId());
                     }
                 }
                 for (CatapultPiece *troop : player->getCatapults()) {
-                    if (troop->getPosition().row == galleyPos.row && troop->getPosition().col == galleyPos.col &&
+                    if (troop->getTerritoryName() == galleyTerritory &&
                         !troop->getOnGalley().isEmpty()) {
                         legion.append(troop->getUniqueId());
                     }

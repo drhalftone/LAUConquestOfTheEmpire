@@ -6,13 +6,13 @@
 #include <QList>
 #include <QString>
 #include <functional>
+#include "gamepiece.h"
 
 class Player;
 class PlayerInfoWidget;
 class MapWidget;
 class CombatDialog;
 class PurchaseDialog;
-class GamePiece;
 
 // Structure for evaluating potential moves
 struct MoveEvaluation {
@@ -97,6 +97,14 @@ public slots:
     // Handle dialogs that appear during turn
     void handleCombatDialog(CombatDialog *dialog);
     void handlePurchaseDialog(PurchaseDialog *dialog);
+
+    // Combat target selection - returns index of target to attack
+    // targetTypes contains the GamePiece::Type for each valid target
+    // Returns -1 if no valid target (shouldn't happen normally)
+    int selectCombatTarget(const QList<GamePiece::Type> &targetTypes);
+
+    // Get the delay in ms for AI actions
+    int getAIDelayMs() const { return m_delayMs; }
 
     // === Legion Building Logic (public for PlayerInfoWidget access) ===
     // Decides which troops a general should take when moving

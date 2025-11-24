@@ -83,6 +83,10 @@ public:
     void setAIPlayer(AIPlayer *aiPlayer) { m_aiPlayer = aiPlayer; }
     AIPlayer* getAIPlayer() const { return m_aiPlayer; }
 
+    // Register an AI player controller for a specific player
+    void registerAIPlayer(QChar playerId, AIPlayer *aiPlayer);
+    AIPlayer* getAIPlayerForPlayer(QChar playerId) const;
+
     // === AI Movement ===
     // Structure describing a possible move for a leader
     struct MoveOption {
@@ -155,6 +159,9 @@ private:
     // Helper to get troop information at a position
     QString getTroopInfoAt(int row, int col) const;
 
+    // Handle territory conquest: unclaim from previous owner, transfer/destroy buildings, claim for new owner
+    void conquestTerritory(const QString &territoryName, Player *newOwner);
+
     // Create icon for territory (shows ownership color and combat indicator)
     QIcon createTerritoryIcon(int row, int col, QChar currentPlayer) const;
 
@@ -175,6 +182,7 @@ private:
     bool m_aiAutoMode = false;
     int m_aiAutoModeDelayMs = 1000;
     AIPlayer *m_aiPlayer = nullptr;  // Reference to AI player for decision-making
+    QMap<QChar, AIPlayer*> m_aiPlayers;  // Map of player ID to AI controller
 };
 
 #endif // PLAYERINFOWIDGET_H

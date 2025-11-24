@@ -20,7 +20,8 @@ SOURCES += \
     building.cpp \
     laurollingdiewidget.cpp \
     mapwidget.cpp \
-    mapgraph.cpp
+    mapgraph.cpp \
+    aiplayer.cpp
 
 HEADERS += \
     quickbattlesplash.h \
@@ -32,7 +33,9 @@ HEADERS += \
     common.h \
     laurollingdiewidget.h \
     mapwidget.h \
-    mapgraph.h
+    mapgraph.h \
+    aiplayer.h \
+    playerinfowidget.h
 
 RESOURCES += \
     resources.qrc

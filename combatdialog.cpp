@@ -1,4 +1,5 @@
 #include "combatdialog.h"
+#include "aiplayer.h"
 #include <QDebug>
 #include <QMessageBox>
 #include <QSet>
@@ -24,7 +25,7 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     , m_rollingDie(nullptr)
     , m_pendingGalleyButton(nullptr)
 {
-    setWindowTitle("Combat Resolution");
+    setWindowTitle(QString("Combat Resolution - %1").arg(combatTerritoryName));
 
     // Create rolling die widget early - needed before buttons are created
     m_rollingDie = new LAURollingDieWidget(1, this);
@@ -196,6 +197,28 @@ void CombatDialog::setupAIMode(bool attackerIsAI, bool defenderIsAI, int delayMs
     }
 }
 
+void CombatDialog::setupAIPlayers(AIPlayer *attackerAI, AIPlayer *defenderAI)
+{
+    m_attackerAI = attackerAI;
+    m_defenderAI = defenderAI;
+
+    // Set flags based on whether AIPlayer instances are provided
+    m_attackerIsAI = (attackerAI != nullptr);
+    m_defenderIsAI = (defenderAI != nullptr);
+
+    // Use delay from AIPlayer if available, otherwise default
+    if (attackerAI) {
+        m_aiDelayMs = attackerAI->getAIDelayMs();
+    } else if (defenderAI) {
+        m_aiDelayMs = defenderAI->getAIDelayMs();
+    }
+
+    // If attacker is AI, start the first move after a delay
+    if (m_attackerIsAI) {
+        QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+    }
+}
+
 void CombatDialog::makeAIMove()
 {
     // Determine which buttons are valid targets based on whose turn it is
@@ -222,28 +245,46 @@ void CombatDialog::makeAIMove()
         return;
     }
 
-    // Prioritize catapults - they give +1 advantage bonus
-    QList<QPushButton*> catapultTargets;
+    // Get the appropriate AIPlayer and target map
+    AIPlayer *currentAI = m_isAttackersTurn ? m_attackerAI : m_defenderAI;
     QMap<QPushButton*, GamePiece*> &targetMap = m_isAttackersTurn ? m_defendingTroopButtons : m_attackingTroopButtons;
 
+    // Build list of target types for AIPlayer
+    QList<GamePiece::Type> targetTypes;
     for (QPushButton *btn : validTargets) {
         GamePiece *piece = targetMap.value(btn);
-        if (piece && piece->getType() == GamePiece::Type::Catapult) {
-            catapultTargets.append(btn);
+        targetTypes.append(piece ? piece->getType() : GamePiece::Type::Infantry);
+    }
+
+    // Select target using AIPlayer if available, otherwise fallback to simple logic
+    int selectedIndex;
+    if (currentAI) {
+        selectedIndex = currentAI->selectCombatTarget(targetTypes);
+        qDebug() << "AI: Using AIPlayer for target selection";
+    } else {
+        // Fallback: prioritize catapults, otherwise random
+        QList<int> catapultIndices;
+        for (int i = 0; i < targetTypes.size(); ++i) {
+            if (targetTypes[i] == GamePiece::Type::Catapult) {
+                catapultIndices.append(i);
+            }
+        }
+
+        if (!catapultIndices.isEmpty()) {
+            selectedIndex = catapultIndices[rand() % catapultIndices.size()];
+            qDebug() << "AI: Fallback - prioritizing catapult target";
+        } else {
+            selectedIndex = rand() % validTargets.size();
+            qDebug() << "AI: Fallback - selecting random target";
         }
     }
 
-    // Pick from catapults if available, otherwise random target
-    QPushButton *targetButton;
-    if (!catapultTargets.isEmpty()) {
-        int targetIndex = rand() % catapultTargets.size();
-        targetButton = catapultTargets[targetIndex];
-        qDebug() << "AI: Prioritizing catapult target" << targetIndex + 1 << "of" << catapultTargets.size();
-    } else {
-        int targetIndex = rand() % validTargets.size();
-        targetButton = validTargets[targetIndex];
-        qDebug() << "AI: Selecting random target" << targetIndex + 1 << "of" << validTargets.size();
+    // Validate index
+    if (selectedIndex < 0 || selectedIndex >= validTargets.size()) {
+        selectedIndex = 0;
     }
+
+    QPushButton *targetButton = validTargets[selectedIndex];
 
     // Visual feedback: highlight the button as "pressed" and keep it pressed
     m_targetedButton = targetButton;
@@ -459,46 +500,44 @@ QGroupBox* CombatDialog::createLegionGroupBox(GamePiece *leader, const QList<int
     QVBoxLayout *layout = new QVBoxLayout(groupBox);
     layout->setSpacing(5);
 
-    // Add last territory info (for retreat)
-    Position lastTerritory = {-1, -1};
-    bool hasLastTerritory = false;
-    if (leader->getType() == GamePiece::Type::Caesar) {
-        CaesarPiece *caesar = static_cast<CaesarPiece*>(leader);
-        hasLastTerritory = caesar->hasLastTerritory();
-        if (hasLastTerritory) {
-            lastTerritory = caesar->getLastTerritory();
+    // Add territory info - retreat option for attackers, defending location for defenders
+    if (isAttacker) {
+        // Attackers can retreat to their last territory
+        Position lastTerritory = {-1, -1};
+        bool hasLastTerritory = false;
+        if (leader->getType() == GamePiece::Type::Caesar) {
+            CaesarPiece *caesar = static_cast<CaesarPiece*>(leader);
+            hasLastTerritory = caesar->hasLastTerritory();
+            if (hasLastTerritory) {
+                lastTerritory = caesar->getLastTerritory();
+            }
+        } else if (leader->getType() == GamePiece::Type::General) {
+            GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+            hasLastTerritory = general->hasLastTerritory();
+            if (hasLastTerritory) {
+                lastTerritory = general->getLastTerritory();
+            }
+        } else if (leader->getType() == GamePiece::Type::Galley) {
+            GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
+            hasLastTerritory = galley->hasLastTerritory();
+            if (hasLastTerritory) {
+                lastTerritory = galley->getLastTerritory();
+            }
         }
-    } else if (leader->getType() == GamePiece::Type::General) {
-        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
-        hasLastTerritory = general->hasLastTerritory();
-        if (hasLastTerritory) {
-            lastTerritory = general->getLastTerritory();
-        }
-    } else if (leader->getType() == GamePiece::Type::Galley) {
-        GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
-        hasLastTerritory = galley->hasLastTerritory();
-        if (hasLastTerritory) {
-            lastTerritory = galley->getLastTerritory();
-        }
-    }
 
-    if (hasLastTerritory && m_mapWidget) {
-        QString lastTerritoryName = m_mapWidget->getTerritoryNameAt(lastTerritory.row, lastTerritory.col);
-        QLabel *retreatLabel = new QLabel(QString("%1 [%2,%3]")
-                                              .arg(lastTerritoryName)
-                                              .arg(lastTerritory.row)
-                                              .arg(lastTerritory.col));
-        retreatLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
-        retreatLabel->setAlignment(Qt::AlignCenter);
-        layout->addWidget(retreatLabel);
-    } else {
-        // Show current territory for defenders (no retreat available)
-        if (m_mapWidget) {
-            QLabel *retreatLabel = new QLabel(m_combatTerritoryName);
+        if (hasLastTerritory && m_mapWidget) {
+            QString lastTerritoryName = m_mapWidget->getTerritoryNameAt(lastTerritory.row, lastTerritory.col);
+            QLabel *retreatLabel = new QLabel(QString("Retreat to: %1").arg(lastTerritoryName));
             retreatLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
             retreatLabel->setAlignment(Qt::AlignCenter);
             layout->addWidget(retreatLabel);
         }
+    } else {
+        // Defenders cannot retreat - show the territory they are defending
+        QLabel *territoryLabel = new QLabel(QString("Defending: %1").arg(m_combatTerritoryName));
+        territoryLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
+        territoryLabel->setAlignment(Qt::AlignCenter);
+        layout->addWidget(territoryLabel);
     }
 
     // Add troops in legion
@@ -1143,7 +1182,13 @@ void CombatDialog::onRetreatClicked()
     retreatMsg.setText("Attacker has retreated! Surviving troops have returned to their previous territory.");
     retreatMsg.setIconPixmap(QPixmap(":/images/retreatIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     retreatMsg.setStandardButtons(QMessageBox::Ok);
+    if (m_attackerIsAI && m_defenderIsAI) {
+        QTimer::singleShot(1500, &retreatMsg, &QMessageBox::accept);
+    }
     retreatMsg.exec();
+
+    // Update roads after potential territory ownership change
+    m_mapWidget->updateRoads();
 
     m_combatResult = CombatResult::AttackerRetreats;
     accept();
@@ -1380,6 +1425,14 @@ bool CombatDialog::checkCombatEnd()
                 m_attackingPlayer->addCity(city);
             }
 
+            // Transfer all roads
+            QList<Road*> roads = m_defendingPlayer->getRoads();
+            for (Road *road : roads) {
+                m_defendingPlayer->removeRoad(road);
+                road->setOwner(m_attackingPlayer->getId());
+                m_attackingPlayer->addRoad(road);
+            }
+
             // Transfer all generals (they become active generals of the winner)
             QList<GeneralPiece*> generals = m_defendingPlayer->getGenerals();
             for (GeneralPiece *general : generals) {
@@ -1474,6 +1527,9 @@ bool CombatDialog::checkCombatEnd()
             }
             eliminationMsg.exec();
 
+            // Update roads after mass territory transfer
+            m_mapWidget->updateRoads();
+
             accept();
             return true;
         }
@@ -1563,7 +1619,24 @@ bool CombatDialog::checkCombatEnd()
         // Transfer any cities at this territory from defender to attacker
         City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
         if (city) {
-            // Remove from defender
+            // First, destroy any roads connected to this city (roads require both ends to be same owner)
+            Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
+            QList<Road*> roadsToRemove;
+            for (Road *road : m_defendingPlayer->getRoads()) {
+                // Check if this road connects to the conquered territory (using positions)
+                Position fromPos = road->getFromPosition();
+                Position toPos = road->getToPosition();
+                if ((fromPos.row == combatPos.row && fromPos.col == combatPos.col) ||
+                    (toPos.row == combatPos.row && toPos.col == combatPos.col)) {
+                    roadsToRemove.append(road);
+                }
+            }
+            for (Road *road : roadsToRemove) {
+                m_defendingPlayer->removeRoad(road);
+                delete road;
+            }
+
+            // Remove city from defender
             m_defendingPlayer->removeCity(city);
             // Change ownership to attacker
             city->setOwner(m_attackingPlayer->getId());
@@ -1610,7 +1683,13 @@ bool CombatDialog::checkCombatEnd()
         attackerWinsMsg.setText(conquestMessage);
         attackerWinsMsg.setIconPixmap(QPixmap(":/images/victoryIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         attackerWinsMsg.setStandardButtons(QMessageBox::Ok);
+        if (m_attackerIsAI && m_defenderIsAI) {
+            QTimer::singleShot(1500, &attackerWinsMsg, &QMessageBox::accept);
+        }
         attackerWinsMsg.exec();
+
+        // Update roads after territory ownership changed
+        m_mapWidget->updateRoads();
 
         m_combatResult = CombatResult::AttackerWins;
         accept();
@@ -1803,6 +1882,9 @@ bool CombatDialog::checkCombatEnd()
             }
             takeoverMsg.exec();
 
+            // Update roads after mass territory transfer
+            m_mapWidget->updateRoads();
+
             accept();
             return true;
         }
@@ -1887,6 +1969,9 @@ bool CombatDialog::checkCombatEnd()
         defenderWinsMsg.setText("Defender Wins! Territory successfully defended.");
         defenderWinsMsg.setIconPixmap(QPixmap(":/images/deadIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         defenderWinsMsg.setStandardButtons(QMessageBox::Ok);
+        if (m_attackerIsAI && m_defenderIsAI) {
+            QTimer::singleShot(1500, &defenderWinsMsg, &QMessageBox::accept);
+        }
         defenderWinsMsg.exec();
 
         m_combatResult = CombatResult::DefenderWins;

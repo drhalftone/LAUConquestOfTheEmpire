@@ -160,6 +160,9 @@ public:
     // Returns the amount collected
     int collectTaxes(class MapWidget *mapWidget);
 
+    // Calculate income without collecting (for inflation threshold checks)
+    int calculateIncome(class MapWidget *mapWidget) const;
+
 signals:
     void turnStarted();
     void turnEnded();

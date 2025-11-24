@@ -678,3 +678,30 @@ int Player::collectTaxes(MapWidget *mapWidget)
 
     return totalTaxes;
 }
+
+int Player::calculateIncome(MapWidget *mapWidget) const
+{
+    if (!mapWidget) {
+        return 0;
+    }
+
+    int totalIncome = 0;
+
+    // Sum territory values
+    for (const QString &territoryName : m_ownedTerritories) {
+        for (int row = 0; row < 8; ++row) {
+            for (int col = 0; col < 12; ++col) {
+                if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
+                    int territoryValue = mapWidget->getTerritoryValueAt(row, col);
+                    totalIncome += territoryValue;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Add 5 talents for each city owned
+    totalIncome += m_cities.size() * 5;
+
+    return totalIncome;
+}

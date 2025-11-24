@@ -15,6 +15,8 @@
 #include "mapwidget.h"
 #include "laurollingdiewidget.h"
 
+class AIPlayer;
+
 class CombatDialog : public QDialog
 {
     Q_OBJECT
@@ -35,7 +37,10 @@ public:
     // Get the result of the combat
     CombatResult getCombatResult() const { return m_combatResult; }
 
-    // Set up AI control for one or both sides
+    // Set up AI control for one or both sides (using AIPlayer instances)
+    void setupAIPlayers(AIPlayer *attackerAI, AIPlayer *defenderAI);
+
+    // Legacy method for simple AI (no AIPlayer instance)
     void setupAIMode(bool attackerIsAI, bool defenderIsAI, int delayMs = 1000);
 
 protected:
@@ -139,6 +144,10 @@ private:
     bool m_attackerIsAI = false;
     bool m_defenderIsAI = false;
     int m_aiDelayMs = 1000;
+
+    // AIPlayer instances (nullptr if human or simple AI)
+    AIPlayer *m_attackerAI = nullptr;
+    AIPlayer *m_defenderAI = nullptr;
 
     // Track the button being attacked (for visual feedback)
     QPushButton *m_targetedButton = nullptr;

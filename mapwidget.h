@@ -19,9 +19,16 @@ class MapWidget : public QWidget
 public:
     explicit MapWidget(QWidget *parent = nullptr);
 
-    // DEBUG: Smaller map for testing (original: 12x8)
-    static constexpr int COLUMNS = 7;
-    static constexpr int ROWS = 5;
+    // Default map size (can be changed via setMapSize)
+    static constexpr int DEFAULT_COLUMNS = 7;
+    static constexpr int DEFAULT_ROWS = 5;
+
+    // Dynamic map size accessors
+    int rows() const { return m_rows; }
+    int cols() const { return m_cols; }
+
+    // Set map size (must be called before initializeMap or when loading)
+    void setMapSize(int rows, int cols);
 
     enum class TileType {
         Land,
@@ -108,6 +115,10 @@ public:
     bool isAtStartOfTurn() const { return m_isAtStartOfTurn; }
     void setAtStartOfTurn(bool atStart) { m_isAtStartOfTurn = atStart; }
 
+    // Inflation tracking (1 = no inflation, 2 = single, 3 = double)
+    int getInflationMultiplier() const { return m_inflationMultiplier; }
+    void setInflationMultiplier(int multiplier) { m_inflationMultiplier = qBound(1, multiplier, 3); }
+
     // === Graph-based Map System (Phase 2) ===
     // Converters between grid Position and graph territory names
     QString positionToTerritoryName(const Position &pos) const;
@@ -159,6 +170,10 @@ private:
     Piece* getPieceAt(const QPoint &pos, QChar player);
     QVector<Piece*> getPiecesAtPosition(const Position &pos, QChar player);
     void createMenuBar();
+
+    // Dynamic map dimensions
+    int m_rows;
+    int m_cols;
 
     QMenuBar *m_menuBar;
     QVector<QVector<TileType>> m_tiles;

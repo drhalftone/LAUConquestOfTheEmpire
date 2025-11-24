@@ -13,6 +13,7 @@
 #include "gamepiece.h"
 #include "mapwidget.h"
 #include "building.h"
+#include "aiplayer.h"
 
 // Create game pieces from purchase result
 void createPiecesFromPurchase(Player *player, const PurchaseResult &result, const QString &territory)
@@ -336,12 +337,30 @@ int main(int argc, char *argv[])
         CombatDialog combatDialog(attacker, defender, "Battlefield", &mapWidget);
         qDebug() << "CombatDialog created, about to exec()...";
 
-        // Set up AI control if selected
-        if (attackerIsAI || defenderIsAI) {
-            combatDialog.setupAIMode(attackerIsAI, defenderIsAI, 1000);
+        // Create AIPlayer instances if AI controlled
+        // Note: PlayerInfoWidget is nullptr since we're using stubs in QuickBattle
+        AIPlayer *attackerAI = nullptr;
+        AIPlayer *defenderAI = nullptr;
+
+        if (attackerIsAI) {
+            attackerAI = new AIPlayer(attacker, nullptr, &mapWidget);
+            attackerAI->setDelayMs(1000);
+        }
+        if (defenderIsAI) {
+            defenderAI = new AIPlayer(defender, nullptr, &mapWidget);
+            defenderAI->setDelayMs(1000);
+        }
+
+        // Set up AI control using AIPlayer instances
+        if (attackerAI || defenderAI) {
+            combatDialog.setupAIPlayers(attackerAI, defenderAI);
         }
 
         combatDialog.exec();
+
+        // Clean up AIPlayer instances
+        delete attackerAI;
+        delete defenderAI;
 
         // Log battle result for AI training
         logBattleResult(budget,

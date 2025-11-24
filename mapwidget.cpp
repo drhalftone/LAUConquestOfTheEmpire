@@ -37,6 +37,8 @@
 
 MapWidget::MapWidget(QWidget *parent)
     : QWidget(parent)
+    , m_rows(DEFAULT_ROWS)
+    , m_cols(DEFAULT_COLUMNS)
     , m_menuBar(nullptr)
     , m_playerInfoWidget(nullptr)
     , m_tileWidth(60)
@@ -60,7 +62,7 @@ MapWidget::MapWidget(QWidget *parent)
 
     // Set minimum size based on grid dimensions (add menu bar height + score bar height)
     int scoreBarHeight = 80;
-    setMinimumSize(COLUMNS * m_tileWidth, ROWS * m_tileHeight + (m_menuBar ? m_menuBar->height() : 25) + scoreBarHeight);
+    setMinimumSize(m_cols * m_tileWidth, m_rows * m_tileHeight + (m_menuBar ? m_menuBar->height() : 25) + scoreBarHeight);
 
     // Enable mouse tracking to receive mouse move events
     setMouseTracking(true);
@@ -76,9 +78,9 @@ MapWidget::MapWidget(QWidget *parent)
     // Initialize troop grids for all players
     for (char c = 'A'; c <= 'F'; ++c) {
         QChar player(c);
-        m_playerTroops[player].resize(ROWS);
-        for (int row = 0; row < ROWS; ++row) {
-            m_playerTroops[player][row].resize(COLUMNS);
+        m_playerTroops[player].resize(m_rows);
+        for (int row = 0; row < m_rows; ++row) {
+            m_playerTroops[player][row].resize(m_cols);
         }
     }
 
@@ -107,21 +109,21 @@ MapWidget::MapWidget(QWidget *parent)
 void MapWidget::initializeMap()
 {
     // Resize the 2D vectors
-    m_tiles.resize(ROWS);
-    m_ownership.resize(ROWS);
-    m_hasCity.resize(ROWS);
-    m_hasFortification.resize(ROWS);
-    for (int row = 0; row < ROWS; ++row) {
-        m_tiles[row].resize(COLUMNS);
-        m_ownership[row].resize(COLUMNS);
-        m_hasCity[row].resize(COLUMNS);
-        m_hasFortification[row].resize(COLUMNS);
+    m_tiles.resize(m_rows);
+    m_ownership.resize(m_rows);
+    m_hasCity.resize(m_rows);
+    m_hasFortification.resize(m_rows);
+    for (int row = 0; row < m_rows; ++row) {
+        m_tiles[row].resize(m_cols);
+        m_ownership[row].resize(m_cols);
+        m_hasCity[row].resize(m_cols);
+        m_hasFortification[row].resize(m_cols);
     }
 
     // Randomly assign each tile as land or sea
     QRandomGenerator *random = QRandomGenerator::global();
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             // 75% chance of land (green), 25% chance of sea (blue)
             m_tiles[row][col] = (random->bounded(100) < 75) ? TileType::Land : TileType::Sea;
             // Initialize as unowned
@@ -145,12 +147,12 @@ void MapWidget::paintEvent(QPaintEvent *event)
     int scoreBarHeight = 80;
 
     // Calculate tile size based on current widget size (minus menu bar and score bar)
-    m_tileWidth = width() / COLUMNS;
-    m_tileHeight = (height() - menuBarHeight - scoreBarHeight) / ROWS;
+    m_tileWidth = width() / m_cols;
+    m_tileHeight = (height() - menuBarHeight - scoreBarHeight) / m_rows;
 
     // Draw each tile (offset by menu bar height)
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             int x = col * m_tileWidth;
             int y = menuBarHeight + (row * m_tileHeight);
 
@@ -433,7 +435,7 @@ void MapWidget::paintEvent(QPaintEvent *event)
     Q_UNUSED(m_draggedPiece);
 
     // Draw player scores at the bottom
-    int scoreY = menuBarHeight + (ROWS * m_tileHeight);
+    int scoreY = menuBarHeight + (m_rows * m_tileHeight);
     int numPlayers = m_players.size() > 0 ? m_players.size() : 1;
     int cellWidth = width() / numPlayers;
     int cellHeight = scoreBarHeight - 10;
@@ -584,8 +586,8 @@ void MapWidget::placeCaesars()
 
     // Collect all land tiles
     QVector<Position> landTiles;
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             if (m_tiles[row][col] == TileType::Land) {
                 landTiles.append({row, col});
             }
@@ -675,16 +677,16 @@ void MapWidget::assignTerritoryNames()
     std::shuffle(fishNames.begin(), fishNames.end(), *random);
 
     // Resize territories array
-    m_territories.resize(ROWS);
-    for (int row = 0; row < ROWS; ++row) {
-        m_territories[row].resize(COLUMNS);
+    m_territories.resize(m_rows);
+    for (int row = 0; row < m_rows; ++row) {
+        m_territories[row].resize(m_cols);
     }
 
     // Assign names and values
     int animalIndex = 0;
     int fishIndex = 0;
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             if (m_tiles[row][col] == TileType::Land) {
                 // Assign unique animal name
                 if (animalIndex < animalNames.size()) {
@@ -713,8 +715,8 @@ void MapWidget::assignTerritoryNames()
 
 bool MapWidget::isInsidePiece(const QPoint &pos, const Position &piecePos, int radius) const
 {
-    int tileWidth = width() / COLUMNS;
-    int tileHeight = height() / ROWS;
+    int tileWidth = width() / m_cols;
+    int tileHeight = height() / m_rows;
 
     int x = piecePos.col * tileWidth;
     int y = piecePos.row * tileHeight;
@@ -822,7 +824,7 @@ void MapWidget::mousePressEvent(QMouseEvent *event)
             int row = clickY / m_tileHeight;
 
             // Check if click is within valid map bounds
-            if (row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+            if (row >= 0 && row < m_rows && col >= 0 && col < m_cols) {
                 QString territoryName = getTerritoryNameAt(row, col);
 
                 // Get current player
@@ -871,7 +873,7 @@ bool MapWidget::event(QEvent *event)
         int col = helpEvent->pos().x() / m_tileWidth;
         int row = helpEvent->pos().y() / m_tileHeight;
 
-        if (row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+        if (row >= 0 && row < m_rows && col >= 0 && col < m_cols) {
             ::Position pos = {row, col};
             QString territoryName = getTerritoryNameAt(row, col);
 
@@ -1054,8 +1056,8 @@ QMap<QChar, int> MapWidget::calculateScores() const
     }
 
     // Sum up territory values for each player
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             QChar owner = m_ownership[row][col];
             if (owner != '\0') {
                 scores[owner] += m_territories[row][col].value;
@@ -1068,7 +1070,7 @@ QMap<QChar, int> MapWidget::calculateScores() const
 
 QString MapWidget::getTerritoryNameAt(int row, int col) const
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return "Off Board";
     }
 
@@ -1077,7 +1079,7 @@ QString MapWidget::getTerritoryNameAt(int row, int col) const
 
 int MapWidget::getTerritoryValueAt(int row, int col) const
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return 0;
     }
 
@@ -1086,7 +1088,7 @@ int MapWidget::getTerritoryValueAt(int row, int col) const
 
 bool MapWidget::isSeaTerritory(int row, int col) const
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return false;
     }
 
@@ -1107,8 +1109,8 @@ QList<Position> MapWidget::getAdjacentSeaTerritories(const Position &pos) const
 
     for (const Position &adjPos : adjacentPositions) {
         // Check if position is valid and is a sea territory
-        if (adjPos.row >= 0 && adjPos.row < ROWS &&
-            adjPos.col >= 0 && adjPos.col < COLUMNS &&
+        if (adjPos.row >= 0 && adjPos.row < m_rows &&
+            adjPos.col >= 0 && adjPos.col < m_cols &&
             isSeaTerritory(adjPos.row, adjPos.col)) {
             seaTerritories.append(adjPos);
         }
@@ -1124,8 +1126,8 @@ QVector<MapWidget::HomeProvinceInfo> MapWidget::getRandomHomeProvinces()
 
     // Collect all land tiles that are adjacent to at least one sea territory
     QVector<Position> coastalLandTiles;
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             if (m_tiles[row][col] == TileType::Land) {
                 Position pos = {row, col};
                 // Check if this land tile is adjacent to any sea territory
@@ -1163,7 +1165,7 @@ QVector<MapWidget::HomeProvinceInfo> MapWidget::getRandomHomeProvinces()
 
 QChar MapWidget::getTerritoryOwnerAt(int row, int col) const
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return '\0';
     }
 
@@ -1180,7 +1182,7 @@ QChar MapWidget::getTerritoryOwnerAt(int row, int col) const
 
 bool MapWidget::hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return false;
     }
 
@@ -1233,7 +1235,7 @@ void MapWidget::dropEvent(QDropEvent *event)
     int row = dropPos.y() / m_tileHeight;
 
     // Make sure drop is within bounds
-    if (col < 0 || col >= COLUMNS || row < 0 || row >= ROWS) {
+    if (col < 0 || col >= m_cols || row < 0 || row >= m_rows) {
         return;
     }
 
@@ -1511,8 +1513,8 @@ void MapWidget::saveGame()
 
     // Save map state (territories with their names and values)
     QJsonArray territoriesArray;
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             QJsonObject territoryObj;
             territoryObj["row"] = row;
             territoryObj["col"] = col;
@@ -1821,7 +1823,7 @@ void MapWidget::showAbout()
 
 void MapWidget::setTerritoryAt(int row, int col, const QString &name, int value, bool isLand)
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return;
     }
 
@@ -1832,7 +1834,7 @@ void MapWidget::setTerritoryAt(int row, int col, const QString &name, int value,
 
 void MapWidget::removeCityAt(int row, int col)
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return;
     }
 
@@ -1842,7 +1844,7 @@ void MapWidget::removeCityAt(int row, int col)
 
 void MapWidget::removeFortificationAt(int row, int col)
 {
-    if (row < 0 || row >= ROWS || col < 0 || col >= COLUMNS) {
+    if (row < 0 || row >= m_rows || col < 0 || col >= m_cols) {
         return;
     }
 
@@ -1850,11 +1852,45 @@ void MapWidget::removeFortificationAt(int row, int col)
     qDebug() << "Removed fortification at grid position (" << row << "," << col << ")";
 }
 
+void MapWidget::setMapSize(int rows, int cols)
+{
+    m_rows = rows;
+    m_cols = cols;
+
+    // Resize all 2D data structures
+    m_tiles.resize(m_rows);
+    m_territories.resize(m_rows);
+    m_ownership.resize(m_rows);
+    m_hasCity.resize(m_rows);
+    m_hasFortification.resize(m_rows);
+
+    for (int row = 0; row < m_rows; ++row) {
+        m_tiles[row].resize(m_cols);
+        m_territories[row].resize(m_cols);
+        m_ownership[row].resize(m_cols);
+        m_hasCity[row].resize(m_cols);
+        m_hasFortification[row].resize(m_cols);
+    }
+
+    // Resize troop grids for all players
+    for (char c = 'A'; c <= 'F'; ++c) {
+        QChar player(c);
+        m_playerTroops[player].resize(m_rows);
+        for (int row = 0; row < m_rows; ++row) {
+            m_playerTroops[player][row].resize(m_cols);
+        }
+    }
+
+    // Update minimum size
+    int scoreBarHeight = 80;
+    setMinimumSize(m_cols * m_tileWidth, m_rows * m_tileHeight + (m_menuBar ? m_menuBar->height() : 25) + scoreBarHeight);
+}
+
 void MapWidget::clearMap()
 {
     // Clear territories
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             m_territories[row][col].name = "";
             m_territories[row][col].value = 0;
             m_tiles[row][col] = TileType::Land;
@@ -1937,8 +1973,37 @@ void MapWidget::updateRoads()
         return;
     }
 
-    // For each player, check all their cities and create roads to adjacent cities
+    // For each player, first REMOVE invalid roads, then create new ones
     for (Player *player : m_players) {
+        // Remove roads where either endpoint is no longer owned by this player
+        // or no longer has a city owned by this player
+        QList<Road*> roadsToRemove;
+        for (Road *road : player->getRoads()) {
+            QString territory1 = road->getTerritoryName();
+            ::Position toPos = road->getToPosition();
+            QString territory2 = getTerritoryNameAt(toPos.row, toPos.col);
+
+            // Check if player still owns both territories
+            bool ownsTerritory1 = player->ownsTerritory(territory1);
+            bool ownsTerritory2 = player->ownsTerritory(territory2);
+
+            // Check if player still has cities at both endpoints
+            bool hasCity1 = (player->getCityAtTerritory(territory1) != nullptr);
+            bool hasCity2 = (player->getCityAtTerritory(territory2) != nullptr);
+
+            // Road is invalid if player doesn't own both territories OR doesn't have cities at both
+            if (!ownsTerritory1 || !ownsTerritory2 || !hasCity1 || !hasCity2) {
+                roadsToRemove.append(road);
+            }
+        }
+
+        // Remove invalid roads
+        for (Road *road : roadsToRemove) {
+            player->removeRoad(road);
+            delete road;
+        }
+
+        // Now create new roads between adjacent cities
         QList<City*> cities = player->getCities();
 
         // Check each pair of cities to see if they're adjacent
@@ -2023,8 +2088,8 @@ void MapWidget::buildGraphFromGrid()
     m_graph->clear();
 
     // Create a territory for each grid cell
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             // Use actual territory name from m_territories array
             QString territoryName = m_territories[row][col].name;
 
@@ -2070,18 +2135,18 @@ void MapWidget::buildGraphFromGrid()
     }
 
     // Now add edges between adjacent cells (4-directional: up, down, left, right)
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             QString currentTerritory = m_territories[row][col].name;
 
             // Check right neighbor
-            if (col + 1 < COLUMNS) {
+            if (col + 1 < m_cols) {
                 QString rightNeighbor = m_territories[row][col + 1].name;
                 m_graph->addEdge(currentTerritory, rightNeighbor);
             }
 
             // Check down neighbor
-            if (row + 1 < ROWS) {
+            if (row + 1 < m_rows) {
                 QString downNeighbor = m_territories[row + 1][col].name;
                 m_graph->addEdge(currentTerritory, downNeighbor);
             }
@@ -2092,7 +2157,7 @@ void MapWidget::buildGraphFromGrid()
 QString MapWidget::positionToTerritoryName(const Position &pos) const
 {
     // Convert grid Position to territory name
-    if (pos.row >= 0 && pos.row < ROWS && pos.col >= 0 && pos.col < COLUMNS) {
+    if (pos.row >= 0 && pos.row < m_rows && pos.col >= 0 && pos.col < m_cols) {
         return QString("T_%1_%2").arg(pos.row).arg(pos.col);
     }
     return QString();  // Invalid position
@@ -2101,8 +2166,8 @@ QString MapWidget::positionToTerritoryName(const Position &pos) const
 Position MapWidget::territoryNameToPosition(const QString &territoryName) const
 {
     // Search through all territories to find matching name
-    for (int row = 0; row < ROWS; ++row) {
-        for (int col = 0; col < COLUMNS; ++col) {
+    for (int row = 0; row < m_rows; ++row) {
+        for (int col = 0; col < m_cols; ++col) {
             if (m_territories[row][col].name == territoryName) {
                 return Position{row, col};
             }
@@ -2116,7 +2181,7 @@ Position MapWidget::territoryNameToPosition(const QString &territoryName) const
             bool ok1, ok2;
             int row = parts[0].toInt(&ok1);
             int col = parts[1].toInt(&ok2);
-            if (ok1 && ok2 && row >= 0 && row < ROWS && col >= 0 && col < COLUMNS) {
+            if (ok1 && ok2 && row >= 0 && row < m_rows && col >= 0 && col < m_cols) {
                 return Position{row, col};
             }
         }
