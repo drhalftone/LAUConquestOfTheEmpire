@@ -23,5 +23,8 @@
         <file>images/retreatIcon.png</file>
         <file>images/captureIcon.png</file>
         <file>images/walledCityIcon.png</file>
+        <file>images/Map.jpg</file>
+        <file>images/territories_index.png</file>
+        <file>images/territories.csv</file>
     </qresource>
 </RCC>
