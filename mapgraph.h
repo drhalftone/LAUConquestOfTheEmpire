@@ -3,45 +3,38 @@
 
 #include <QString>
 #include <QPointF>
-#include <QPolygonF>
 #include <QList>
 #include <QMap>
-#include <QColor>
 #include <QJsonObject>
 
-// Territory type classification
+// Territory type classification (Land or Sea only)
 enum class TerritoryType {
     Land,
-    Sea,
-    Mountain,
-    Impassable
+    Sea
 };
 
 // Represents a single territory on the map
 struct Territory {
-    QString name;                   // Unique identifier (e.g., "Rome", "Egypt")
+    int id;                         // Territory ID (1-60)
+    QString name;                   // Territory name (e.g., "Roma", "Aegyptus")
     QPointF centroid;               // Center point for rendering pieces/labels
-    QPolygonF boundary;             // Polygon defining territory shape for hit detection
     QList<QString> neighbors;       // List of adjacent territory names
-    TerritoryType type;             // Classification (land, sea, etc.)
-
-    // Optional rendering properties
-    QColor color;                   // Visual distinction color
-    QPointF labelPosition;          // Where to draw territory name (defaults to centroid if not set)
+    TerritoryType type;             // Land or Sea
+    int value;                      // Tax value (0 for sea, 5/10/20 for land)
 
     // Constructor with defaults
     Territory()
-        : type(TerritoryType::Land)
-        , color(Qt::white)
-        , labelPosition(0, 0)
+        : id(0)
+        , type(TerritoryType::Land)
+        , value(0)
     {}
 
-    Territory(const QString &n, const QPointF &c, TerritoryType t = TerritoryType::Land)
-        : name(n)
+    Territory(int i, const QString &n, const QPointF &c, TerritoryType t, int v)
+        : id(i)
+        , name(n)
         , centroid(c)
         , type(t)
-        , color(Qt::white)
-        , labelPosition(c)  // Default label position to centroid
+        , value(v)
     {}
 };
 
@@ -88,18 +81,14 @@ public:
 
     // === Spatial Queries ===
 
-    // Find which territory contains the given point (for click detection)
-    // Returns empty string if point is not in any territory
-    QString getTerritoryAt(const QPointF &point) const;
-
     // Get the centroid of a territory
     QPointF getCentroid(const QString &name) const;
 
-    // Get the boundary polygon of a territory
-    QPolygonF getBoundary(const QString &name) const;
+    // Get territory by ID (1-60)
+    Territory getTerritoryById(int id) const;
 
-    // Get the label position for a territory
-    QPointF getLabelPosition(const QString &name) const;
+    // Get territory name by ID
+    QString getTerritoryNameById(int id) const;
 
     // === Type Queries ===
 
@@ -111,6 +100,9 @@ public:
 
     // Get the type of a territory
     TerritoryType getType(const QString &name) const;
+
+    // Get the tax value of a territory (0 for sea)
+    int getValue(const QString &name) const;
 
     // === Pathfinding ===
 
@@ -151,8 +143,14 @@ public:
     QJsonObject saveToJsonObject() const;
 
 private:
+    // Load territories from CSV resource file
+    void loadFromCSV();
+
     // Internal storage: map from territory name to Territory data
     QMap<QString, Territory> m_territories;
+
+    // Map from territory ID to name (for neighbor resolution)
+    QMap<int, QString> m_idToName;
 
     // Helper function for BFS pathfinding
     QList<QString> breadthFirstSearch(const QString &from, const QString &to) const;

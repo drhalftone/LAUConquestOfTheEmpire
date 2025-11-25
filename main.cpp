@@ -1,5 +1,9 @@
 #include "playerinfowidget.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include "player.h"
 #include "scorewindow.h"
 #include "walletwindow.h"
@@ -17,9 +21,36 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSet>
+#include <QInputDialog>
+
+// Home provinces by player count (from Conquest of the Empire Classic Rules)
+// Order follows clockwise around Mediterranean: Macedonia, Galatia, Mesopotamia, Egyptus, Numidia, Hispania, Italia
+QStringList getHomeProvincesForPlayerCount(int numPlayers)
+{
+    switch (numPlayers) {
+        case 2:
+            return {"Hispania", "Egyptus"};
+        case 3:
+            return {"Macedonia", "Egyptus", "Hispania"};
+        case 4:
+            return {"Hispania", "Macedonia", "Mesopotamia", "Numidia"};
+        case 5:
+            // Omit Numidia and Galatia
+            return {"Hispania", "Italia", "Macedonia", "Mesopotamia", "Egyptus"};
+        case 6:
+            // Omit Mesopotamia
+            return {"Hispania", "Italia", "Macedonia", "Galatia", "Numidia", "Egyptus"};
+        default:
+            return {"Hispania", "Egyptus"};  // Default to 2 players
+    }
+}
 
 // Forward declaration
+#ifdef USE_OPENGL_MAP
+bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex);
+#else
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex);
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -44,6 +75,8 @@ int main(int argc, char *argv[])
     QString loadFileName;
     bool loadGame = false;
 
+    int numPlayers = 2;  // Default
+
     if (startupDialog.clickedButton() == loadGameButton) {
         // Get last used directory from settings, default to Documents folder
         QSettings settings("ConquestOfTheEmpire", "MapWidget");
@@ -65,16 +98,38 @@ int main(int argc, char *argv[])
         settings.setValue("lastSaveDirectory", fileInfo.absolutePath());
 
         loadGame = true;
+    } else if (startupDialog.clickedButton() == newGameButton) {
+        // Ask for number of players
+        QStringList playerOptions = {"2 Players", "3 Players", "4 Players", "5 Players", "6 Players"};
+        bool ok;
+        QString selection = QInputDialog::getItem(nullptr,
+                                                  "New Game",
+                                                  "Select number of players:",
+                                                  playerOptions,
+                                                  0,  // Default to 2 players
+                                                  false,  // Not editable
+                                                  &ok);
+        if (!ok) {
+            // User cancelled, exit application
+            return 0;
+        }
+
+        // Parse selection to get number
+        numPlayers = selection.left(1).toInt();
+        qDebug() << "Starting new game with" << numPlayers << "players";
     } else if (startupDialog.clickedButton() == exitButton) {
         // User chose to exit
         return 0;
     }
-    // else: New Game button was clicked, continue with normal initialization
 
     // Reset the piece counter for a fresh game
     GamePiece::resetCounter();
 
+#ifdef USE_OPENGL_MAP
+    GameMapWidget *mapWidget = nullptr;
+#else
     MapWidget *mapWidget = nullptr;
+#endif
     QList<Player*> players;
     int currentPlayerIndex = 0;
 
@@ -93,23 +148,26 @@ int main(int argc, char *argv[])
 
     // If not loading or load failed, create new game
     if (!loadGame) {
-        // Create the map widget first - it will initialize the random map
+        // Create the map widget
+#ifdef USE_OPENGL_MAP
+        mapWidget = new GameMapWidget();
+#else
         mapWidget = new MapWidget();
+#endif
 
-        // Get random home provinces from the map
-        QVector<MapWidget::HomeProvinceInfo> homeProvinces = mapWidget->getRandomHomeProvinces();
+        // Get home provinces for the selected number of players
+        QStringList homeProvinces = getHomeProvincesForPlayerCount(numPlayers);
 
-        // Create players with the home provinces from the map
-        // DEBUG: Only 1 player for testing AI movement (original: 6 players)
+        // Create players with the correct starting territories
         QList<QChar> playerIds = {'A', 'B', 'C', 'D', 'E', 'F'};
-        int numPlayers = 1;  // DEBUG: reduced to 1 for AI testing
 
         for (int i = 0; i < numPlayers && i < homeProvinces.size(); ++i) {
             Player *player = new Player(
                 playerIds[i],
-                homeProvinces[i].name  // Only need territory name now
+                homeProvinces[i]  // Home province name from rules
             );
             players.append(player);
+            qDebug() << "Player" << playerIds[i] << "starts in" << homeProvinces[i];
         }
 
         currentPlayerIndex = 0;
@@ -132,6 +190,13 @@ int main(int argc, char *argv[])
     // Update the map to show initial territory ownership
     mapWidget->update();
 
+#ifdef USE_OPENGL_MAP
+    // OpenGL map - simplified setup without PlayerInfoWidget integration
+    // Just show the map for now
+    PlayerInfoWidget *infoWidget = nullptr;
+    ScoreWindow *scoreWindow = nullptr;
+    WalletWindow *walletWindow = nullptr;
+#else
     // Create and show the player info widget
     PlayerInfoWidget *infoWidget = new PlayerInfoWidget();
     infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
@@ -152,23 +217,18 @@ int main(int argc, char *argv[])
     walletWindow->setWindowTitle("Player Wallets");
     // Don't show it by default since wallets are in player info widget now
     // walletWindow->show();
+#endif
 
-    // Initialize scores and wallets
+#ifndef USE_OPENGL_MAP
+    // Initialize scores and wallets (grid-based only)
     QMap<QChar, int> initialScores;
     QMap<QChar, int> initialWallets;
     for (Player *player : players) {
-        // Calculate total tax value for owned territories
+        // Calculate total tax value for owned territories using MapGraph
         int totalTaxValue = 0;
         const QList<QString> &territories = player->getOwnedTerritories();
         for (const QString &territoryName : territories) {
-            for (int row = 0; row < 8; ++row) {
-                for (int col = 0; col < 12; ++col) {
-                    if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                        totalTaxValue += mapWidget->getTerritoryValueAt(row, col);
-                        break;
-                    }
-                }
-            }
+            totalTaxValue += mapWidget->getGraph()->getValue(territoryName);
         }
         // Add 5 for each city owned
         totalTaxValue += player->getCityCount() * 5;
@@ -209,14 +269,8 @@ int main(int argc, char *argv[])
             int totalTaxValue = 0;
             const QList<QString> &territories = player->getOwnedTerritories();
             for (const QString &territoryName : territories) {
-                for (int row = 0; row < 8; ++row) {
-                    for (int col = 0; col < 12; ++col) {
-                        if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                            totalTaxValue += mapWidget->getTerritoryValueAt(row, col);
-                            break;
-                        }
-                    }
-                }
+                // Use MapGraph for territory values (works for both grid and OpenGL)
+                totalTaxValue += mapWidget->getGraph()->getValue(territoryName);
             }
             // Add 5 for each city owned
             totalTaxValue += player->getCityCount() * 5;
@@ -242,9 +296,11 @@ int main(int argc, char *argv[])
         // Note: Roads are updated at start of turn, not when territory ownership changes mid-turn
         // This prevents roads from appearing before combat is resolved
     }
+#endif // !USE_OPENGL_MAP
 
+#ifndef USE_OPENGL_MAP
     // ========================================================================
-    // AI PLAYER SETUP (for testing)
+    // AI PLAYER SETUP (for testing) - grid-based only
     // ========================================================================
     QList<AIPlayer*> aiPlayers;
     QList<AIDebugWidget*> debugWidgets;
@@ -297,8 +353,31 @@ int main(int argc, char *argv[])
     delete walletWindow;
 
     return result;
+#else
+    // ========================================================================
+    // OpenGL MAP - Simple display mode (no AI, no info widgets)
+    // ========================================================================
+    int result = a.exec();
+
+    // Clean up
+    qDeleteAll(players);
+    delete mapWidget;
+
+    return result;
+#endif // !USE_OPENGL_MAP
 }
 
+#ifdef USE_OPENGL_MAP
+// OpenGL map doesn't support loading grid-based save files yet
+bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
+{
+    Q_UNUSED(fileName);
+    Q_UNUSED(mapWidget);
+    Q_UNUSED(players);
+    Q_UNUSED(currentPlayerIndex);
+    return false;  // Not implemented for OpenGL map
+}
+#else
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
 {
     // Open and parse JSON file
@@ -632,3 +711,4 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
 
     return true;
 }
+#endif // USE_OPENGL_MAP

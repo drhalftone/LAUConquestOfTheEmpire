@@ -492,23 +492,8 @@ void MapWidget::paintEvent(QPaintEvent *event)
         painter.save();
 
         // Draw territory boundaries (polygons)
-        painter.setPen(QPen(QColor(255, 0, 255), 2));  // Magenta borders
-        painter.setBrush(Qt::NoBrush);
-
-        QList<QString> territoryNames = m_graph->getTerritoryNames();
-        for (const QString &name : territoryNames) {
-            QPolygonF boundary = m_graph->getBoundary(name);
-            if (!boundary.isEmpty()) {
-                // Offset by menu bar
-                QPolygonF offsetBoundary;
-                for (const QPointF &point : boundary) {
-                    offsetBoundary << QPointF(point.x(), point.y() + menuBarHeight);
-                }
-                painter.drawPolygon(offsetBoundary);
-            }
-        }
-
         // Draw neighbor connections (lines between centroids)
+        QList<QString> territoryNames = m_graph->getTerritoryNames();
         painter.setPen(QPen(QColor(255, 165, 0), 1));  // Orange lines
         QSet<QString> drawnConnections;  // Avoid drawing each edge twice
 
@@ -2093,27 +2078,15 @@ void MapWidget::buildGraphFromGrid()
             // Use actual territory name from m_territories array
             QString territoryName = m_territories[row][col].name;
 
-            // Create territory
+            // Create territory for legacy grid system
             Territory territory;
+            territory.id = row * m_cols + col + 1;  // Generate an ID
             territory.name = territoryName;
 
             // Calculate centroid (center of the grid cell in pixel coordinates)
             qreal centerX = (col + 0.5) * m_tileWidth;
             qreal centerY = (row + 0.5) * m_tileHeight;
             territory.centroid = QPointF(centerX, centerY);
-            territory.labelPosition = territory.centroid;
-
-            // Create rectangular boundary polygon for this cell
-            qreal left = col * m_tileWidth;
-            qreal right = (col + 1) * m_tileWidth;
-            qreal top = row * m_tileHeight;
-            qreal bottom = (row + 1) * m_tileHeight;
-
-            territory.boundary = QPolygonF()
-                << QPointF(left, top)
-                << QPointF(right, top)
-                << QPointF(right, bottom)
-                << QPointF(left, bottom);
 
             // Set territory type based on grid tile type
             if (row < m_tiles.size() && col < m_tiles[row].size()) {
@@ -2124,10 +2097,8 @@ void MapWidget::buildGraphFromGrid()
                 territory.type = TerritoryType::Land;
             }
 
-            // Add optional color based on type
-            territory.color = (territory.type == TerritoryType::Sea)
-                ? QColor(100, 150, 200)  // Blue for sea
-                : QColor(200, 180, 150);  // Tan for land
+            // Set value based on grid territory info
+            territory.value = m_territories[row][col].value;
 
             // Add territory to graph
             m_graph->addTerritory(territory);

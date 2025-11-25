@@ -1,4 +1,4 @@
-QT       += core gui
+QT       += core gui multimedia opengl openglwidgets
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -8,9 +8,14 @@ CONFIG += c++17
 # In order to do so, uncomment the following line.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
+# Uncomment to use OpenGL-based map widget instead of grid-based widget
+# NOTE: OpenGL map requires refactoring PlayerInfoWidget, CombatDialog, AIPlayer etc.
+# to use GameMapWidget interface instead of MapWidget-specific methods.
+# DEFINES += USE_OPENGL_MAP
+
+# Common sources (always included)
 SOURCES += \
     main.cpp \
-    mapwidget.cpp \
     mapgraph.cpp \
     scorewindow.cpp \
     walletwindow.cpp \
@@ -26,8 +31,8 @@ SOURCES += \
     aiplayer.cpp \
     aidebugwidget.cpp
 
+# Common headers (always included)
 HEADERS += \
-    mapwidget.h \
     mapgraph.h \
     scorewindow.h \
     walletwindow.h \
@@ -43,6 +48,17 @@ HEADERS += \
     laurollingdiewidget.h \
     aiplayer.h \
     aidebugwidget.h
+
+# Conditional map widget compilation
+contains(DEFINES, USE_OPENGL_MAP) {
+    message("Using OpenGL map widget")
+    SOURCES += gamemapwidget.cpp
+    HEADERS += gamemapwidget.h
+} else {
+    message("Using grid-based map widget")
+    SOURCES += mapwidget.cpp
+    HEADERS += mapwidget.h
+}
 
 RESOURCES += \
     resources.qrc
