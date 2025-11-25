@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource>
+        <file>data/Map.jpg</file>
+        <file>data/territories_index.png</file>
+        <file>data/territories.csv</file>
+        <file>click.mp3</file>
+    </qresource>
+</RCC>
