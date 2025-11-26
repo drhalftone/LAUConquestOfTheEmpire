@@ -3802,7 +3802,6 @@ void PlayerInfoWidget::onEndTurnClicked()
 
     // SECOND: Build options for PurchaseDialog
     QString homeProvinceName = currentPlayer->getHomeProvinceName();
-    Position homePosition = m_mapWidget->territoryNameToPosition(homeProvinceName);
 
     // Build list of territories available for city placement
     QList<CityPlacementOption> cityOptions;
@@ -3811,19 +3810,9 @@ void PlayerInfoWidget::onEndTurnClicked()
         // Check if this territory already has a city
         QList<City*> citiesInTerritory = currentPlayer->getCitiesAtTerritory(territoryName);
         if (citiesInTerritory.isEmpty()) {
-            // Find position for this territory
-            for (int row = 0; row < 8; ++row) {
-                for (int col = 0; col < 12; ++col) {
-                    if (m_mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                        CityPlacementOption option;
-                        option.territoryName = territoryName;
-                        option.position = {row, col};
-                        cityOptions.append(option);
-                        goto next_territory;  // Break out of nested loops
-                    }
-                }
-            }
-            next_territory:;
+            CityPlacementOption option;
+            option.territoryName = territoryName;
+            cityOptions.append(option);
         }
     }
 
@@ -3834,25 +3823,17 @@ void PlayerInfoWidget::onEndTurnClicked()
         if (!city->isFortified()) {
             FortificationOption option;
             option.territoryName = city->getTerritoryName();
-            option.position = city->getPosition();
             fortificationOptions.append(option);
         }
     }
 
-    // Build list of sea borders for galley placement
+    // Build list of sea territories for galley placement (adjacent to home province)
     QList<GalleyPlacementOption> galleyOptions;
-    QList<Position> adjacentSeaTerritories = m_mapWidget->getAdjacentSeaTerritories(homePosition);
-    for (const Position &seaPos : adjacentSeaTerritories) {
-        QString direction;
-        if (seaPos.row < homePosition.row) direction = "North";
-        else if (seaPos.row > homePosition.row) direction = "South";
-        else if (seaPos.col < homePosition.col) direction = "West";
-        else if (seaPos.col > homePosition.col) direction = "East";
-
+    QList<QString> adjacentSeaTerritories = m_mapWidget->getAdjacentSeaTerritories(homeProvinceName);
+    for (const QString &seaTerritoryName : adjacentSeaTerritories) {
         GalleyPlacementOption option;
-        option.seaPosition = seaPos;
-        option.seaTerritoryName = m_mapWidget->getTerritoryNameAt(seaPos.row, seaPos.col);
-        option.direction = direction;
+        option.seaTerritoryName = seaTerritoryName;
+        option.direction = "";  // Direction not needed for graph-based map
         galleyOptions.append(option);
     }
 
@@ -4023,7 +4004,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         for (const PurchaseResult::CityPurchase &cityPurchase : result.cities) {
             City *newCity = new City(
                 currentPlayer->getId(),
-                cityPurchase.position,
+                Position{-1, -1},  // Position not used for graph-based map
                 cityPurchase.territoryName,
                 cityPurchase.fortified,
                 currentPlayer
@@ -4052,11 +4033,10 @@ void PlayerInfoWidget::onEndTurnClicked()
 
         // Create military units at home province
         QString homeProvince = currentPlayer->getHomeProvinceName();
-        Position homePosForTroops = m_mapWidget->territoryNameToPosition(homeProvince);
 
         // Create infantry
         for (int i = 0; i < result.infantry; ++i) {
-            InfantryPiece *infantry = new InfantryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            InfantryPiece *infantry = new InfantryPiece(currentPlayer->getId(), Position{-1, -1}, currentPlayer);
             infantry->setTerritoryName(homeProvince);
             currentPlayer->addInfantry(infantry);
         }
@@ -4066,7 +4046,7 @@ void PlayerInfoWidget::onEndTurnClicked()
 
         // Create cavalry
         for (int i = 0; i < result.cavalry; ++i) {
-            CavalryPiece *cavalry = new CavalryPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            CavalryPiece *cavalry = new CavalryPiece(currentPlayer->getId(), Position{-1, -1}, currentPlayer);
             cavalry->setTerritoryName(homeProvince);
             currentPlayer->addCavalry(cavalry);
         }
@@ -4076,7 +4056,7 @@ void PlayerInfoWidget::onEndTurnClicked()
 
         // Create catapults
         for (int i = 0; i < result.catapults; ++i) {
-            CatapultPiece *catapult = new CatapultPiece(currentPlayer->getId(), homePosForTroops, currentPlayer);
+            CatapultPiece *catapult = new CatapultPiece(currentPlayer->getId(), Position{-1, -1}, currentPlayer);
             catapult->setTerritoryName(homeProvince);
             currentPlayer->addCatapult(catapult);
         }
@@ -4086,18 +4066,14 @@ void PlayerInfoWidget::onEndTurnClicked()
 
         // Create galleys in the sea zone (galleys live in sea zones, not land)
         for (const PurchaseResult::GalleyPurchase &galleyPurchase : result.galleys) {
-            // Get the sea territory name for placement
-            QString seaTerritoryName = m_mapWidget->getTerritoryNameAt(galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col);
-            Position seaPos = {galleyPurchase.seaBorder.row, galleyPurchase.seaBorder.col};
-
             for (int i = 0; i < galleyPurchase.count; ++i) {
-                GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), seaPos, currentPlayer);
-                galley->setTerritoryName(seaTerritoryName);
+                GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), Position{-1, -1}, currentPlayer);
+                galley->setTerritoryName(galleyPurchase.seaTerritoryName);
                 currentPlayer->addGalley(galley);
             }
 
             qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
-                     << "galleys in sea zone" << seaTerritoryName;
+                     << "galleys in sea zone" << galleyPurchase.seaTerritoryName;
         }
     }
 

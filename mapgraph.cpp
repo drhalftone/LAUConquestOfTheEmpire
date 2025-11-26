@@ -241,6 +241,27 @@ int MapGraph::getValue(const QString &name) const
     return 0;
 }
 
+QList<QString> MapGraph::getAdjacentSeaTerritories(const QString &landTerritoryName) const
+{
+    QList<QString> seaTerritories;
+
+    if (!exists(landTerritoryName)) {
+        return seaTerritories;
+    }
+
+    // Get all neighbors
+    QList<QString> neighbors = getNeighbors(landTerritoryName);
+
+    // Filter for sea territories only
+    for (const QString &neighbor : neighbors) {
+        if (isSeaTerritory(neighbor)) {
+            seaTerritories.append(neighbor);
+        }
+    }
+
+    return seaTerritories;
+}
+
 // === Pathfinding ===
 
 QList<QString> MapGraph::breadthFirstSearch(const QString &from, const QString &to) const

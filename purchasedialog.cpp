@@ -484,7 +484,6 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
         if (it.key()->isChecked()) {
             PurchaseResult::CityPurchase city;
             city.territoryName = it.value().territoryName;
-            city.position = it.value().position;
             city.fortified = false;
             result.cities.append(city);
         }
@@ -495,7 +494,6 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
         if (it.key()->isChecked()) {
             PurchaseResult::CityPurchase city;
             city.territoryName = it.value().territoryName;
-            city.position = it.value().position;
             city.fortified = true;
             result.cities.append(city);
         }
@@ -513,7 +511,7 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
         int count = it.key()->value();
         if (count > 0) {
             PurchaseResult::GalleyPurchase galley;
-            galley.seaBorder = it.value().seaPosition;
+            galley.seaTerritoryName = it.value().seaTerritoryName;
             galley.count = count;
             result.galleys.append(galley);
         }
@@ -779,7 +777,6 @@ QList<PurchaseDialog::PurchaseMenuItem> PurchaseDialog::getAvailableItems() cons
         item.currentPrice = cityPrice;
         item.maxQuantity = (m_availableMoney >= cityPrice) ? 1 : 0;
         item.location = option.territoryName;
-        item.position = option.position;
         items.append(item);
     }
 
@@ -791,7 +788,6 @@ QList<PurchaseDialog::PurchaseMenuItem> PurchaseDialog::getAvailableItems() cons
         item.currentPrice = fortifiedCityPrice;
         item.maxQuantity = (m_availableMoney >= fortifiedCityPrice) ? 1 : 0;
         item.location = option.territoryName;
-        item.position = option.position;
         items.append(item);
     }
 
@@ -803,7 +799,6 @@ QList<PurchaseDialog::PurchaseMenuItem> PurchaseDialog::getAvailableItems() cons
         item.currentPrice = fortificationPrice;
         item.maxQuantity = (m_availableMoney >= fortificationPrice) ? 1 : 0;
         item.location = option.territoryName;
-        item.position = option.position;
         items.append(item);
     }
 
@@ -816,7 +811,6 @@ QList<PurchaseDialog::PurchaseMenuItem> PurchaseDialog::getAvailableItems() cons
         item.currentPrice = galleyPrice;
         item.maxQuantity = qMin(galleysAvailableToBuy, m_availableMoney / galleyPrice);
         item.location = QString("%1 (%2)").arg(option.seaTerritoryName).arg(option.direction);
-        item.position = option.seaPosition;
         items.append(item);
     }
 

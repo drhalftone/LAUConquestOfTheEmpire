@@ -14,20 +14,17 @@
 // Structure to hold information about territories available for city placement
 struct CityPlacementOption {
     QString territoryName;
-    Position position;
 };
 
 // Structure to hold information about existing cities that can be fortified
 struct FortificationOption {
     QString territoryName;
-    Position position;
 };
 
 // Structure to hold information about sea borders for galley placement
 struct GalleyPlacementOption {
-    Position seaPosition;
     QString seaTerritoryName;
-    QString direction;  // "North", "South", "East", "West"
+    QString direction;  // "North", "South", "East", "West" (for display only)
 };
 
 // Structure to return what was purchased
@@ -40,7 +37,6 @@ struct PurchaseResult {
     // Cities with their locations
     struct CityPurchase {
         QString territoryName;
-        Position position;
         bool fortified;
     };
     QList<CityPurchase> cities;
@@ -48,9 +44,9 @@ struct PurchaseResult {
     // Fortifications for existing cities
     QStringList fortifications;  // List of territory names to fortify
 
-    // Galleys with their sea border
+    // Galleys with their sea territory
     struct GalleyPurchase {
-        Position seaBorder;
+        QString seaTerritoryName;
         int count;
     };
     QList<GalleyPurchase> galleys;
@@ -86,8 +82,7 @@ public:
         QString itemType;       // "Infantry", "Cavalry", "Catapult", "Galley", "City", "FortifiedCity", "Fortification"
         int currentPrice;       // Price with inflation applied
         int maxQuantity;        // Max that can be bought (limited by money and availability)
-        QString location;       // For placed items (city territory, galley sea border)
-        Position position;      // Grid position for placed items
+        QString location;       // For placed items (city territory, galley sea territory)
     };
 
     // Get the menu of available items for AI to read

@@ -60,9 +60,12 @@ public:
     int getTerritoryValueAt(int row, int col) const;
     QChar getTerritoryOwnerAt(int row, int col) const;
     bool isSeaTerritory(int row, int col) const;
-    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;  // DEPRECATED: Returns empty list for OpenGL map
     bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
     Position territoryNameToPosition(const QString &territoryName) const;
+
+    // Get adjacent sea territories by territory name (graph-based, works with OpenGL map)
+    QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
 
     // Building management (for MapWidget compatibility)
     void removeCityAt(int row, int col);

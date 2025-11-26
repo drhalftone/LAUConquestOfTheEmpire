@@ -104,6 +104,10 @@ public:
     // Get the tax value of a territory (0 for sea)
     int getValue(const QString &name) const;
 
+    // Get list of adjacent sea territory names for a land territory
+    // Returns empty list if territory doesn't exist or has no adjacent seas
+    QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
+
     // === Pathfinding ===
 
     // Find shortest path between two territories (BFS)

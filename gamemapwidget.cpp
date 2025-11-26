@@ -916,7 +916,16 @@ QList<Position> GameMapWidget::getAdjacentSeaTerritories(const Position &pos) co
 {
     Q_UNUSED(pos);
     // OpenGL map doesn't use grid positions
+    // This method is deprecated - use the territory name version instead
     return QList<Position>();
+}
+
+QList<QString> GameMapWidget::getAdjacentSeaTerritories(const QString &landTerritoryName) const
+{
+    if (m_graph) {
+        return m_graph->getAdjacentSeaTerritories(landTerritoryName);
+    }
+    return QList<QString>();
 }
 
 bool GameMapWidget::hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const
