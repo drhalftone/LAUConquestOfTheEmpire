@@ -7,6 +7,7 @@
 #include <QOpenGLBuffer>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLTexture>
+#include <QOpenGLFramebufferObject>
 #include <QMatrix4x4>
 #include <QImage>
 #include <QTimer>
@@ -37,7 +38,7 @@ public:
     // === Common Interface (shared with MapWidget) ===
 
     // Player management
-    void setPlayers(const QList<Player*> &players) { m_players = players; }
+    void setPlayers(const QList<Player*> &players);
     void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
     int getCurrentPlayerIndex() const { return m_currentPlayerIndex; }
     void setPlayerInfoWidget(PlayerInfoWidget *widget) { m_playerInfoWidget = widget; }
@@ -103,6 +104,7 @@ public slots:
     void saveGame();
     void loadGame();
     void showAbout();
+    void updateTerritoryOwnership();  // Call when any territory ownership changes
 
 signals:
     // Common signals
@@ -130,6 +132,10 @@ private:
     void createShaders();
     void createGeometry();
     void loadTextures();
+    void createFramebuffer();
+    void createOwnershipTexture();
+    void createIconResources();
+    void renderCityIcons();
     void updateMvpMatrix();
     void updateHoveredTerritory(const QPointF &widgetPos);
     void showTerritoryContextMenu(const QPoint &pos, int territoryId);
@@ -156,12 +162,36 @@ private:
     // Menu bar
     QMenuBar *m_menuBar = nullptr;
 
-    // OpenGL resources
+    // OpenGL resources - map processing shader (renders to FBO)
     QOpenGLShaderProgram *m_shaderProgram = nullptr;
     QOpenGLVertexArrayObject m_vao;
     QOpenGLBuffer m_vbo;
     QOpenGLTexture *m_mapTexture = nullptr;
     QOpenGLTexture *m_indexTexture = nullptr;
+
+    // Framebuffer for intermediate rendering
+    QOpenGLFramebufferObject *m_fbo = nullptr;
+    QOpenGLShaderProgram *m_screenShader = nullptr;  // Renders FBO texture to screen
+
+    // Ownership lookup texture (60 rows x 4 columns, RGB)
+    // Row = territory ID, Column 0 = border color
+    QOpenGLTexture *m_ownershipTexture = nullptr;
+    QImage m_ownershipImage;  // CPU-side data for updating
+    int m_borderRadius = 8;   // Border thickness in pixels
+
+    // City icons
+    QOpenGLTexture *m_cityIconTexture = nullptr;
+    QOpenGLTexture *m_fortifiedCityIconTexture = nullptr;
+    QOpenGLTexture *m_galleyIconTexture = nullptr;
+    QOpenGLTexture *m_caesarIconTexture = nullptr;
+    QOpenGLTexture *m_generalIconTexture = nullptr;
+    QOpenGLTexture *m_infantryIconTexture = nullptr;
+    QOpenGLTexture *m_cavalryIconTexture = nullptr;
+    QOpenGLTexture *m_catapultIconTexture = nullptr;
+    QOpenGLShaderProgram *m_iconShader = nullptr;
+    QOpenGLBuffer m_iconVbo;
+    QOpenGLVertexArrayObject m_iconVao;
+    float m_iconSize = 60.0f;  // Icon size in map pixels
 
     // Territory detection (CPU side for mouse lookup)
     QImage m_indexImage;

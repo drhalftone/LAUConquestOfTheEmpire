@@ -1,5 +1,13 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
+    <qresource prefix="/shaders">
+        <file>shaders/map.vert</file>
+        <file>shaders/map.frag</file>
+        <file>shaders/screen.vert</file>
+        <file>shaders/screen.frag</file>
+        <file>shaders/icon.vert</file>
+        <file>shaders/icon.frag</file>
+    </qresource>
     <qresource>
         <file>images/coeIcon.png</file>
         <file>images/newCityIcon.png</file>
@@ -26,6 +34,7 @@
         <file>images/Map.jpg</file>
         <file>images/territories_index.png</file>
         <file>images/territories.csv</file>
+        <file>images/beach_positions.csv</file>
         <file>images/click.wav</file>
     </qresource>
 </RCC>

@@ -10,65 +10,160 @@
 #include <QMouseEvent>
 #include <QCloseEvent>
 #include <QtMath>
+#include <QVector2D>
 #include <QFile>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QApplication>
 #include <QUrl>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <random>
 
-// Vertex shader - transforms position by MVP matrix
-static const char *vertexShaderSource = R"(
-    #version 330 core
-    layout(location = 0) in vec2 position;
-    layout(location = 1) in vec2 texCoord;
-
-    uniform mat4 mvp;
-
-    out vec2 fragTexCoord;
-
-    void main() {
-        gl_Position = mvp * vec4(position, 0.0, 1.0);
-        fragTexCoord = texCoord;
+// Helper function to load shader source from resource file
+static QString loadShaderSource(const QString &resourcePath)
+{
+    QFile file(resourcePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open shader file:" << resourcePath;
+        return QString();
     }
-)";
+    return QString::fromUtf8(file.readAll());
+}
 
-// Fragment shader - sample map texture, highlight hovered territory
-static const char *fragmentShaderSource = R"(
-    #version 330 core
-    in vec2 fragTexCoord;
-    out vec4 fragColor;
+// Poisson disc sampling to distribute points within a territory
+// Uses index image to verify points are inside the territory
+// seed parameter ensures deterministic results for the same territory
+static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, float minDistance,
+                                         uint seed, const QImage &indexImage, int territoryId)
+{
+    QList<QPointF> points;
+    if (numPoints <= 0) return points;
 
-    uniform sampler2D mapTexture;
-    uniform sampler2D indexTexture;
-    uniform int highlightedTerritory;
+    // Check if index image is valid
+    bool hasValidImage = !indexImage.isNull() && indexImage.width() > 0 && indexImage.height() > 0;
 
-    void main() {
-        vec4 mapColor = texture(mapTexture, fragTexCoord);
+    // Helper lambda to check if a point is inside the territory
+    auto isInsideTerritory = [&](const QPointF &pt) -> bool {
+        if (!hasValidImage) return true;  // If no image, accept all points
+        int x = qBound(0, static_cast<int>(pt.x()), indexImage.width() - 1);
+        int y = qBound(0, static_cast<int>(pt.y()), indexImage.height() - 1);
+        return indexImage.pixelColor(x, y).red() == territoryId;
+    };
 
-        // Sample territory index (8-bit grayscale, value 0-255)
-        float territoryValue = texture(indexTexture, fragTexCoord).r * 255.0;
-        int territoryId = int(territoryValue + 0.5);  // Round to nearest int
+    // First point at center (should always be valid)
+    if (numPoints == 1) {
+        points.append(center);
+        return points;
+    }
 
-        if (highlightedTerritory > 0) {
-            // A territory is being hovered
-            if (territoryId == highlightedTerritory) {
-                // Brighten and add yellow tint to highlighted territory
-                vec3 highlight = vec3(1.0, 1.0, 0.6);  // Warm yellow
-                fragColor = vec4(mix(mapColor.rgb, highlight, 0.35), 1.0);
-            } else {
-                // Darken non-highlighted areas
-                fragColor = vec4(mapColor.rgb * 0.7, 1.0);
+    // Use deterministic seed based on territory
+    std::mt19937 gen(seed);
+
+    // For small numbers of points, try circular arrangement first, validate against territory
+    if (numPoints <= 8) {
+        float angleStep = 2.0f * M_PI / numPoints;
+        float radius = minDistance * 0.6f;
+
+        for (int i = 0; i < numPoints; ++i) {
+            float angle = i * angleStep - M_PI / 2;
+            QPointF candidate(center.x() + radius * qCos(angle),
+                              center.y() + radius * qSin(angle));
+
+            // If outside territory, try to find a valid point nearby
+            if (!isInsideTerritory(candidate)) {
+                bool found = false;
+                std::uniform_real_distribution<float> offsetDist(-minDistance, minDistance);
+                for (int attempt = 0; attempt < 20 && !found; ++attempt) {
+                    QPointF adjusted(center.x() + offsetDist(gen), center.y() + offsetDist(gen));
+                    if (isInsideTerritory(adjusted)) {
+                        // Check distance from existing points
+                        bool farEnough = true;
+                        for (const QPointF &existing : points) {
+                            float dist = qSqrt(qPow(adjusted.x() - existing.x(), 2) +
+                                               qPow(adjusted.y() - existing.y(), 2));
+                            if (dist < minDistance * 0.5f) {
+                                farEnough = false;
+                                break;
+                            }
+                        }
+                        if (farEnough) {
+                            candidate = adjusted;
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    // Fall back to center with small offset
+                    candidate = center;
+                }
             }
-        } else {
-            // No territory hovered - show normal
-            fragColor = mapColor;
+            points.append(candidate);
+        }
+        return points;
+    }
+
+    // For larger numbers, use Poisson disc sampling with territory validation
+    QList<QPointF> activeList;
+    const int k = 50;  // Number of candidates to try before giving up
+
+    // Start with center point
+    points.append(center);
+    activeList.append(center);
+
+    std::uniform_real_distribution<float> angleDist(0, 2.0f * M_PI);
+    std::uniform_real_distribution<float> radiusDist(minDistance, minDistance * 2.0f);
+
+    while (!activeList.isEmpty() && points.size() < numPoints) {
+        std::uniform_int_distribution<int> indexDist(0, activeList.size() - 1);
+        int randomIndex = indexDist(gen);
+        QPointF point = activeList[randomIndex];
+
+        bool foundCandidate = false;
+        for (int i = 0; i < k; ++i) {
+            float angle = angleDist(gen);
+            float radius = radiusDist(gen);
+            QPointF candidate(point.x() + radius * qCos(angle),
+                              point.y() + radius * qSin(angle));
+
+            // Check if candidate is inside the territory
+            if (!isInsideTerritory(candidate)) continue;
+
+            // Check if candidate is far enough from all existing points
+            bool valid = true;
+            for (const QPointF &existing : points) {
+                float dist = qSqrt(qPow(candidate.x() - existing.x(), 2) +
+                                   qPow(candidate.y() - existing.y(), 2));
+                if (dist < minDistance) {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if (valid) {
+                points.append(candidate);
+                activeList.append(candidate);
+                foundCandidate = true;
+                break;
+            }
+        }
+
+        if (!foundCandidate) {
+            activeList.removeAt(randomIndex);
         }
     }
-)";
+
+    return points;
+}
 
 GameMapWidget::GameMapWidget(QWidget *parent)
     : QOpenGLWidget(parent)
     , m_vbo(QOpenGLBuffer::VertexBuffer)
+    , m_iconVbo(QOpenGLBuffer::VertexBuffer)
 {
     // Create the map graph (loads from CSV in constructor)
     m_graph = new MapGraph();
@@ -98,10 +193,24 @@ GameMapWidget::~GameMapWidget()
     makeCurrent();
 
     delete m_shaderProgram;
+    delete m_screenShader;
+    delete m_iconShader;
     delete m_mapTexture;
     delete m_indexTexture;
+    delete m_ownershipTexture;
+    delete m_cityIconTexture;
+    delete m_fortifiedCityIconTexture;
+    delete m_galleyIconTexture;
+    delete m_caesarIconTexture;
+    delete m_generalIconTexture;
+    delete m_infantryIconTexture;
+    delete m_cavalryIconTexture;
+    delete m_catapultIconTexture;
+    delete m_fbo;
     m_vbo.destroy();
     m_vao.destroy();
+    m_iconVbo.destroy();
+    m_iconVao.destroy();
 
     doneCurrent();
 
@@ -173,19 +282,35 @@ void GameMapWidget::initializeGL()
     createShaders();
     createGeometry();
     loadTextures();
+    createOwnershipTexture();
+    createIconResources();
+    createFramebuffer();
     updateMvpMatrix();
+
+    // Update ownership now that OpenGL resources are ready
+    // (setPlayers may have been called before initializeGL)
+    updateTerritoryOwnership();
 }
 
 void GameMapWidget::createShaders()
 {
+    // Create map processing shader (renders to FBO)
     m_shaderProgram = new QOpenGLShaderProgram(this);
 
-    if (!m_shaderProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShaderSource)) {
+    QString mapVertSource = loadShaderSource(":/shaders/shaders/map.vert");
+    QString mapFragSource = loadShaderSource(":/shaders/shaders/map.frag");
+
+    if (mapVertSource.isEmpty() || mapFragSource.isEmpty()) {
+        qWarning() << "Failed to load map shader source files";
+        return;
+    }
+
+    if (!m_shaderProgram->addShaderFromSourceCode(QOpenGLShader::Vertex, mapVertSource)) {
         qWarning() << "Vertex shader compilation failed:" << m_shaderProgram->log();
         return;
     }
 
-    if (!m_shaderProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShaderSource)) {
+    if (!m_shaderProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, mapFragSource)) {
         qWarning() << "Fragment shader compilation failed:" << m_shaderProgram->log();
         return;
     }
@@ -195,7 +320,35 @@ void GameMapWidget::createShaders()
         return;
     }
 
-    qDebug() << "Shaders compiled and linked successfully";
+    qDebug() << "Map shader compiled and linked successfully";
+
+    // Create screen shader (renders FBO texture to screen)
+    m_screenShader = new QOpenGLShaderProgram(this);
+
+    QString screenVertSource = loadShaderSource(":/shaders/shaders/screen.vert");
+    QString screenFragSource = loadShaderSource(":/shaders/shaders/screen.frag");
+
+    if (screenVertSource.isEmpty() || screenFragSource.isEmpty()) {
+        qWarning() << "Failed to load screen shader source files";
+        return;
+    }
+
+    if (!m_screenShader->addShaderFromSourceCode(QOpenGLShader::Vertex, screenVertSource)) {
+        qWarning() << "Screen vertex shader compilation failed:" << m_screenShader->log();
+        return;
+    }
+
+    if (!m_screenShader->addShaderFromSourceCode(QOpenGLShader::Fragment, screenFragSource)) {
+        qWarning() << "Screen fragment shader compilation failed:" << m_screenShader->log();
+        return;
+    }
+
+    if (!m_screenShader->link()) {
+        qWarning() << "Screen shader linking failed:" << m_screenShader->log();
+        return;
+    }
+
+    qDebug() << "Screen shader compiled and linked successfully";
 }
 
 void GameMapWidget::createGeometry()
@@ -269,6 +422,572 @@ void GameMapWidget::loadTextures()
     qDebug() << "Territory index texture created";
 }
 
+void GameMapWidget::createFramebuffer()
+{
+    // Delete existing FBO if any
+    delete m_fbo;
+    m_fbo = nullptr;
+
+    if (m_mapSize.isEmpty()) {
+        qWarning() << "Cannot create framebuffer: map size not set";
+        return;
+    }
+
+    // Create FBO at map texture resolution for full-quality processing
+    QOpenGLFramebufferObjectFormat format;
+    format.setMipmap(false);
+    format.setInternalTextureFormat(GL_RGBA8);
+
+    m_fbo = new QOpenGLFramebufferObject(m_mapSize, format);
+
+    if (!m_fbo->isValid()) {
+        qWarning() << "Failed to create framebuffer object";
+        delete m_fbo;
+        m_fbo = nullptr;
+        return;
+    }
+
+    qDebug() << "Framebuffer created:" << m_mapSize.width() << "x" << m_mapSize.height();
+}
+
+void GameMapWidget::createOwnershipTexture()
+{
+    // Create 60 rows x 4 columns RGB image for ownership lookup
+    // Row = territory ID (1-60 maps to rows 0-59), Column 0 = border color
+    m_ownershipImage = QImage(4, 60, QImage::Format_RGB888);
+    m_ownershipImage.fill(Qt::black);  // Initialize all to black (unowned)
+
+    // Create the texture with NEAREST filtering (no interpolation)
+    m_ownershipTexture = new QOpenGLTexture(QOpenGLTexture::Target2D);
+    m_ownershipTexture->setSize(4, 60);
+    m_ownershipTexture->setFormat(QOpenGLTexture::RGB8_UNorm);
+    m_ownershipTexture->allocateStorage();
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    m_ownershipTexture->setMinificationFilter(QOpenGLTexture::Nearest);
+    m_ownershipTexture->setMagnificationFilter(QOpenGLTexture::Nearest);
+    m_ownershipTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+
+    qDebug() << "Ownership texture created: 4x60 RGB";
+}
+
+void GameMapWidget::updateTerritoryOwnership()
+{
+    if (!m_ownershipTexture || m_ownershipImage.isNull()) {
+        return;
+    }
+
+    // Make OpenGL context current
+    makeCurrent();
+
+    // Clear to black (unowned)
+    m_ownershipImage.fill(Qt::black);
+
+    // Update ownership colors based on player territories
+    for (Player *player : m_players) {
+        QColor playerColor = getPlayerColor(player->getId());
+        const QList<QString> &territories = player->getOwnedTerritories();
+
+        for (const QString &territoryName : territories) {
+            Territory territory = m_graph->getTerritory(territoryName);
+            if (territory.id > 0 && territory.id <= 60) {
+                // Row = territory ID - 1 (0-indexed), Column 0
+                int row = territory.id - 1;
+                m_ownershipImage.setPixelColor(0, row, playerColor);
+            }
+        }
+    }
+
+    // Upload updated image to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+
+    doneCurrent();
+
+    // Trigger repaint
+    update();
+}
+
+void GameMapWidget::createIconResources()
+{
+    // Create icon shader
+    m_iconShader = new QOpenGLShaderProgram(this);
+
+    QString iconVertSource = loadShaderSource(":/shaders/shaders/icon.vert");
+    QString iconFragSource = loadShaderSource(":/shaders/shaders/icon.frag");
+
+    if (iconVertSource.isEmpty() || iconFragSource.isEmpty()) {
+        qWarning() << "Failed to load icon shader source files";
+        return;
+    }
+
+    if (!m_iconShader->addShaderFromSourceCode(QOpenGLShader::Vertex, iconVertSource)) {
+        qWarning() << "Icon vertex shader compilation failed:" << m_iconShader->log();
+        return;
+    }
+
+    if (!m_iconShader->addShaderFromSourceCode(QOpenGLShader::Fragment, iconFragSource)) {
+        qWarning() << "Icon fragment shader compilation failed:" << m_iconShader->log();
+        return;
+    }
+
+    if (!m_iconShader->link()) {
+        qWarning() << "Icon shader linking failed:" << m_iconShader->log();
+        return;
+    }
+
+    qDebug() << "Icon shader compiled and linked successfully";
+
+    // Load city icon texture
+    QImage cityImage(":/images/newCityIcon.png");
+    if (!cityImage.isNull()) {
+        m_cityIconTexture = new QOpenGLTexture(cityImage.mirrored());
+        m_cityIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_cityIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_cityIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "City icon texture loaded:" << cityImage.size();
+    } else {
+        qWarning() << "Failed to load city icon texture";
+    }
+
+    // Load fortified city icon texture
+    QImage fortifiedImage(":/images/walledCityIcon.png");
+    if (!fortifiedImage.isNull()) {
+        m_fortifiedCityIconTexture = new QOpenGLTexture(fortifiedImage.mirrored());
+        m_fortifiedCityIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_fortifiedCityIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_fortifiedCityIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Fortified city icon texture loaded:" << fortifiedImage.size();
+    } else {
+        qWarning() << "Failed to load fortified city icon texture";
+    }
+
+    // Load galley icon texture
+    QImage galleyImage(":/images/galleyIcon.png");
+    if (!galleyImage.isNull()) {
+        m_galleyIconTexture = new QOpenGLTexture(galleyImage.mirrored());
+        m_galleyIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_galleyIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_galleyIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Galley icon texture loaded:" << galleyImage.size();
+    } else {
+        qWarning() << "Failed to load galley icon texture";
+    }
+
+    // Load caesar icon texture
+    QImage caesarImage(":/images/ceasarIcon.png");
+    if (!caesarImage.isNull()) {
+        m_caesarIconTexture = new QOpenGLTexture(caesarImage.mirrored());
+        m_caesarIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_caesarIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_caesarIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Caesar icon texture loaded:" << caesarImage.size();
+    } else {
+        qWarning() << "Failed to load caesar icon texture";
+    }
+
+    // Load general icon texture
+    QImage generalImage(":/images/generalIcon.png");
+    if (!generalImage.isNull()) {
+        m_generalIconTexture = new QOpenGLTexture(generalImage.mirrored());
+        m_generalIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_generalIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_generalIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "General icon texture loaded:" << generalImage.size();
+    } else {
+        qWarning() << "Failed to load general icon texture";
+    }
+
+    // Load infantry icon texture
+    QImage infantryImage(":/images/infantryIcon.png");
+    if (!infantryImage.isNull()) {
+        m_infantryIconTexture = new QOpenGLTexture(infantryImage.mirrored());
+        m_infantryIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_infantryIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_infantryIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Infantry icon texture loaded:" << infantryImage.size();
+    } else {
+        qWarning() << "Failed to load infantry icon texture";
+    }
+
+    // Load cavalry icon texture
+    QImage cavalryImage(":/images/cavalryIcon.png");
+    if (!cavalryImage.isNull()) {
+        m_cavalryIconTexture = new QOpenGLTexture(cavalryImage.mirrored());
+        m_cavalryIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_cavalryIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_cavalryIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Cavalry icon texture loaded:" << cavalryImage.size();
+    } else {
+        qWarning() << "Failed to load cavalry icon texture";
+    }
+
+    // Load catapult icon texture
+    QImage catapultImage(":/images/catapultIcon.png");
+    if (!catapultImage.isNull()) {
+        m_catapultIconTexture = new QOpenGLTexture(catapultImage.mirrored());
+        m_catapultIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_catapultIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_catapultIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Catapult icon texture loaded:" << catapultImage.size();
+    } else {
+        qWarning() << "Failed to load catapult icon texture";
+    }
+
+    // Create VAO and VBO for icon rendering (dynamic, will be updated each frame)
+    m_iconVao.create();
+    m_iconVbo.create();
+    m_iconVbo.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+
+    qDebug() << "Icon resources created";
+}
+
+void GameMapWidget::renderCityIcons()
+{
+    if (!m_iconShader || !m_cityIconTexture || !m_fortifiedCityIconTexture) {
+        return;
+    }
+
+    // Collect all cities and their positions
+    struct CityInfo {
+        QPointF centroid;
+        bool isFortified;
+        float scale;  // Scale factor based on territory area
+    };
+    QList<CityInfo> cities;
+
+    // Calculate average area for scaling reference
+    const float referenceArea = 50000.0f;  // Approximate average territory area
+
+    for (Player *player : m_players) {
+        for (Building *building : player->getAllBuildings()) {
+            if (building->getType() == Building::Type::City) {
+                QString territoryName = building->getTerritoryName();
+                Territory territory = m_graph->getTerritory(territoryName);
+                if (!territory.name.isEmpty()) {
+                    CityInfo info;
+                    info.centroid = territory.centroid;
+                    // Check if city is fortified
+                    City *city = dynamic_cast<City*>(building);
+                    info.isFortified = (city && city->isFortified());
+                    // Scale based on sqrt of area ratio (clamped to reasonable range)
+                    float areaRatio = static_cast<float>(territory.area) / referenceArea;
+                    info.scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
+                    cities.append(info);
+                }
+            }
+        }
+    }
+
+    if (cities.isEmpty()) {
+        return;
+    }
+
+    // Enable alpha blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    m_iconShader->bind();
+
+    // Convert map coordinates to normalized device coordinates
+    // Map coords: (0,0) top-left to (mapWidth, mapHeight) bottom-right
+    // NDC: (-1,-1) bottom-left to (1,1) top-right
+
+    // Render each city
+    for (const CityInfo &city : cities) {
+        // Scale icon size based on territory area
+        float scaledIconSize = m_iconSize * city.scale;
+        float halfIconW = scaledIconSize / 2.0f;
+        float halfIconH = scaledIconSize / 2.0f;
+
+        // Convert centroid to NDC
+        float ndcX = (city.centroid.x() / m_mapSize.width()) * 2.0f - 1.0f;
+        float ndcY = 1.0f - (city.centroid.y() / m_mapSize.height()) * 2.0f;  // Flip Y
+
+        // Icon half-size in NDC
+        float halfW = (halfIconW / m_mapSize.width()) * 2.0f;
+        float halfH = (halfIconH / m_mapSize.height()) * 2.0f;
+
+        // Create quad vertices for this icon
+        float vertices[] = {
+            // Position              // TexCoord
+            ndcX - halfW, ndcY + halfH,  0.0f, 1.0f,   // Top-left
+            ndcX + halfW, ndcY + halfH,  1.0f, 1.0f,   // Top-right
+            ndcX + halfW, ndcY - halfH,  1.0f, 0.0f,   // Bottom-right
+            ndcX - halfW, ndcY - halfH,  0.0f, 0.0f,   // Bottom-left
+        };
+
+        // Upload vertices
+        m_iconVao.bind();
+        m_iconVbo.bind();
+        m_iconVbo.allocate(vertices, sizeof(vertices));
+
+        // Setup vertex attributes
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                              reinterpret_cast<void*>(2 * sizeof(float)));
+
+        // Bind appropriate texture
+        glActiveTexture(GL_TEXTURE0);
+        if (city.isFortified) {
+            m_fortifiedCityIconTexture->bind();
+        } else {
+            m_cityIconTexture->bind();
+        }
+        m_iconShader->setUniformValue("iconTexture", 0);
+
+        // Draw the icon quad
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+        // Cleanup
+        if (city.isFortified) {
+            m_fortifiedCityIconTexture->release();
+        } else {
+            m_cityIconTexture->release();
+        }
+        m_iconVbo.release();
+        m_iconVao.release();
+    }
+
+    // === Render Galleys ===
+    if (m_galleyIconTexture) {
+        // First pass: compute base position for each galley
+        struct GalleyRenderInfo {
+            GalleyPiece *galley;
+            QPointF basePos;
+            float scale;
+        };
+        QList<GalleyRenderInfo> galleyInfos;
+
+        for (Player *player : m_players) {
+            for (GalleyPiece *galley : player->getGalleys()) {
+                QString territoryName = galley->getTerritoryName();
+                Territory territory = m_graph->getTerritory(territoryName);
+                if (territory.name.isEmpty()) continue;
+
+                QPointF basePos;
+                if (galley->isBeached() && galley->hasLastSeaZone()) {
+                    basePos = m_graph->getBeachPosition(territoryName, galley->getLastSeaZone());
+                    if (basePos.isNull()) {
+                        basePos = territory.centroid;
+                    }
+                } else {
+                    basePos = territory.centroid;
+                }
+
+                float areaRatio = static_cast<float>(territory.area) / referenceArea;
+                float scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
+
+                galleyInfos.append({galley, basePos, scale});
+            }
+        }
+
+        // Second pass: group galleys by similar positions (within 50 pixels)
+        const float proximityThreshold = 50.0f;
+        QMap<QString, QList<int>> positionGroups;  // Key is "x|y" rounded, value is indices
+
+        for (int i = 0; i < galleyInfos.size(); ++i) {
+            // Round position to grid for grouping
+            int gridX = static_cast<int>(galleyInfos[i].basePos.x() / proximityThreshold);
+            int gridY = static_cast<int>(galleyInfos[i].basePos.y() / proximityThreshold);
+            QString gridKey = QString("%1|%2").arg(gridX).arg(gridY);
+            positionGroups[gridKey].append(i);
+        }
+
+        // Third pass: render with offsets for overlapping galleys
+        for (auto it = positionGroups.begin(); it != positionGroups.end(); ++it) {
+            const QList<int> &indices = it.value();
+            int groupSize = indices.size();
+
+            for (int j = 0; j < groupSize; ++j) {
+                const GalleyRenderInfo &info = galleyInfos[indices[j]];
+                QPointF galleyPos = info.basePos;
+
+                float scaledIconSize = m_iconSize * info.scale;
+                float halfIconW = scaledIconSize / 2.0f;
+                float halfIconH = scaledIconSize / 2.0f;
+
+                // Apply offset for multiple galleys at similar positions
+                if (groupSize > 1) {
+                    float offsetSpacing = scaledIconSize * 0.7f;
+                    float totalWidth = offsetSpacing * (groupSize - 1);
+                    float startOffset = -totalWidth / 2.0f;
+                    galleyPos.setX(galleyPos.x() + startOffset + j * offsetSpacing);
+                    galleyPos.setY(galleyPos.y() + (j % 2 == 0 ? -8 : 8));
+                }
+
+                // Convert position to NDC
+                float ndcX = (galleyPos.x() / m_mapSize.width()) * 2.0f - 1.0f;
+                float ndcY = 1.0f - (galleyPos.y() / m_mapSize.height()) * 2.0f;
+
+                float halfW = (halfIconW / m_mapSize.width()) * 2.0f;
+                float halfH = (halfIconH / m_mapSize.height()) * 2.0f;
+
+                float vertices[] = {
+                    ndcX - halfW, ndcY + halfH,  0.0f, 1.0f,
+                    ndcX + halfW, ndcY + halfH,  1.0f, 1.0f,
+                    ndcX + halfW, ndcY - halfH,  1.0f, 0.0f,
+                    ndcX - halfW, ndcY - halfH,  0.0f, 0.0f,
+                };
+
+                m_iconVao.bind();
+                m_iconVbo.bind();
+                m_iconVbo.allocate(vertices, sizeof(vertices));
+
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                                      reinterpret_cast<void*>(2 * sizeof(float)));
+
+                glActiveTexture(GL_TEXTURE0);
+                m_galleyIconTexture->bind();
+                m_iconShader->setUniformValue("iconTexture", 0);
+
+                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+                m_galleyIconTexture->release();
+                m_iconVbo.release();
+                m_iconVao.release();
+            }
+        }
+    }
+
+    // === Render Units (Caesars, Generals, Infantry, Cavalry, Catapults) with Poisson disc distribution ===
+    if (m_caesarIconTexture && m_generalIconTexture && m_infantryIconTexture && m_cavalryIconTexture && m_catapultIconTexture) {
+        // Unit types for texture selection
+        enum class UnitType { Caesar, General, Infantry, Cavalry, Catapult };
+
+        struct UnitInfo {
+            GamePiece *piece;
+            UnitType type;
+        };
+        QMap<QString, QList<UnitInfo>> unitsByTerritory;
+
+        for (Player *player : m_players) {
+            // Collect caesars
+            for (CaesarPiece *caesar : player->getCaesars()) {
+                if (caesar->isOnGalley()) continue;
+                QString territory = caesar->getTerritoryName();
+                if (!territory.isEmpty()) {
+                    unitsByTerritory[territory].append({caesar, UnitType::Caesar});
+                }
+            }
+            // Collect generals
+            for (GeneralPiece *general : player->getGenerals()) {
+                if (general->isOnGalley()) continue;
+                QString territory = general->getTerritoryName();
+                if (!territory.isEmpty()) {
+                    unitsByTerritory[territory].append({general, UnitType::General});
+                }
+            }
+            // Collect infantry
+            for (InfantryPiece *infantry : player->getInfantry()) {
+                if (infantry->isOnGalley()) continue;
+                QString territory = infantry->getTerritoryName();
+                if (!territory.isEmpty()) {
+                    unitsByTerritory[territory].append({infantry, UnitType::Infantry});
+                }
+            }
+            // Collect cavalry
+            for (CavalryPiece *cavalry : player->getCavalry()) {
+                if (cavalry->isOnGalley()) continue;
+                QString territory = cavalry->getTerritoryName();
+                if (!territory.isEmpty()) {
+                    unitsByTerritory[territory].append({cavalry, UnitType::Cavalry});
+                }
+            }
+            // Collect catapults
+            for (CatapultPiece *catapult : player->getCatapults()) {
+                if (catapult->isOnGalley()) continue;
+                QString territory = catapult->getTerritoryName();
+                if (!territory.isEmpty()) {
+                    unitsByTerritory[territory].append({catapult, UnitType::Catapult});
+                }
+            }
+        }
+
+        // Render units with distributed positions
+        for (auto it = unitsByTerritory.begin(); it != unitsByTerritory.end(); ++it) {
+            const QString &territoryName = it.key();
+            const QList<UnitInfo> &units = it.value();
+
+            Territory territory = m_graph->getTerritory(territoryName);
+            if (territory.name.isEmpty()) continue;
+
+            // Scale icon size slightly based on territory area, but keep spacing consistent
+            float areaRatio = static_cast<float>(territory.area) / referenceArea;
+            float scale = qBound(0.85f, qSqrt(areaRatio), 1.5f);  // Reduced scaling range
+            float scaledIconSize = m_iconSize * scale;
+
+            // Use Poisson disc sampling to distribute units within territory bounds
+            // Seed with territory ID for deterministic positioning
+            // Use base icon size for spacing to keep it consistent across territories
+            float minDistance = m_iconSize * 0.5f;  // Consistent spacing regardless of territory size
+            QList<QPointF> positions = poissonDiscSample(territory.centroid, units.size(), minDistance,
+                                                          territory.id, m_indexImage, territory.id);
+
+            // Render each unit at its distributed position
+            for (int i = 0; i < units.size() && i < positions.size(); ++i) {
+                const UnitInfo &unit = units[i];
+                QPointF unitPos = positions[i];
+
+                float halfIconW = scaledIconSize / 2.0f;
+                float halfIconH = scaledIconSize / 2.0f;
+
+                // Convert position to NDC
+                float ndcX = (unitPos.x() / m_mapSize.width()) * 2.0f - 1.0f;
+                float ndcY = 1.0f - (unitPos.y() / m_mapSize.height()) * 2.0f;
+
+                float halfW = (halfIconW / m_mapSize.width()) * 2.0f;
+                float halfH = (halfIconH / m_mapSize.height()) * 2.0f;
+
+                float vertices[] = {
+                    ndcX - halfW, ndcY + halfH,  0.0f, 1.0f,
+                    ndcX + halfW, ndcY + halfH,  1.0f, 1.0f,
+                    ndcX + halfW, ndcY - halfH,  1.0f, 0.0f,
+                    ndcX - halfW, ndcY - halfH,  0.0f, 0.0f,
+                };
+
+                m_iconVao.bind();
+                m_iconVbo.bind();
+                m_iconVbo.allocate(vertices, sizeof(vertices));
+
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                                      reinterpret_cast<void*>(2 * sizeof(float)));
+
+                glActiveTexture(GL_TEXTURE0);
+                switch (unit.type) {
+                    case UnitType::Caesar:   m_caesarIconTexture->bind(); break;
+                    case UnitType::General:  m_generalIconTexture->bind(); break;
+                    case UnitType::Infantry: m_infantryIconTexture->bind(); break;
+                    case UnitType::Cavalry:  m_cavalryIconTexture->bind(); break;
+                    case UnitType::Catapult: m_catapultIconTexture->bind(); break;
+                }
+                m_iconShader->setUniformValue("iconTexture", 0);
+
+                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+                switch (unit.type) {
+                    case UnitType::Caesar:   m_caesarIconTexture->release(); break;
+                    case UnitType::General:  m_generalIconTexture->release(); break;
+                    case UnitType::Infantry: m_infantryIconTexture->release(); break;
+                    case UnitType::Cavalry:  m_cavalryIconTexture->release(); break;
+                    case UnitType::Catapult: m_catapultIconTexture->release(); break;
+                }
+                m_iconVbo.release();
+                m_iconVao.release();
+            }
+        }
+    }
+
+    m_iconShader->release();
+    glDisable(GL_BLEND);
+}
+
 void GameMapWidget::resizeGL(int w, int h)
 {
     Q_UNUSED(w);
@@ -312,18 +1031,28 @@ void GameMapWidget::resizeGL(int w, int h)
 
 void GameMapWidget::paintGL()
 {
-    // Account for menu bar in viewport
-    int menuHeight = m_menuBar ? m_menuBar->height() * devicePixelRatio() : 0;
-    glViewport(0, 0, m_windowPixelSize.width(), m_windowPixelSize.height());
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    if (!m_shaderProgram || !m_mapTexture || !m_indexTexture) {
+    if (!m_shaderProgram || !m_screenShader || !m_mapTexture || !m_indexTexture || !m_ownershipTexture || !m_fbo) {
+        // Fallback: clear to background color if resources not ready
+        glViewport(0, 0, m_windowPixelSize.width(), m_windowPixelSize.height());
+        glClear(GL_COLOR_BUFFER_BIT);
         return;
     }
 
+    // ========================================================================
+    // PASS 1: Render map to framebuffer (at full map resolution)
+    // ========================================================================
+    m_fbo->bind();
+    glViewport(0, 0, m_mapSize.width(), m_mapSize.height());
+    glClear(GL_COLOR_BUFFER_BIT);
+
     m_shaderProgram->bind();
-    m_shaderProgram->setUniformValue("mvp", m_mvpMatrix);
+
+    // Use identity matrix for FBO pass - we're rendering the full map
+    QMatrix4x4 identityMatrix;
+    m_shaderProgram->setUniformValue("mvp", identityMatrix);
     m_shaderProgram->setUniformValue("highlightedTerritory", m_hoveredTerritoryId);
+    m_shaderProgram->setUniformValue("borderRadius", m_borderRadius);
+    m_shaderProgram->setUniformValue("mapSize", QVector2D(m_mapSize.width(), m_mapSize.height()));
 
     // Bind map texture to unit 0
     glActiveTexture(GL_TEXTURE0);
@@ -335,17 +1064,50 @@ void GameMapWidget::paintGL()
     m_indexTexture->bind();
     m_shaderProgram->setUniformValue("indexTexture", 1);
 
+    // Bind ownership texture to unit 2
+    glActiveTexture(GL_TEXTURE2);
+    m_ownershipTexture->bind();
+    m_shaderProgram->setUniformValue("ownershipTexture", 2);
+
     m_vao.bind();
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     m_vao.release();
 
     // Release textures
+    glActiveTexture(GL_TEXTURE2);
+    m_ownershipTexture->release();
     glActiveTexture(GL_TEXTURE1);
     m_indexTexture->release();
     glActiveTexture(GL_TEXTURE0);
     m_mapTexture->release();
 
     m_shaderProgram->release();
+
+    // Render city icons on top of the map (still in FBO)
+    renderCityIcons();
+
+    m_fbo->release();
+
+    // ========================================================================
+    // PASS 2: Render FBO texture to screen (with zoom/pan transform)
+    // ========================================================================
+    glViewport(0, 0, m_windowPixelSize.width(), m_windowPixelSize.height());
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    m_screenShader->bind();
+    m_screenShader->setUniformValue("mvp", m_mvpMatrix);
+
+    // Bind FBO texture to unit 0
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_fbo->texture());
+    m_screenShader->setUniformValue("screenTexture", 0);
+
+    m_vao.bind();
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    m_vao.release();
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    m_screenShader->release();
 }
 
 void GameMapWidget::updateMvpMatrix()
@@ -444,6 +1206,20 @@ bool GameMapWidget::isSeaTerritory(const QString &name) const
 int GameMapWidget::getTerritoryValue(const QString &name) const
 {
     return m_graph->getValue(name);
+}
+
+void GameMapWidget::setPlayers(const QList<Player*> &players)
+{
+    m_players = players;
+
+    // Connect to player signals for territory ownership changes
+    for (Player *player : m_players) {
+        connect(player, &Player::territoryClaimed, this, &GameMapWidget::updateTerritoryOwnership);
+        connect(player, &Player::territoryUnclaimed, this, &GameMapWidget::updateTerritoryOwnership);
+    }
+
+    // Initial ownership update
+    updateTerritoryOwnership();
 }
 
 QColor GameMapWidget::getPlayerColor(QChar player) const
@@ -545,28 +1321,87 @@ void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
         if (currentPlayer) {
             // Check for Caesars
             for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
-                if (caesar->getTerritoryName() == territoryName && caesar->getMovesRemaining() > 0) {
-                    QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1)").arg(currentPlayer->getId()));
-                    addMovementOptionsToMenu(caesarMenu, caesar, territoryName, actionToTerritory);
-                    foundPieces = true;
+                if (caesar->getTerritoryName() == territoryName) {
+                    if (caesar->isOnGalley()) {
+                        // Caesar is aboard a galley - check if galley is beached (can disembark)
+                        GalleyPiece *galley = nullptr;
+                        for (GalleyPiece *g : currentPlayer->getGalleys()) {
+                            if (g->getSerialNumber() == caesar->getOnGalley()) {
+                                galley = g;
+                                break;
+                            }
+                        }
+                        if (galley && galley->isBeached()) {
+                            // Show caesar with disembark option
+                            QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1) [On Galley]").arg(currentPlayer->getId()));
+                            QAction *disembarkAction = caesarMenu->addAction(QIcon(":/images/generalIcon.png"),
+                                QString("Disembark to %1").arg(territoryName));
+                            connect(disembarkAction, &QAction::triggered, [this, caesar, galley, territoryName, currentPlayer]() {
+                                if (m_playerInfoWidget) {
+                                    m_playerInfoWidget->disembarkFromGalley(caesar, territoryName, galley, currentPlayer);
+                                }
+                            });
+                            foundPieces = true;
+                        }
+                    } else if (caesar->getMovesRemaining() > 0) {
+                        // Normal caesar movement
+                        QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1)").arg(currentPlayer->getId()));
+                        addMovementOptionsToMenu(caesarMenu, caesar, territoryName, actionToTerritory);
+                        foundPieces = true;
+                    }
                 }
             }
 
             // Check for Generals
             for (GeneralPiece *general : currentPlayer->getGenerals()) {
-                if (general->getTerritoryName() == territoryName && general->getMovesRemaining() > 0) {
-                    QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2)").arg(general->getNumber()).arg(currentPlayer->getId()));
-                    addMovementOptionsToMenu(generalMenu, general, territoryName, actionToTerritory);
-                    foundPieces = true;
+                if (general->getTerritoryName() == territoryName) {
+                    if (general->isOnGalley()) {
+                        // General is aboard a galley - check if galley is beached (can disembark)
+                        GalleyPiece *galley = nullptr;
+                        for (GalleyPiece *g : currentPlayer->getGalleys()) {
+                            if (g->getSerialNumber() == general->getOnGalley()) {
+                                galley = g;
+                                break;
+                            }
+                        }
+                        if (galley && galley->isBeached()) {
+                            // Show general with disembark option
+                            QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2) [On Galley]").arg(general->getNumber()).arg(currentPlayer->getId()));
+                            QAction *disembarkAction = generalMenu->addAction(QIcon(":/images/generalIcon.png"),
+                                QString("Disembark to %1").arg(territoryName));
+                            connect(disembarkAction, &QAction::triggered, [this, general, galley, territoryName, currentPlayer]() {
+                                if (m_playerInfoWidget) {
+                                    m_playerInfoWidget->disembarkFromGalley(general, territoryName, galley, currentPlayer);
+                                }
+                            });
+                            foundPieces = true;
+                        }
+                    } else if (general->getMovesRemaining() > 0) {
+                        // Normal general movement
+                        QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2)").arg(general->getNumber()).arg(currentPlayer->getId()));
+                        addMovementOptionsToMenu(generalMenu, general, territoryName, actionToTerritory);
+                        foundPieces = true;
+                    }
                 }
             }
 
             // Check for Galleys
+            // Show galleys with moves remaining, but skip beached galleys with leader aboard (leader is shown instead)
             for (GalleyPiece *galley : currentPlayer->getGalleys()) {
-                if (galley->getTerritoryName() == territoryName && galley->getMovesRemaining() > 0) {
-                    QMenu *galleyMenu = menu.addMenu(QIcon(":/images/galleyIcon.png"), QString("Galley (Player %1)").arg(currentPlayer->getId()));
-                    addMovementOptionsToMenu(galleyMenu, galley, territoryName, actionToTerritory);
-                    foundPieces = true;
+                if (galley->getTerritoryName() == territoryName) {
+                    bool hasMoves = galley->getMovesRemaining() > 0;
+                    bool leaderShownInstead = galley->isBeached() && galley->hasLeaderAboard();
+
+                    // Only show galley if it has moves AND doesn't have a leader shown separately
+                    if (hasMoves && !leaderShownInstead) {
+                        QString galleyLabel = QString("Galley (Player %1)").arg(currentPlayer->getId());
+                        if (galley->hasLeaderAboard()) {
+                            galleyLabel += " [Leader Aboard]";
+                        }
+                        QMenu *galleyMenu = menu.addMenu(QIcon(":/images/galleyIcon.png"), galleyLabel);
+                        addMovementOptionsToMenu(galleyMenu, galley, territoryName, actionToTerritory);
+                        foundPieces = true;
+                    }
                 }
             }
         }
@@ -826,20 +1661,478 @@ void GameMapWidget::zoomToTerritory(const QString &name)
 
 void GameMapWidget::saveGame()
 {
-    QString fileName = QFileDialog::getSaveFileName(this, "Save Game", "", "COE Save Files (*.coe);;All Files (*)");
+    QSettings settings;
+    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QString lastDir = settings.value("Game/lastSaveDirectory", defaultDir).toString();
+
+    QString fileName = QFileDialog::getSaveFileName(this, "Save Game", lastDir, "JSON Files (*.json);;All Files (*)");
     if (fileName.isEmpty()) return;
 
-    // TODO: Implement save game
-    QMessageBox::information(this, "Save Game", "Save game not yet implemented for OpenGL map.");
+    // Remember the directory for next time
+    QFileInfo fileInfo(fileName);
+    settings.setValue("Game/lastSaveDirectory", fileInfo.absolutePath());
+
+    QJsonObject gameState;
+
+    // Save current player index
+    gameState["currentPlayerIndex"] = m_currentPlayerIndex;
+
+    // Save all players
+    QJsonArray playersArray;
+    for (Player *player : m_players) {
+        QJsonObject playerObj;
+        playerObj["id"] = QString(player->getId());
+        playerObj["wallet"] = player->getWallet();
+        playerObj["homeName"] = player->getHomeProvinceName();
+
+        // Save owned territories
+        QJsonArray territoriesArray;
+        for (const QString &territory : player->getOwnedTerritories()) {
+            territoriesArray.append(territory);
+        }
+        playerObj["ownedTerritories"] = territoriesArray;
+
+        // Save Caesar
+        QJsonArray caesarsArray;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            QJsonObject caesarObj;
+            caesarObj["serialNumber"] = caesar->getSerialNumber();
+            caesarObj["territory"] = caesar->getTerritoryName();
+            caesarObj["movesRemaining"] = caesar->getMovesRemaining();
+            caesarObj["onGalley"] = caesar->getOnGalley();
+
+            QJsonArray legionArray;
+            for (int pieceId : caesar->getLegion()) {
+                legionArray.append(pieceId);
+            }
+            caesarObj["legion"] = legionArray;
+            caesarsArray.append(caesarObj);
+        }
+        playerObj["caesars"] = caesarsArray;
+
+        // Save Generals
+        QJsonArray generalsArray;
+        for (GeneralPiece *general : player->getGenerals()) {
+            QJsonObject generalObj;
+            generalObj["serialNumber"] = general->getSerialNumber();
+            generalObj["number"] = general->getNumber();
+            generalObj["territory"] = general->getTerritoryName();
+            generalObj["movesRemaining"] = general->getMovesRemaining();
+            generalObj["onGalley"] = general->getOnGalley();
+
+            QJsonArray legionArray;
+            for (int pieceId : general->getLegion()) {
+                legionArray.append(pieceId);
+            }
+            generalObj["legion"] = legionArray;
+            generalsArray.append(generalObj);
+        }
+        playerObj["generals"] = generalsArray;
+
+        // Save Captured Generals
+        QJsonArray capturedGeneralsArray;
+        for (GeneralPiece *general : player->getCapturedGenerals()) {
+            QJsonObject generalObj;
+            generalObj["serialNumber"] = general->getSerialNumber();
+            generalObj["originalPlayer"] = QString(general->getPlayer());
+            generalObj["number"] = general->getNumber();
+            generalObj["territory"] = general->getTerritoryName();
+            capturedGeneralsArray.append(generalObj);
+        }
+        playerObj["capturedGenerals"] = capturedGeneralsArray;
+
+        // Save Infantry
+        QJsonArray infantryArray;
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            QJsonObject infantryObj;
+            infantryObj["serialNumber"] = infantry->getSerialNumber();
+            infantryObj["territory"] = infantry->getTerritoryName();
+            infantryObj["movesRemaining"] = infantry->getMovesRemaining();
+            infantryObj["onGalley"] = infantry->getOnGalley();
+            infantryArray.append(infantryObj);
+        }
+        playerObj["infantry"] = infantryArray;
+
+        // Save Cavalry
+        QJsonArray cavalryArray;
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            QJsonObject cavalryObj;
+            cavalryObj["serialNumber"] = cavalry->getSerialNumber();
+            cavalryObj["territory"] = cavalry->getTerritoryName();
+            cavalryObj["movesRemaining"] = cavalry->getMovesRemaining();
+            cavalryObj["onGalley"] = cavalry->getOnGalley();
+            cavalryArray.append(cavalryObj);
+        }
+        playerObj["cavalry"] = cavalryArray;
+
+        // Save Catapults
+        QJsonArray catapultsArray;
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            QJsonObject catapultObj;
+            catapultObj["serialNumber"] = catapult->getSerialNumber();
+            catapultObj["territory"] = catapult->getTerritoryName();
+            catapultObj["movesRemaining"] = catapult->getMovesRemaining();
+            catapultObj["onGalley"] = catapult->getOnGalley();
+            catapultsArray.append(catapultObj);
+        }
+        playerObj["catapults"] = catapultsArray;
+
+        // Save Galleys
+        QJsonArray galleysArray;
+        for (GalleyPiece *galley : player->getGalleys()) {
+            QJsonObject galleyObj;
+            galleyObj["serialNumber"] = galley->getSerialNumber();
+            galleyObj["territory"] = galley->getTerritoryName();
+            galleyObj["movesRemaining"] = galley->getMovesRemaining();
+            galleyObj["leaderAboard"] = galley->getLeaderAboard();
+            galleyObj["transportedThisTurn"] = galley->hasTransportedThisTurn();
+
+            if (galley->hasLastSeaZone()) {
+                galleyObj["lastSeaZone"] = galley->getLastSeaZone();
+            }
+
+            galleysArray.append(galleyObj);
+        }
+        playerObj["galleys"] = galleysArray;
+
+        // Save Cities
+        QJsonArray citiesArray;
+        for (City *city : player->getCities()) {
+            QJsonObject cityObj;
+            cityObj["territory"] = city->getTerritoryName();
+            cityObj["isFortified"] = city->isFortified();
+            citiesArray.append(cityObj);
+        }
+        playerObj["cities"] = citiesArray;
+
+        playersArray.append(playerObj);
+    }
+    gameState["players"] = playersArray;
+
+    // Write to file
+    QJsonDocument doc(gameState);
+    QFile file(fileName);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Game Saved");
+        msgBox.setText(QString("Game saved successfully to:\n%1").arg(fileName));
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+    } else {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Save Failed");
+        msgBox.setText(QString("Failed to save game to:\n%1").arg(fileName));
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+    }
 }
 
 void GameMapWidget::loadGame()
 {
-    QString fileName = QFileDialog::getOpenFileName(this, "Load Game", "", "COE Save Files (*.coe);;All Files (*)");
+    QSettings settings;
+    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QString lastDir = settings.value("Game/lastSaveDirectory", defaultDir).toString();
+
+    QString fileName = QFileDialog::getOpenFileName(this, "Load Game", lastDir, "JSON Files (*.json);;All Files (*)");
     if (fileName.isEmpty()) return;
 
-    // TODO: Implement load game
-    QMessageBox::information(this, "Load Game", "Load game not yet implemented for OpenGL map.");
+    // Remember the directory for next time
+    QFileInfo fileInfo(fileName);
+    settings.setValue("Game/lastSaveDirectory", fileInfo.absolutePath());
+
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Load Failed", QString("Failed to open file:\n%1").arg(fileName));
+        return;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, "Load Failed", QString("Failed to parse JSON:\n%1").arg(parseError.errorString()));
+        return;
+    }
+
+    QJsonObject gameState = doc.object();
+
+    qDebug() << "=== LOADING GAME ===";
+    qDebug() << "m_players.size():" << m_players.size();
+
+    // Clear existing game state
+    for (Player *player : m_players) {
+        player->clearAllPiecesAndBuildings();
+        player->clearAllTerritories();
+    }
+
+    // Load current player index
+    m_currentPlayerIndex = gameState["currentPlayerIndex"].toInt(0);
+
+    // Load players
+    QJsonArray playersArray = gameState["players"].toArray();
+    qDebug() << "playersArray.size():" << playersArray.size();
+
+    for (int i = 0; i < playersArray.size() && i < m_players.size(); ++i) {
+        QJsonObject playerObj = playersArray[i].toObject();
+        Player *player = m_players[i];
+        qDebug() << "Loading player" << i << "id:" << playerObj["id"].toString() << "m_player id:" << player->getId();
+
+        player->setWallet(playerObj["wallet"].toInt(0));
+
+        // Load owned territories (already cleared above)
+        QJsonArray territoriesArray = playerObj["ownedTerritories"].toArray();
+        for (const QJsonValue &val : territoriesArray) {
+            player->claimTerritory(val.toString());
+        }
+
+        // Load Caesars
+        QJsonArray caesarsArray = playerObj["caesars"].toArray();
+        for (const QJsonValue &val : caesarsArray) {
+            QJsonObject caesarObj = val.toObject();
+            QString territory = caesarObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            CaesarPiece *caesar = new CaesarPiece(player->getId(), pos, player);
+            caesar->setTerritoryName(territory);
+            caesar->setMovesRemaining(caesarObj["movesRemaining"].toDouble(2));
+            caesar->setOnGalley(caesarObj["onGalley"].toString());
+
+            // Note: Legion IDs will be rebuilt after all pieces are loaded
+            // since unique IDs are generated fresh on piece creation
+            player->addCaesar(caesar);
+            qDebug() << "  Added Caesar at" << territory << "- caesars count:" << player->getCaesarCount();
+        }
+
+        // Load Generals
+        QJsonArray generalsArray = playerObj["generals"].toArray();
+        for (const QJsonValue &val : generalsArray) {
+            QJsonObject generalObj = val.toObject();
+            QString territory = generalObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            GeneralPiece *general = new GeneralPiece(player->getId(), pos, generalObj["number"].toInt(), player);
+            general->setTerritoryName(territory);
+            general->setMovesRemaining(generalObj["movesRemaining"].toDouble(2));
+            general->setOnGalley(generalObj["onGalley"].toString());
+
+            // Note: Legion membership is not restored - troops will need to be reassigned
+            player->addGeneral(general);
+            qDebug() << "  Added General" << generalObj["number"].toInt() << "at" << territory;
+        }
+        qDebug() << "  Total generals:" << player->getGeneralCount();
+
+        // Load Infantry
+        QJsonArray infantryArray = playerObj["infantry"].toArray();
+        for (const QJsonValue &val : infantryArray) {
+            QJsonObject infantryObj = val.toObject();
+            QString territory = infantryObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            InfantryPiece *infantry = new InfantryPiece(player->getId(), pos, player);
+            infantry->setTerritoryName(territory);
+            infantry->setMovesRemaining(infantryObj["movesRemaining"].toDouble(1));
+            infantry->setOnGalley(infantryObj["onGalley"].toString());
+
+            player->addInfantry(infantry);
+        }
+        qDebug() << "  Total infantry:" << player->getInfantryCount();
+
+        // Load Cavalry
+        QJsonArray cavalryArray = playerObj["cavalry"].toArray();
+        for (const QJsonValue &val : cavalryArray) {
+            QJsonObject cavalryObj = val.toObject();
+            QString territory = cavalryObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            CavalryPiece *cavalry = new CavalryPiece(player->getId(), pos, player);
+            cavalry->setTerritoryName(territory);
+            cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toDouble(2));
+            cavalry->setOnGalley(cavalryObj["onGalley"].toString());
+
+            player->addCavalry(cavalry);
+        }
+
+        // Load Catapults
+        QJsonArray catapultsArray = playerObj["catapults"].toArray();
+        for (const QJsonValue &val : catapultsArray) {
+            QJsonObject catapultObj = val.toObject();
+            QString territory = catapultObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            CatapultPiece *catapult = new CatapultPiece(player->getId(), pos, player);
+            catapult->setTerritoryName(territory);
+            catapult->setMovesRemaining(catapultObj["movesRemaining"].toDouble(1));
+            catapult->setOnGalley(catapultObj["onGalley"].toString());
+
+            player->addCatapult(catapult);
+        }
+
+        // Load Galleys
+        QJsonArray galleysArray = playerObj["galleys"].toArray();
+        for (const QJsonValue &val : galleysArray) {
+            QJsonObject galleyObj = val.toObject();
+            QString territory = galleyObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+
+            GalleyPiece *galley = new GalleyPiece(player->getId(), pos, player);
+            galley->setTerritoryName(territory);
+            galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
+            // Note: leaderAboard is not restored since leader IDs change on load
+            if (galleyObj["transportedThisTurn"].toBool()) {
+                galley->setTransportedThisTurn(true);
+            }
+            if (galleyObj.contains("lastSeaZone")) {
+                galley->setLastSeaZone(galleyObj["lastSeaZone"].toString());
+            }
+
+            player->addGalley(galley);
+        }
+
+        // Load Cities
+        QJsonArray citiesArray = playerObj["cities"].toArray();
+        for (const QJsonValue &val : citiesArray) {
+            QJsonObject cityObj = val.toObject();
+            QString territory = cityObj["territory"].toString();
+            Position pos = territoryNameToPosition(territory);
+            bool isFortified = cityObj["isFortified"].toBool();
+
+            City *city = new City(player->getId(), pos, territory, isFortified, player);
+            player->addCity(city);
+            qDebug() << "  Added city at" << territory << "fortified:" << isFortified;
+        }
+        qDebug() << "  Total cities:" << player->getCityCount();
+        qDebug() << "  Owned territories:" << player->getOwnedTerritories();
+    }
+
+    // Clear invalid onGalley references (old serial numbers that don't exist anymore)
+    qDebug() << "Clearing invalid galley references...";
+    for (Player *player : m_players) {
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            caesar->clearGalley();
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            general->clearGalley();
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            infantry->clearGalley();
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            cavalry->clearGalley();
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            catapult->clearGalley();
+        }
+        for (GalleyPiece *galley : player->getGalleys()) {
+            galley->setLeaderAboard(0);  // Clear invalid leader reference
+        }
+    }
+
+    // Rebuild galley-leader relationships and legion membership
+    // Leaders in sea territories should be on galleys in the same territory
+    // Troops in sea territories should be in the legion of a leader in the same territory
+    qDebug() << "Rebuilding galley-leader relationships and legions...";
+    for (Player *player : m_players) {
+        // Check caesars
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            QString territory = caesar->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        caesar->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(caesar->getUniqueId());
+                        qDebug() << "  Linked Caesar to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the caesar's legion
+                caesar->clearLegion();
+                for (InfantryPiece *infantry : player->getInfantry()) {
+                    if (infantry->getTerritoryName() == territory) {
+                        caesar->addToLegion(infantry->getUniqueId());
+                        infantry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CavalryPiece *cavalry : player->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territory) {
+                        caesar->addToLegion(cavalry->getUniqueId());
+                        cavalry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CatapultPiece *catapult : player->getCatapults()) {
+                    if (catapult->getTerritoryName() == territory) {
+                        caesar->addToLegion(catapult->getUniqueId());
+                        catapult->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                qDebug() << "    Caesar's legion now has" << caesar->getLegion().size() << "troops";
+            }
+        }
+
+        // Check generals
+        for (GeneralPiece *general : player->getGenerals()) {
+            QString territory = general->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        general->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(general->getUniqueId());
+                        qDebug() << "  Linked General" << general->getNumber() << "to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the general's legion
+                // But only if this general is on a galley (to avoid assigning troops to multiple leaders)
+                if (general->isOnGalley()) {
+                    general->clearLegion();
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        if (infantry->getTerritoryName() == territory && !infantry->isOnGalley()) {
+                            general->addToLegion(infantry->getUniqueId());
+                            infantry->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territory && !cavalry->isOnGalley()) {
+                            general->addToLegion(cavalry->getUniqueId());
+                            cavalry->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territory && !catapult->isOnGalley()) {
+                            general->addToLegion(catapult->getUniqueId());
+                            catapult->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    qDebug() << "    General" << general->getNumber() << "'s legion now has" << general->getLegion().size() << "troops";
+                }
+            }
+        }
+    }
+
+    qDebug() << "=== LOAD COMPLETE ===";
+
+    // Update display
+    if (m_playerInfoWidget) {
+        m_playerInfoWidget->updateAllPlayers();
+    }
+    update();
+
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Game Loaded");
+    msgBox.setText(QString("Game loaded successfully from:\n%1").arg(fileName));
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.exec();
 }
 
 void GameMapWidget::showAbout()
@@ -977,10 +2270,10 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
 
     QStringList lines;
 
-    // Territory name and value
-    int territoryValue = m_graph->getValue(territoryName);
-    lines << QString("<b>%1</b>").arg(territoryName);
-    lines << QString("Value: %1").arg(territoryValue);
+    // Territory name, ID, and value
+    Territory territory = m_graph->getTerritory(territoryName);
+    lines << QString("<b>%1</b> (ID: %2)").arg(territoryName).arg(territory.id);
+    lines << QString("Value: %1").arg(territory.value);
 
     // Check if it's a sea territory
     if (m_graph->isSeaTerritory(territoryName)) {
@@ -1114,6 +2407,82 @@ void GameMapWidget::addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, cons
     GalleyPiece *galley = dynamic_cast<GalleyPiece*>(piece);
     bool isGalley = (galley != nullptr);
 
+    // For beached galleys, determine which sea zones are accessible from current beach
+    QList<QString> allowedSeaZones;
+    if (isGalley && galley->isBeached() && galley->hasLastSeaZone()) {
+        // Get the beach position for this galley
+        QPointF beachPos = m_graph->getBeachPosition(fromTerritory, galley->getLastSeaZone());
+        // Get all sea zones accessible from this beach position
+        allowedSeaZones = m_graph->getSeaZonesAtBeach(fromTerritory, beachPos);
+
+        // If the galley is beached and has a leader aboard, add "Disembark here" option
+        if (galley->hasLeaderAboard()) {
+            QAction *disembarkAction = menu->addAction(QIcon(":/images/generalIcon.png"),
+                QString("Disembark to %1").arg(fromTerritory));
+
+            connect(disembarkAction, &QAction::triggered, [this, galley, fromTerritory]() {
+                if (m_playerInfoWidget && m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+                    Player *player = m_players[m_currentPlayerIndex];
+                    // Find the leader aboard
+                    int leaderAboardId = galley->getLeaderAboard();
+                    GamePiece *leader = nullptr;
+
+                    for (CaesarPiece *caesar : player->getCaesars()) {
+                        if (caesar->getUniqueId() == leaderAboardId) {
+                            leader = caesar;
+                            break;
+                        }
+                    }
+                    if (!leader) {
+                        for (GeneralPiece *general : player->getGenerals()) {
+                            if (general->getUniqueId() == leaderAboardId) {
+                                leader = general;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (leader) {
+                        m_playerInfoWidget->disembarkFromGalley(leader, fromTerritory, galley, player);
+                    }
+                }
+            });
+
+            menu->addSeparator();
+        }
+    }
+
+    // For generals/caesars, check if there are beached galleys in the same territory they can board
+    if (!isGalley && m_players.size() > m_currentPlayerIndex) {
+        Player *currentPlayer = m_players[m_currentPlayerIndex];
+        if (currentPlayer && currentPlayer->getId() == piece->getPlayer()) {
+            for (GalleyPiece *beachedGalley : currentPlayer->getGalleys()) {
+                // Only show galleys that are in the SAME territory (beached here)
+                if (beachedGalley->getTerritoryName() == fromTerritory &&
+                    beachedGalley->getMovesRemaining() > 0 &&
+                    !beachedGalley->hasLeaderAboard()) {
+
+                    QString galleySeaZone = beachedGalley->getLastSeaZone();
+                    QString displayText = QString("Board Galley → %1").arg(galleySeaZone);
+
+                    QAction *boardAction = menu->addAction(QIcon(":/images/galleyIcon.png"), displayText);
+
+                    // Track this action for hover highlighting (highlight the sea zone)
+                    actionToTerritory[boardAction] = galleySeaZone;
+
+                    // Connect to board the galley (move general to the galley's sea zone destination)
+                    connect(boardAction, &QAction::triggered, [this, piece, beachedGalley, galleySeaZone]() {
+                        if (m_playerInfoWidget) {
+                            // First move the galley to sea, then board the general onto it
+                            // The galley moves to sea, general follows
+                            m_playerInfoWidget->boardGalleyFromBeach(piece, beachedGalley, galleySeaZone);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     // Add each neighbor as a movement option
     for (const QString &neighborName : territory.neighbors) {
         Territory neighbor = m_graph->getTerritory(neighborName);
@@ -1175,10 +2544,29 @@ void GameMapWidget::addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, cons
 
         QAction *moveAction = menu->addAction(itemIcon, displayText);
 
-        // Disable sea territories unless this is a galley or there's a galley to board
-        if (isSea) {
-            moveAction->setEnabled(isGalley || hasGalley);
+        // Determine if this movement option should be enabled
+        bool enabled = true;
+        if (isGalley && galley->isBeached()) {
+            // Beached galley can only move to sea zones accessible from its beach
+            if (isSea) {
+                // Check if this sea zone is accessible from current beach
+                // AND the galley has at least 1 move remaining (sea zone movement costs 1)
+                enabled = allowedSeaZones.contains(neighborName) && galley->getMovesRemaining() >= 1.0;
+            } else {
+                // Beached galley cannot move to other land territories
+                enabled = false;
+            }
+        } else if (isSea) {
+            // Non-galley pieces can only enter sea if there's a galley to board
+            // Galleys at sea can move to any adjacent sea zone (if they have at least 1 move)
+            if (isGalley) {
+                enabled = galley->getMovesRemaining() >= 1.0;
+            } else {
+                enabled = hasGalley;
+            }
         }
+
+        moveAction->setEnabled(enabled);
 
         // Track this action for hover highlighting
         actionToTerritory[moveAction] = neighborName;
