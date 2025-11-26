@@ -11,53 +11,72 @@ CONFIG += c++17
 # Uncomment to use OpenGL-based map widget instead of grid-based widget
 # NOTE: OpenGL map requires refactoring PlayerInfoWidget, CombatDialog, AIPlayer etc.
 # to use GameMapWidget interface instead of MapWidget-specific methods.
-# DEFINES += USE_OPENGL_MAP
+DEFINES += USE_OPENGL_MAP
 
 # Common sources (always included)
 SOURCES += \
     main.cpp \
     mapgraph.cpp \
-    scorewindow.cpp \
-    walletwindow.cpp \
-    purchasedialog.cpp \
     gamepiece.cpp \
     player.cpp \
-    building.cpp \
-    playerinfowidget.cpp \
-    troopselectiondialog.cpp \
-    combatdialog.cpp \
-    citydestructiondialog.cpp \
-    laurollingdiewidget.cpp \
-    aiplayer.cpp \
-    aidebugwidget.cpp
+    building.cpp
 
 # Common headers (always included)
 HEADERS += \
     mapgraph.h \
-    scorewindow.h \
-    walletwindow.h \
-    purchasedialog.h \
     gamepiece.h \
     player.h \
     building.h \
-    playerinfowidget.h \
-    common.h \
-    troopselectiondialog.h \
-    combatdialog.h \
-    citydestructiondialog.h \
-    laurollingdiewidget.h \
-    aiplayer.h \
-    aidebugwidget.h
+    common.h
 
-# Conditional map widget compilation
+# Conditional compilation based on map type
 contains(DEFINES, USE_OPENGL_MAP) {
     message("Using OpenGL map widget")
-    SOURCES += gamemapwidget.cpp
-    HEADERS += gamemapwidget.h
+    SOURCES += \
+        gamemapwidget.cpp \
+        playerinfowidget.cpp \
+        combatdialog.cpp \
+        troopselectiondialog.cpp \
+        purchasedialog.cpp \
+        citydestructiondialog.cpp \
+        laurollingdiewidget.cpp \
+        aiplayer.cpp
+    HEADERS += \
+        gamemapwidget.h \
+        playerinfowidget.h \
+        combatdialog.h \
+        troopselectiondialog.h \
+        purchasedialog.h \
+        citydestructiondialog.h \
+        laurollingdiewidget.h \
+        aiplayer.h
 } else {
     message("Using grid-based map widget")
-    SOURCES += mapwidget.cpp
-    HEADERS += mapwidget.h
+    SOURCES += \
+        mapwidget.cpp \
+        scorewindow.cpp \
+        walletwindow.cpp \
+        purchasedialog.cpp \
+        playerinfowidget.cpp \
+        troopselectiondialog.cpp \
+        combatdialog.cpp \
+        citydestructiondialog.cpp \
+        laurollingdiewidget.cpp \
+        aiplayer.cpp \
+        aidebugwidget.cpp
+
+    HEADERS += \
+        mapwidget.h \
+        scorewindow.h \
+        walletwindow.h \
+        purchasedialog.h \
+        playerinfowidget.h \
+        troopselectiondialog.h \
+        combatdialog.h \
+        citydestructiondialog.h \
+        laurollingdiewidget.h \
+        aiplayer.h \
+        aidebugwidget.h
 }
 
 RESOURCES += \

@@ -191,9 +191,13 @@ int main(int argc, char *argv[])
     mapWidget->update();
 
 #ifdef USE_OPENGL_MAP
-    // OpenGL map - simplified setup without PlayerInfoWidget integration
-    // Just show the map for now
-    PlayerInfoWidget *infoWidget = nullptr;
+    // OpenGL map - with PlayerInfoWidget for game controls
+    PlayerInfoWidget *infoWidget = new PlayerInfoWidget();
+    infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
+    infoWidget->setPlayers(players);
+    mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget
+    infoWidget->show();
+
     ScoreWindow *scoreWindow = nullptr;
     WalletWindow *walletWindow = nullptr;
 #else
@@ -302,10 +306,12 @@ int main(int argc, char *argv[])
     // ========================================================================
     // AI PLAYER SETUP (for testing) - grid-based only
     // ========================================================================
+    // DISABLED: AI players are currently disabled for manual play
     QList<AIPlayer*> aiPlayers;
     QList<AIDebugWidget*> debugWidgets;
 
     // Create AI controller and debug widget for each player
+    /*
     for (int i = 0; i < players.size(); ++i) {
         Player *player = players[i];
 
@@ -332,6 +338,7 @@ int main(int argc, char *argv[])
 
         qDebug() << "Created AI player and debug widget for Player" << player->getId();
     }
+    */
 
     // NOW start the current player's turn (after AI connections are set up)
     // This applies to both new games and loaded games
@@ -355,12 +362,20 @@ int main(int argc, char *argv[])
     return result;
 #else
     // ========================================================================
-    // OpenGL MAP - Simple display mode (no AI, no info widgets)
+    // OpenGL MAP - with PlayerInfoWidget (no AI)
     // ========================================================================
+    // Start the current player's turn
+    if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
+        qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
+        players[currentPlayerIndex]->startTurn();
+        mapWidget->setAtStartOfTurn(true);
+    }
+
     int result = a.exec();
 
     // Clean up
     qDeleteAll(players);
+    delete infoWidget;
     delete mapWidget;
 
     return result;

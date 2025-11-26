@@ -13,8 +13,7 @@
 #include <QElapsedTimer>
 #include <QMap>
 #include <QMenuBar>
-#include <QMediaPlayer>
-#include <QAudioOutput>
+#include <QSoundEffect>
 
 #include "common.h"
 #include "mapgraph.h"
@@ -22,6 +21,8 @@
 // Forward declarations
 class Player;
 class PlayerInfoWidget;
+class GamePiece;
+class QMenu;
 
 // Alias for compatibility - OpenGL widget uses territory names, not grid positions
 // This allows code to work with both MapWidget and GameMapWidget
@@ -45,10 +46,28 @@ public:
     MapGraph* getGraph() { return m_graph; }
     const MapGraph* getGraph() const { return m_graph; }
 
+    // Grid compatibility methods (return dummy values - OpenGL map is not grid-based)
+    int rows() const { return 0; }
+    int cols() const { return 0; }
+
     // Territory queries (by name)
     QString getHoveredTerritory() const;
     bool isSeaTerritory(const QString &name) const;
     int getTerritoryValue(const QString &name) const;
+
+    // Territory queries (by grid position - for MapWidget compatibility)
+    QString getTerritoryNameAt(int row, int col) const;
+    int getTerritoryValueAt(int row, int col) const;
+    QChar getTerritoryOwnerAt(int row, int col) const;
+    bool isSeaTerritory(int row, int col) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
+    Position territoryNameToPosition(const QString &territoryName) const;
+
+    // Building management (for MapWidget compatibility)
+    void removeCityAt(int row, int col);
+    void removeFortificationAt(int row, int col);
+    void updateRoads();
 
     // Get player color
     QColor getPlayerColor(QChar player) const;
@@ -73,6 +92,9 @@ public:
     // Zoom/pan control
     void resetView();
     void zoomToTerritory(const QString &name);
+
+    // Highlight control (for external menus)
+    void setHoveredTerritoryById(int territoryId);
 
 public slots:
     void saveGame();
@@ -111,6 +133,9 @@ private:
     QPointF widgetToNormalized(const QPointF &widgetPos) const;
     QPointF widgetToMapCoords(const QPointF &widgetPos) const;
     void createMenuBar();
+    QString buildTerritoryTooltip(const QString &territoryName) const;
+    void addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, const QString &fromTerritory, QMap<QAction*, QString> &actionToTerritory);
+    void playMenuClickSound(QAction *action);
 
     // Map graph (owned by this widget)
     MapGraph *m_graph = nullptr;
@@ -166,8 +191,9 @@ private:
     static constexpr float m_minVelocity = 0.01f;
 
     // Audio
-    QMediaPlayer *m_clickPlayer = nullptr;
-    QAudioOutput *m_audioOutput = nullptr;
+    QSoundEffect *m_clickSound = nullptr;
+    QElapsedTimer m_clickTimer;  // Throttle click sounds
+    QAction *m_lastHoveredAction = nullptr;  // Track last hovered action for click sounds
 
 private slots:
     void onMomentumTick();

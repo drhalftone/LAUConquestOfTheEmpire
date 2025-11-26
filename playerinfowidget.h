@@ -8,8 +8,16 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QGroupBox>
+#include <QSoundEffect>
+#include <QElapsedTimer>
 #include "player.h"
+#include "common.h"
+
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 
 class AIPlayer;  // Forward declaration
 
@@ -26,7 +34,11 @@ public:
     void setPlayers(const QList<Player*> &players);
 
     // Set map widget reference for territory lookups
+#ifdef USE_OPENGL_MAP
+    void setMapWidget(GameMapWidget *mapWidget) { m_mapWidget = mapWidget; }
+#else
     void setMapWidget(MapWidget *mapWidget) { m_mapWidget = mapWidget; }
+#endif
 
     // Update display for specific player
     void updatePlayerInfo(Player *player);
@@ -108,6 +120,10 @@ public:
     // Returns true if move was successful
     bool aiMoveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
 
+    // Move a leader to a territory (shows legion composition dialog)
+    // This is the user-initiated movement method
+    void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
+
 signals:
     void pieceMoved(int fromRow, int fromCol, int toRow, int toCol);
 
@@ -142,7 +158,7 @@ private:
 
     // Leader movement with troops
     void moveLeaderWithTroops(GamePiece *leader, int rowDelta, int colDelta);
-    void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);  // Territory-based movement
+    // moveLeaderToTerritory moved to public section
 
     // Galley transport functions
     void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley (auto-select)
@@ -169,10 +185,17 @@ private:
     void saveSettings();
     void loadSettings();
 
+    // Play click sound (only once per different action)
+    void playMenuClickSound(QAction *action);
+
     QTabWidget *m_tabWidget;
     QMap<Player*, QWidget*> m_playerTabs;  // Map player to their tab widget
     QList<Player*> m_players;
+#ifdef USE_OPENGL_MAP
+    GameMapWidget *m_mapWidget;  // Reference to map for territory lookups
+#else
     MapWidget *m_mapWidget;  // Reference to map for territory lookups
+#endif
 
     // Global captured generals section
     QGroupBox *m_capturedGeneralsGroupBox;
@@ -183,6 +206,11 @@ private:
     int m_aiAutoModeDelayMs = 1000;
     AIPlayer *m_aiPlayer = nullptr;  // Reference to AI player for decision-making
     QMap<QChar, AIPlayer*> m_aiPlayers;  // Map of player ID to AI controller
+
+    // Audio for context menus
+    QSoundEffect *m_clickSound = nullptr;
+    QAction *m_lastHoveredAction = nullptr;  // Track last hovered action to play click only once per item
+    QElapsedTimer m_clickTimer;  // Throttle click sounds
 };
 
 #endif // PLAYERINFOWIDGET_H

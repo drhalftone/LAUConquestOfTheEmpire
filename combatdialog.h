@@ -12,7 +12,12 @@
 #include <QFrame>
 #include "player.h"
 #include "gamepiece.h"
+#include "common.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include "laurollingdiewidget.h"
 
 class AIPlayer;

@@ -1,5 +1,9 @@
 #include "player.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include <QDebug>
 
 Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool minimalSetup)
@@ -655,15 +659,10 @@ int Player::collectTaxes(MapWidget *mapWidget)
 
     // Iterate through all owned territories and sum their tax values
     for (const QString &territoryName : m_ownedTerritories) {
-        // Find the territory on the map and get its value
-        for (int row = 0; row < 8; ++row) {
-            for (int col = 0; col < 12; ++col) {
-                if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                    int territoryValue = mapWidget->getTerritoryValueAt(row, col);
-                    totalTaxes += territoryValue;
-                    break; // Found the territory, move to next one
-                }
-            }
+        // Use MapGraph to get territory value (works for both grid and OpenGL maps)
+        if (mapWidget->getGraph()) {
+            int territoryValue = mapWidget->getGraph()->getValue(territoryName);
+            totalTaxes += territoryValue;
         }
     }
 
@@ -687,16 +686,11 @@ int Player::calculateIncome(MapWidget *mapWidget) const
 
     int totalIncome = 0;
 
-    // Sum territory values
+    // Sum territory values using MapGraph (works for both grid and OpenGL maps)
     for (const QString &territoryName : m_ownedTerritories) {
-        for (int row = 0; row < 8; ++row) {
-            for (int col = 0; col < 12; ++col) {
-                if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                    int territoryValue = mapWidget->getTerritoryValueAt(row, col);
-                    totalIncome += territoryValue;
-                    break;
-                }
-            }
+        if (mapWidget->getGraph()) {
+            int territoryValue = mapWidget->getGraph()->getValue(territoryName);
+            totalIncome += territoryValue;
         }
     }
 

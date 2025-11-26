@@ -1,6 +1,11 @@
 #include "gamemapwidget.h"
+#include "player.h"
+#include "building.h"
+#include "gamepiece.h"
+#include "playerinfowidget.h"
 
 #include <QDebug>
+#include <QMenu>
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QCloseEvent>
@@ -8,7 +13,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QMenu>
+#include <QApplication>
 #include <QUrl>
 
 // Vertex shader - transforms position by MVP matrix
@@ -79,11 +84,10 @@ GameMapWidget::GameMapWidget(QWidget *parent)
     connect(&m_momentumTimer, &QTimer::timeout, this, &GameMapWidget::onMomentumTick);
 
     // Setup click sound
-    m_audioOutput = new QAudioOutput(this);
-    m_audioOutput->setVolume(0.5f);
-    m_clickPlayer = new QMediaPlayer(this);
-    m_clickPlayer->setAudioOutput(m_audioOutput);
-    m_clickPlayer->setSource(QUrl("qrc:/images/click.mp3"));
+    m_clickSound = new QSoundEffect(this);
+    m_clickSound->setSource(QUrl("qrc:/images/click.wav"));
+    m_clickSound->setVolume(0.3f);  // Faint volume for all clicks
+    m_clickTimer.start();  // Start timer for throttling clicks
 
     // Create menu bar
     createMenuBar();
@@ -108,14 +112,50 @@ void GameMapWidget::createMenuBar()
 {
     m_menuBar = new QMenuBar(this);
 
+    // Style menu bar for better visibility
+    m_menuBar->setStyleSheet(
+        "QMenuBar { background-color: white; color: black; }"
+        "QMenuBar::item { background-color: white; color: black; }"
+        "QMenuBar::item:selected { background-color: lightblue; }"
+        "QMenu { background-color: white; color: black; }"
+        "QMenu::item:selected { background-color: lightblue; }"
+    );
+
     QMenu *fileMenu = m_menuBar->addMenu("&File");
-    fileMenu->addAction("&Save Game", this, &GameMapWidget::saveGame, QKeySequence::Save);
-    fileMenu->addAction("&Load Game", this, &GameMapWidget::loadGame, QKeySequence::Open);
+
+    QAction *saveAction = fileMenu->addAction(
+        QApplication::style()->standardIcon(QStyle::SP_DialogSaveButton),
+        "&Save Game",
+        this,
+        &GameMapWidget::saveGame,
+        QKeySequence::Save
+    );
+
+    QAction *loadAction = fileMenu->addAction(
+        QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon),
+        "&Load Game",
+        this,
+        &GameMapWidget::loadGame,
+        QKeySequence::Open
+    );
+
     fileMenu->addSeparator();
-    fileMenu->addAction("E&xit", this, &QWidget::close, QKeySequence::Quit);
+
+    QAction *exitAction = fileMenu->addAction(
+        QApplication::style()->standardIcon(QStyle::SP_DialogCloseButton),
+        "E&xit",
+        this,
+        &QWidget::close,
+        QKeySequence::Quit
+    );
 
     QMenu *helpMenu = m_menuBar->addMenu("&Help");
-    helpMenu->addAction("&About", this, &GameMapWidget::showAbout);
+    QAction *aboutAction = helpMenu->addAction(
+        QApplication::style()->standardIcon(QStyle::SP_MessageBoxInformation),
+        "&About",
+        this,
+        &GameMapWidget::showAbout
+    );
 }
 
 void GameMapWidget::initializeGL()
@@ -233,6 +273,13 @@ void GameMapWidget::resizeGL(int w, int h)
 {
     Q_UNUSED(w);
     Q_UNUSED(h);
+
+    // Position menu bar at top
+    if (m_menuBar) {
+        m_menuBar->setGeometry(0, 0, width(), m_menuBar->sizeHint().height());
+        m_menuBar->raise();  // Ensure it's on top
+        m_menuBar->show();
+    }
 
     // Get actual pixel dimensions (for Retina displays)
     m_windowPixelSize = QSize(width() * devicePixelRatio(), height() * devicePixelRatio());
@@ -365,10 +412,21 @@ void GameMapWidget::updateHoveredTerritory(const QPointF &widgetPos)
         QString territoryName = m_graph->getTerritoryNameById(newTerritory);
         emit territoryHovered(territoryName);
 
-        // Play click sound when a new territory is activated
-        if (newTerritory > 0) {
-            m_clickPlayer->setPosition(0);
-            m_clickPlayer->play();
+        // Play click sound when a new territory is activated (throttled to prevent overload)
+        if (newTerritory > 0 && m_clickTimer.elapsed() > 50) {
+            if (m_clickSound->isPlaying()) {
+                m_clickSound->stop();
+            }
+            m_clickSound->play();
+            m_clickTimer.restart();
+        }
+
+        // Generate and set tooltip with territory information
+        if (newTerritory > 0 && !territoryName.isEmpty()) {
+            QString tooltip = buildTerritoryTooltip(territoryName);
+            setToolTip(tooltip);
+        } else {
+            setToolTip("");
         }
     }
 }
@@ -423,7 +481,7 @@ QMap<QChar, int> GameMapWidget::calculateScores() const
 
 void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
 {
-    if (!m_graph) return;
+    if (!m_graph || !m_playerInfoWidget) return;
 
     QString territoryName = m_graph->getTerritoryNameById(territoryId);
     if (territoryName.isEmpty()) return;
@@ -433,6 +491,15 @@ void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
 
     QMenu menu(this);
 
+    // Find the owner of this territory
+    QChar owner = '\0';
+    for (Player *player : m_players) {
+        if (player && player->ownsTerritory(territoryName)) {
+            owner = player->getId();
+            break;
+        }
+    }
+
     // Header with territory name and value
     QString headerText = QString("%1").arg(territory.name);
     if (territory.value > 0) {
@@ -440,7 +507,25 @@ void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
     } else {
         headerText += " (Sea)";
     }
-    QAction *header = menu.addAction(headerText);
+
+    // Determine flag icon based on owner
+    QIcon flagIcon;
+    if (owner != '\0') {
+        QString flagPath;
+        switch (owner.toLatin1()) {
+            case 'A': flagPath = ":/images/redFlag.png"; break;
+            case 'B': flagPath = ":/images/greenFlag.png"; break;
+            case 'C': flagPath = ":/images/blueFlag.png"; break;
+            case 'D': flagPath = ":/images/yellowFlag.png"; break;
+            case 'E': flagPath = ":/images/blackFlag.png"; break;
+            case 'F': flagPath = ":/images/orangeFlag.png"; break;
+        }
+        if (!flagPath.isEmpty()) {
+            flagIcon = QIcon(flagPath);
+        }
+    }
+
+    QAction *header = menu.addAction(flagIcon, headerText);
     header->setEnabled(false);
     QFont boldFont = header->font();
     boldFont.setBold(true);
@@ -448,57 +533,90 @@ void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
 
     menu.addSeparator();
 
-    // Show owner if any
-    // TODO: Get owner from player data
-    // QAction *ownerAction = menu.addAction("Owner: None");
-    // ownerAction->setEnabled(false);
+    // Find all movable pieces in this territory for the CURRENT player only
+    bool foundPieces = false;
 
-    // Add neighbors section
-    QAction *neighborsLabel = menu.addAction("Neighbors:");
-    neighborsLabel->setEnabled(false);
+    // Map to track which actions correspond to which territories (for hover highlighting)
+    QMap<QAction*, QString> actionToTerritory;
 
-    QMap<QAction*, int> actionToNeighbor;
-
-    for (const QString &neighborName : territory.neighbors) {
-        Territory neighbor = m_graph->getTerritory(neighborName);
-        if (neighbor.id > 0) {
-            QString label = QString("  %1").arg(neighborName);
-            if (neighbor.value > 0) {
-                label += QString(" (%1)").arg(neighbor.value);
+    // Only show movement options for the current player's pieces
+    if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+        Player *currentPlayer = m_players[m_currentPlayerIndex];
+        if (currentPlayer) {
+            // Check for Caesars
+            for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+                if (caesar->getTerritoryName() == territoryName && caesar->getMovesRemaining() > 0) {
+                    QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1)").arg(currentPlayer->getId()));
+                    addMovementOptionsToMenu(caesarMenu, caesar, territoryName, actionToTerritory);
+                    foundPieces = true;
+                }
             }
-            QAction *action = menu.addAction(label);
-            actionToNeighbor[action] = neighbor.id;
+
+            // Check for Generals
+            for (GeneralPiece *general : currentPlayer->getGenerals()) {
+                if (general->getTerritoryName() == territoryName && general->getMovesRemaining() > 0) {
+                    QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2)").arg(general->getNumber()).arg(currentPlayer->getId()));
+                    addMovementOptionsToMenu(generalMenu, general, territoryName, actionToTerritory);
+                    foundPieces = true;
+                }
+            }
+
+            // Check for Galleys
+            for (GalleyPiece *galley : currentPlayer->getGalleys()) {
+                if (galley->getTerritoryName() == territoryName && galley->getMovesRemaining() > 0) {
+                    QMenu *galleyMenu = menu.addMenu(QIcon(":/images/galleyIcon.png"), QString("Galley (Player %1)").arg(currentPlayer->getId()));
+                    addMovementOptionsToMenu(galleyMenu, galley, territoryName, actionToTerritory);
+                    foundPieces = true;
+                }
+            }
         }
     }
 
-    if (territory.neighbors.isEmpty()) {
-        QAction *noNeighbors = menu.addAction("  (none)");
-        noNeighbors->setEnabled(false);
+    if (!foundPieces) {
+        QAction *noPieces = menu.addAction("No movable pieces here");
+        noPieces->setEnabled(false);
     }
 
-    // Hover timer to highlight neighbors
+    // Hover timer to highlight territories as user hovers over menu items
     QTimer hoverTimer;
     hoverTimer.setInterval(50);
-    connect(&hoverTimer, &QTimer::timeout, this, [this, &menu, &actionToNeighbor, originalTerritory]() {
-        QAction *activeAction = menu.activeAction();
-        if (activeAction && actionToNeighbor.contains(activeAction)) {
-            int neighborId = actionToNeighbor[activeAction];
-            if (m_hoveredTerritoryId != neighborId) {
-                m_hoveredTerritoryId = neighborId;
-                m_clickPlayer->setPosition(0);
-                m_clickPlayer->play();
+    connect(&hoverTimer, &QTimer::timeout, this, [this, &actionToTerritory, originalTerritory]() {
+        // Find the currently active menu item (could be in main menu or submenu)
+        QAction *activeAction = nullptr;
+        QWidget *activeWidget = QApplication::activePopupWidget();
+        if (activeWidget) {
+            QMenu *activeMenu = qobject_cast<QMenu*>(activeWidget);
+            if (activeMenu) {
+                activeAction = activeMenu->activeAction();
+            }
+        }
+
+        if (activeAction && actionToTerritory.contains(activeAction)) {
+            QString hoveredTerritoryName = actionToTerritory[activeAction];
+            Territory hoveredTerritory = m_graph->getTerritory(hoveredTerritoryName);
+            if (hoveredTerritory.id > 0 && m_hoveredTerritoryId != hoveredTerritory.id) {
+                m_hoveredTerritoryId = hoveredTerritory.id;
+                // Play click sound for menu hover using the shared method
+                playMenuClickSound(activeAction);
                 update();
             }
         } else {
             if (m_hoveredTerritoryId != originalTerritory) {
                 m_hoveredTerritoryId = originalTerritory;
-                m_clickPlayer->setPosition(0);
-                m_clickPlayer->play();
                 update();
             }
         }
     });
     hoverTimer.start();
+
+    // Reset last hovered action when menu opens
+    m_lastHoveredAction = nullptr;
+
+    // Connect hover sound to all menus (main and submenus)
+    connect(&menu, &QMenu::hovered, this, &GameMapWidget::playMenuClickSound);
+    for (QMenu *submenu : menu.findChildren<QMenu*>()) {
+        connect(submenu, &QMenu::hovered, this, &GameMapWidget::playMenuClickSound);
+    }
 
     menu.exec(mapToGlobal(pos));
 
@@ -670,6 +788,14 @@ void GameMapWidget::resetView()
     update();
 }
 
+void GameMapWidget::setHoveredTerritoryById(int territoryId)
+{
+    if (m_hoveredTerritoryId != territoryId) {
+        m_hoveredTerritoryId = territoryId;
+        update();
+    }
+}
+
 void GameMapWidget::zoomToTerritory(const QString &name)
 {
     Territory territory = m_graph->getTerritory(name);
@@ -718,8 +844,355 @@ void GameMapWidget::loadGame()
 
 void GameMapWidget::showAbout()
 {
-    QMessageBox::about(this, "About Conquest of the Empire",
-        "Conquest of the Empire\n\n"
-        "A strategy board game set in ancient Rome.\n\n"
-        "OpenGL Map Version");
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("About Conquest of the Empire");
+    msgBox.setTextFormat(Qt::RichText);
+    msgBox.setText("<h3>Conquest of the Empire</h3>"
+                   "<p>A strategic board game of territorial conquest.</p>"
+                   "<p><b>Game Features:</b></p>"
+                   "<ul>"
+                   "<li>6 Player support (A-F)</li>"
+                   "<li>Multiple unit types: Caesar, Generals, Infantry, Cavalry, Catapults, Galleys</li>"
+                   "<li>Territory control and taxation</li>"
+                   "<li>Cities, roads, and fortifications</li>"
+                   "<li>Combat system with general capture and ransom</li>"
+                   "<li>Economic management</li>"
+                   "</ul>"
+                   "<p><b>How to Play:</b></p>"
+                   "<ul>"
+                   "<li>Right-click territories to move pieces and manage your empire</li>"
+                   "<li>Right-click pieces in Player Info to see movement options</li>"
+                   "<li>Collect taxes from owned territories at the end of your turn</li>"
+                   "<li>Purchase new units and buildings with your wealth</li>"
+                   "<li>Capture enemy generals and negotiate ransoms</li>"
+                   "</ul>"
+                   "<p>Developed with Qt C++ and OpenGL</p>");
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.exec();
+}
+
+// ============================================================================
+// MapWidget Compatibility Methods (Grid-based API)
+// ============================================================================
+// These methods provide compatibility with code that expects grid-based
+// MapWidget API. Since GameMapWidget uses a graph-based system with territory
+// names, these methods return stub/default values.
+// ============================================================================
+
+QString GameMapWidget::getTerritoryNameAt(int row, int col) const
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // OpenGL map doesn't use grid positions - return empty string
+    // Callers should use territory names directly
+    return QString();
+}
+
+int GameMapWidget::getTerritoryValueAt(int row, int col) const
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // OpenGL map doesn't use grid positions
+    return 0;
+}
+
+QChar GameMapWidget::getTerritoryOwnerAt(int row, int col) const
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // OpenGL map doesn't use grid positions
+    return '\0';  // No owner
+}
+
+bool GameMapWidget::isSeaTerritory(int row, int col) const
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // OpenGL map doesn't use grid positions
+    return false;
+}
+
+QList<Position> GameMapWidget::getAdjacentSeaTerritories(const Position &pos) const
+{
+    Q_UNUSED(pos);
+    // OpenGL map doesn't use grid positions
+    return QList<Position>();
+}
+
+bool GameMapWidget::hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    Q_UNUSED(currentPlayer);
+    // OpenGL map doesn't use grid positions
+    return false;
+}
+
+Position GameMapWidget::territoryNameToPosition(const QString &territoryName) const
+{
+    Q_UNUSED(territoryName);
+    // OpenGL map doesn't use grid positions
+    // Return invalid position
+    return Position{-1, -1};
+}
+
+void GameMapWidget::removeCityAt(int row, int col)
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // Cities are managed by Player objects in OpenGL version
+    // This is a no-op for compatibility
+}
+
+void GameMapWidget::removeFortificationAt(int row, int col)
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+    // Fortifications are managed by Player objects in OpenGL version
+    // This is a no-op for compatibility
+}
+
+void GameMapWidget::updateRoads()
+{
+    // Roads are managed by Player objects in OpenGL version
+    // This is a no-op for compatibility
+    // If needed, trigger a repaint to show updated roads
+    update();
+}
+
+QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
+{
+    if (territoryName.isEmpty()) {
+        return "";
+    }
+
+    QStringList lines;
+
+    // Territory name and value
+    int territoryValue = m_graph->getValue(territoryName);
+    lines << QString("<b>%1</b>").arg(territoryName);
+    lines << QString("Value: %1").arg(territoryValue);
+
+    // Check if it's a sea territory
+    if (m_graph->isSeaTerritory(territoryName)) {
+        lines << "<i>Sea Territory</i>";
+    }
+
+    // Find owner and pieces in this territory
+    QChar owner = '\0';
+    QStringList buildings;
+    QStringList pieces;
+
+    for (Player *player : m_players) {
+        if (!player) continue;
+
+        // Check if player owns this territory
+        if (player->getOwnedTerritories().contains(territoryName)) {
+            owner = player->getId();
+        }
+
+        // Check for buildings (cities/fortifications)
+        for (City *city : player->getCities()) {
+            if (city->getTerritoryName() == territoryName) {
+                if (city->isFortified()) {
+                    buildings << QString("Fortified City (Player %1)").arg(player->getId());
+                } else {
+                    buildings << QString("City (Player %1)").arg(player->getId());
+                }
+            }
+        }
+
+        // Check for pieces
+        int infantryCount = 0;
+        int cavalryCount = 0;
+        int catapultCount = 0;
+        int galleyCount = 0;
+        bool hasCaesar = false;
+        QStringList generals;
+
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            if (caesar->getTerritoryName() == territoryName) {
+                hasCaesar = true;
+            }
+        }
+
+        for (GeneralPiece *general : player->getGenerals()) {
+            if (general->getTerritoryName() == territoryName) {
+                generals << QString("General %1").arg(general->getNumber());
+            }
+        }
+
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            if (infantry->getTerritoryName() == territoryName) {
+                infantryCount++;
+            }
+        }
+
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            if (cavalry->getTerritoryName() == territoryName) {
+                cavalryCount++;
+            }
+        }
+
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            if (catapult->getTerritoryName() == territoryName) {
+                catapultCount++;
+            }
+        }
+
+        for (GalleyPiece *galley : player->getGalleys()) {
+            if (galley->getTerritoryName() == territoryName) {
+                galleyCount++;
+            }
+        }
+
+        // Build pieces string for this player
+        if (hasCaesar || !generals.isEmpty() || infantryCount > 0 || cavalryCount > 0 || catapultCount > 0 || galleyCount > 0) {
+            QStringList playerPieces;
+            if (hasCaesar) playerPieces << "Caesar";
+            if (!generals.isEmpty()) playerPieces << generals.join(", ");
+            if (infantryCount > 0) playerPieces << QString("%1 Infantry").arg(infantryCount);
+            if (cavalryCount > 0) playerPieces << QString("%1 Cavalry").arg(cavalryCount);
+            if (catapultCount > 0) playerPieces << QString("%1 Catapult").arg(catapultCount);
+            if (galleyCount > 0) playerPieces << QString("%1 Galley").arg(galleyCount);
+
+            pieces << QString("Player %1: %2").arg(player->getId()).arg(playerPieces.join(", "));
+        }
+    }
+
+    // Add owner info
+    if (owner != '\0') {
+        lines << QString("<font color='blue'>Owner: Player %1</font>").arg(owner);
+    } else {
+        lines << "<font color='gray'>Unowned</font>";
+    }
+
+    // Add buildings
+    if (!buildings.isEmpty()) {
+        lines << "";
+        lines << "<b>Buildings:</b>";
+        for (const QString &building : buildings) {
+            lines << QString("  • %1").arg(building);
+        }
+    }
+
+    // Add pieces
+    if (!pieces.isEmpty()) {
+        lines << "";
+        lines << "<b>Pieces:</b>";
+        for (const QString &piece : pieces) {
+            lines << QString("  • %1").arg(piece);
+        }
+    }
+
+    return lines.join("<br>");
+}
+
+void GameMapWidget::addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, const QString &fromTerritory, QMap<QAction*, QString> &actionToTerritory)
+{
+    if (!menu || !piece || !m_graph || !m_playerInfoWidget) return;
+
+    // Get neighboring territories from the graph
+    Territory territory = m_graph->getTerritory(fromTerritory);
+
+    if (territory.neighbors.isEmpty()) {
+        QAction *noMoves = menu->addAction("No adjacent territories");
+        noMoves->setEnabled(false);
+        return;
+    }
+
+    // Check if this piece is a galley (galleys can move to sea, generals/caesars cannot)
+    GalleyPiece *galley = dynamic_cast<GalleyPiece*>(piece);
+    bool isGalley = (galley != nullptr);
+
+    // Add each neighbor as a movement option
+    for (const QString &neighborName : territory.neighbors) {
+        Territory neighbor = m_graph->getTerritory(neighborName);
+
+        bool isSea = (neighbor.value == 0);
+
+        // Find who owns this territory
+        QChar owner = '\0';
+        for (Player *player : m_players) {
+            if (player && player->ownsTerritory(neighborName)) {
+                owner = player->getId();
+                break;
+            }
+        }
+
+        // For sea territories and non-galley pieces, check if there's a galley we can board
+        bool hasGalley = false;
+        if (isSea && !isGalley && m_players.size() > m_currentPlayerIndex) {
+            Player *currentPlayer = m_players[m_currentPlayerIndex];
+            if (currentPlayer && currentPlayer->getId() == piece->getPlayer()) {
+                // Check if this player has a galley in this sea territory
+                for (GalleyPiece *galley : currentPlayer->getGalleys()) {
+                    if (galley->getTerritoryName() == neighborName) {
+                        hasGalley = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Build display text with territory value
+        QString displayText = neighborName;
+        if (neighbor.value > 0) {
+            displayText += QString(" (%1)").arg(neighbor.value);
+        } else {
+            displayText += " (Sea)";
+        }
+
+        // Determine icon based on owner or galley availability
+        QIcon itemIcon;
+        if (isSea && hasGalley) {
+            // Show galley icon for sea territories with available galley
+            itemIcon = QIcon(":/images/galleyIcon.png");
+        } else if (owner != '\0' && !isSea) {
+            // Show flag icon for owned land territories
+            QString flagPath;
+            switch (owner.toLatin1()) {
+                case 'A': flagPath = ":/images/redFlag.png"; break;
+                case 'B': flagPath = ":/images/greenFlag.png"; break;
+                case 'C': flagPath = ":/images/blueFlag.png"; break;
+                case 'D': flagPath = ":/images/yellowFlag.png"; break;
+                case 'E': flagPath = ":/images/blackFlag.png"; break;
+                case 'F': flagPath = ":/images/orangeFlag.png"; break;
+            }
+            if (!flagPath.isEmpty()) {
+                itemIcon = QIcon(flagPath);
+            }
+        }
+
+        QAction *moveAction = menu->addAction(itemIcon, displayText);
+
+        // Disable sea territories unless this is a galley or there's a galley to board
+        if (isSea) {
+            moveAction->setEnabled(isGalley || hasGalley);
+        }
+
+        // Track this action for hover highlighting
+        actionToTerritory[moveAction] = neighborName;
+
+        // Connect the action to trigger movement via PlayerInfoWidget
+        connect(moveAction, &QAction::triggered, [this, piece, neighborName]() {
+            // Delegate to PlayerInfoWidget to handle the movement with legion composition dialog
+            if (m_playerInfoWidget) {
+                m_playerInfoWidget->moveLeaderToTerritory(piece, neighborName);
+            }
+        });
+    }
+}
+
+void GameMapWidget::playMenuClickSound(QAction *action)
+{
+    // Only play if this is a different action than the last one hovered AND enough time has passed
+    if (m_clickSound && action && action != m_lastHoveredAction && m_clickTimer.elapsed() > 50) {
+        m_lastHoveredAction = action;
+        if (m_clickSound->isPlaying()) {
+            m_clickSound->stop();
+        }
+        m_clickSound->play();
+        m_clickTimer.restart();
+    }
 }

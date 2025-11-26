@@ -158,10 +158,10 @@ public:
 
     // Tax collection - called at end of turn to collect taxes from owned territories
     // Returns the amount collected
-    int collectTaxes(class MapWidget *mapWidget);
+    int collectTaxes(MapWidget *mapWidget);
 
     // Calculate income without collecting (for inflation threshold checks)
-    int calculateIncome(class MapWidget *mapWidget) const;
+    int calculateIncome(MapWidget *mapWidget) const;
 
 signals:
     void turnStarted();

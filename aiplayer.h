@@ -7,10 +7,11 @@
 #include <QString>
 #include <functional>
 #include "gamepiece.h"
+#include "common.h"  // For MapWidget type alias
 
 class Player;
 class PlayerInfoWidget;
-class MapWidget;
+// MapWidget forward declaration removed - now in common.h as conditional type alias
 class CombatDialog;
 class PurchaseDialog;
 

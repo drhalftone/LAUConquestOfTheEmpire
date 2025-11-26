@@ -1,5 +1,5 @@
 #include "playerinfowidget.h"
-#include "mapwidget.h"
+// mapwidget.h is included conditionally in playerinfowidget.h
 #include "purchasedialog.h"
 #include "troopselectiondialog.h"
 #include "combatdialog.h"
@@ -54,6 +54,12 @@ PlayerInfoWidget::PlayerInfoWidget(QWidget *parent)
     mainLayout->addWidget(buttonBox, 0);  // No stretch
 
     setLayout(mainLayout);
+
+    // Setup click sound for context menus
+    m_clickSound = new QSoundEffect(this);
+    m_clickSound->setSource(QUrl("qrc:/images/click.wav"));
+    m_clickSound->setVolume(0.3f);  // Faint volume for context menus
+    m_clickTimer.start();  // Start timer for throttling
 
     setWindowTitle("Player Information");
 
@@ -673,22 +679,32 @@ void PlayerInfoWidget::showCaesarContextMenu(CaesarPiece *piece, const QPoint &p
 {
     if (!piece || !m_mapWidget) return;
 
-    // Create menu with this Caesar's movement options
+    // Create main menu
     QMenu menu(this);
+
+    // Create Caesar menu item with submenu for movement
+    QString caesarLabel = QString("Caesar (Player %1) at %2").arg(piece->getPlayer()).arg(piece->getTerritoryName());
+    QMenu *caesarSubmenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), caesarLabel);
 
     // Get all valid moves using the shared method
     QList<MoveOption> moves = getMovesForLeader(piece);
 
-    // Add each destination as a movement option
+    // Track actions to territory names for highlighting
+    QMap<QAction*, QString> actionToTerritory;
+
+    // Add each destination as a movement option in the submenu
     for (const MoveOption &option : moves) {
         // Build display text
-        QString ownership = (option.owner == '\0') ? "[Unclaimed]"
-                          : (option.owner == piece->getPlayer()) ? "[You]"
-                          : QString("[Player %1]").arg(option.owner);
+        QString ownership = "";
+        if (!option.isSea) {
+            ownership = (option.owner == '\0') ? "[Unclaimed]"
+                              : (option.owner == piece->getPlayer()) ? "[You]"
+                              : QString("[Player %1]").arg(option.owner);
+        }
         QString roadIndicator = option.isViaRoad ? " [via road]" : "";
         QString displayText = (option.territoryValue > 0)
             ? QString("%1 (%2) %3%4%5").arg(option.destinationTerritory).arg(option.territoryValue).arg(ownership).arg(option.troopInfo).arg(roadIndicator)
-            : QString("%1 %2%3%4").arg(option.destinationTerritory).arg(ownership).arg(option.troopInfo).arg(roadIndicator);
+            : QString("%1%2%3%4").arg(option.destinationTerritory).arg(ownership).arg(option.troopInfo).arg(roadIndicator);
 
         // Determine icon based on move type
         QIcon moveIcon;
@@ -696,7 +712,7 @@ void PlayerInfoWidget::showCaesarContextMenu(CaesarPiece *piece, const QPoint &p
             moveIcon = QIcon(":/images/combatIcon.png");
         } else if (option.hasCity) {
             moveIcon = QIcon(":/images/newCityIcon.png");
-        } else if (option.owner != '\0') {
+        } else if (option.owner != '\0' && !option.isSea) {
             QString flagPath;
             switch (option.owner.toLatin1()) {
                 case 'A': flagPath = ":/images/redFlag.png"; break;
@@ -711,13 +727,61 @@ void PlayerInfoWidget::showCaesarContextMenu(CaesarPiece *piece, const QPoint &p
             }
         }
 
-        QAction *moveToAction = menu.addAction(moveIcon, displayText);
+        QAction *moveToAction = caesarSubmenu->addAction(moveIcon, displayText);
         moveToAction->setEnabled(!option.isSea && piece->getMovesRemaining() > 0);
+
+        // Track this action for highlighting
+        actionToTerritory[moveToAction] = option.destinationTerritory;
 
         connect(moveToAction, &QAction::triggered, [this, piece, option]() {
             moveLeaderToTerritory(piece, option.destinationTerritory);
         });
     }
+
+    // Get the current territory for highlighting
+    QString currentTerritory = piece->getTerritoryName();
+    Territory currentTerritoryInfo = m_mapWidget->getGraph()->getTerritory(currentTerritory);
+    int currentTerritoryId = currentTerritoryInfo.id;
+
+    // Setup hover highlighting with timer
+    QTimer hoverTimer;
+    hoverTimer.setInterval(50);  // Check every 50ms
+
+    connect(&hoverTimer, &QTimer::timeout, [this, &actionToTerritory, currentTerritoryId, caesarSubmenu]() {
+        QAction *activeAction = nullptr;
+        QWidget *activeWidget = QApplication::activePopupWidget();
+
+        if (activeWidget) {
+            QMenu *activeMenu = qobject_cast<QMenu*>(activeWidget);
+            if (activeMenu) {
+                activeAction = activeMenu->activeAction();
+            }
+        }
+
+        // Check if hovering over the caesar submenu action itself
+        if (activeAction == caesarSubmenu->menuAction()) {
+            // Highlight current territory where Caesar is located
+            m_mapWidget->setHoveredTerritoryById(currentTerritoryId);
+        } else if (activeAction && actionToTerritory.contains(activeAction)) {
+            // Highlight destination territory
+            QString hoveredTerritoryName = actionToTerritory[activeAction];
+            if (m_mapWidget->getGraph()) {
+                Territory hoveredTerritory = m_mapWidget->getGraph()->getTerritory(hoveredTerritoryName);
+                if (hoveredTerritory.id > 0) {
+                    m_mapWidget->setHoveredTerritoryById(hoveredTerritory.id);
+                }
+            }
+        }
+    });
+
+    hoverTimer.start();
+
+    // Reset last hovered action when menu opens
+    m_lastHoveredAction = nullptr;
+
+    // Connect hover sound to menu
+    connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
+    connect(caesarSubmenu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
 
     menu.exec(pos);
 }
@@ -727,22 +791,32 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
 {
     if (!piece || !m_mapWidget) return;
 
-    // Create menu with this General's movement options
+    // Create main menu
     QMenu menu(this);
+
+    // Create General menu item with submenu for movement
+    QString generalLabel = QString("General %1 (Player %2) at %3").arg(piece->getNumber()).arg(piece->getPlayer()).arg(piece->getTerritoryName());
+    QMenu *generalSubmenu = menu.addMenu(QIcon(":/images/generalIcon.png"), generalLabel);
 
     // Get all valid moves using the shared method
     QList<MoveOption> moves = getMovesForLeader(piece);
 
-    // Add each destination as a movement option
+    // Track actions to territory names for highlighting
+    QMap<QAction*, QString> actionToTerritory;
+
+    // Add each destination as a movement option in the submenu
     for (const MoveOption &option : moves) {
         // Build display text
-        QString ownership = (option.owner == '\0') ? "[Unclaimed]"
-                          : (option.owner == piece->getPlayer()) ? "[You]"
-                          : QString("[Player %1]").arg(option.owner);
+        QString ownership = "";
+        if (!option.isSea) {
+            ownership = (option.owner == '\0') ? "[Unclaimed]"
+                              : (option.owner == piece->getPlayer()) ? "[You]"
+                              : QString("[Player %1]").arg(option.owner);
+        }
         QString roadIndicator = option.isViaRoad ? " [via road]" : "";
         QString displayText = (option.territoryValue > 0)
             ? QString("%1 (%2) %3%4%5").arg(option.destinationTerritory).arg(option.territoryValue).arg(ownership).arg(option.troopInfo).arg(roadIndicator)
-            : QString("%1 %2%3%4").arg(option.destinationTerritory).arg(ownership).arg(option.troopInfo).arg(roadIndicator);
+            : QString("%1%2%3%4").arg(option.destinationTerritory).arg(ownership).arg(option.troopInfo).arg(roadIndicator);
 
         // Determine icon based on move type
         QIcon moveIcon;
@@ -750,7 +824,7 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
             moveIcon = QIcon(":/images/combatIcon.png");
         } else if (option.hasCity) {
             moveIcon = QIcon(":/images/newCityIcon.png");
-        } else if (option.owner != '\0') {
+        } else if (option.owner != '\0' && !option.isSea) {
             QString flagPath;
             switch (option.owner.toLatin1()) {
                 case 'A': flagPath = ":/images/redFlag.png"; break;
@@ -765,13 +839,61 @@ void PlayerInfoWidget::showGeneralContextMenu(GeneralPiece *piece, const QPoint 
             }
         }
 
-        QAction *moveToAction = menu.addAction(moveIcon, displayText);
+        QAction *moveToAction = generalSubmenu->addAction(moveIcon, displayText);
         moveToAction->setEnabled(!option.isSea && piece->getMovesRemaining() > 0);
+
+        // Track this action for highlighting
+        actionToTerritory[moveToAction] = option.destinationTerritory;
 
         connect(moveToAction, &QAction::triggered, [this, piece, option]() {
             moveLeaderToTerritory(piece, option.destinationTerritory);
         });
     }
+
+    // Get the current territory for highlighting
+    QString currentTerritory = piece->getTerritoryName();
+    Territory currentTerritoryInfo = m_mapWidget->getGraph()->getTerritory(currentTerritory);
+    int currentTerritoryId = currentTerritoryInfo.id;
+
+    // Setup hover highlighting with timer
+    QTimer hoverTimer;
+    hoverTimer.setInterval(50);  // Check every 50ms
+
+    connect(&hoverTimer, &QTimer::timeout, [this, &actionToTerritory, currentTerritoryId, generalSubmenu]() {
+        QAction *activeAction = nullptr;
+        QWidget *activeWidget = QApplication::activePopupWidget();
+
+        if (activeWidget) {
+            QMenu *activeMenu = qobject_cast<QMenu*>(activeWidget);
+            if (activeMenu) {
+                activeAction = activeMenu->activeAction();
+            }
+        }
+
+        // Check if hovering over the general submenu action itself
+        if (activeAction == generalSubmenu->menuAction()) {
+            // Highlight current territory where General is located
+            m_mapWidget->setHoveredTerritoryById(currentTerritoryId);
+        } else if (activeAction && actionToTerritory.contains(activeAction)) {
+            // Highlight destination territory
+            QString hoveredTerritoryName = actionToTerritory[activeAction];
+            if (m_mapWidget->getGraph()) {
+                Territory hoveredTerritory = m_mapWidget->getGraph()->getTerritory(hoveredTerritoryName);
+                if (hoveredTerritory.id > 0) {
+                    m_mapWidget->setHoveredTerritoryById(hoveredTerritory.id);
+                }
+            }
+        }
+    });
+
+    hoverTimer.start();
+
+    // Reset last hovered action when menu opens
+    m_lastHoveredAction = nullptr;
+
+    // Connect hover sound to menu
+    connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
+    connect(generalSubmenu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
 
     menu.exec(pos);
 }
@@ -809,6 +931,12 @@ void PlayerInfoWidget::showTerritoryContextMenu(Player *player, const QString &t
             m_mapWidget->update();
         }
     });
+
+    // Reset last hovered action when menu opens
+    m_lastHoveredAction = nullptr;
+
+    // Connect hover sound to menu
+    connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
 
     menu.exec(pos);
 }
@@ -866,6 +994,10 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
         });
         QAction *endTurnAction = menu.addAction("End Turn");
         connect(endTurnAction, &QAction::triggered, this, &PlayerInfoWidget::endTurn, Qt::QueuedConnection);
+        // Reset last hovered action when menu opens
+        m_lastHoveredAction = nullptr;
+        // Connect hover sound to menu
+        connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
         menu.exec(globalPos);
         return;
     }
@@ -1176,6 +1308,12 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
     // Add "End Turn" action (queued connection allows menu to close first)
     QAction *endTurnAction = menu.addAction("End Turn");
     connect(endTurnAction, &QAction::triggered, this, &PlayerInfoWidget::endTurn, Qt::QueuedConnection);
+
+    // Reset last hovered action when menu opens
+    m_lastHoveredAction = nullptr;
+
+    // Connect hover sound to menu
+    connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
 
     // Always show the menu
     menu.exec(globalPos);
@@ -4410,6 +4548,10 @@ void PlayerInfoWidget::showCapturedGeneralContextMenu(GeneralPiece *general, con
     }
 
     if (!menu.isEmpty()) {
+        // Reset last hovered action when menu opens
+        m_lastHoveredAction = nullptr;
+        // Connect hover sound to menu
+        connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
         menu.exec(pos);
     }
 }
@@ -4567,12 +4709,29 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
         MoveOption option;
         option.destinationTerritory = destinationName;
 
-        Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
-        option.territoryValue = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
-        option.isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
-        option.owner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+        // Get territory info from graph
+        if (m_mapWidget->getGraph()) {
+            Territory destTerritory = m_mapWidget->getGraph()->getTerritory(destinationName);
+            option.territoryValue = destTerritory.value;
+            option.isSea = (destTerritory.value == 0);
+        } else {
+            Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
+            option.territoryValue = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
+            option.isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
+        }
+
+        // Find who owns this territory
+        option.owner = '\0';
+        for (Player *p : m_players) {
+            if (p && p->ownsTerritory(destinationName)) {
+                option.owner = p->getId();
+                break;
+            }
+        }
         option.isOwnTerritory = (option.owner == leader->getPlayer());
         option.isViaRoad = roadConnectedTerritories.contains(destinationName);
+
+        Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
         option.troopInfo = getTroopInfoAt(destPos.row, destPos.col);
 
         // Check for combat (enemy pieces or enemy-owned territory)
@@ -4777,4 +4936,17 @@ QList<PlayerInfoWidget::DisplayedLeaderInfo> PlayerInfoWidget::getDisplayedLeade
     }
 
     return leaders;
+}
+
+void PlayerInfoWidget::playMenuClickSound(QAction *action)
+{
+    // Only play if this is a different action than the last one hovered AND enough time has passed
+    if (m_clickSound && action && action != m_lastHoveredAction && m_clickTimer.elapsed() > 50) {
+        m_lastHoveredAction = action;
+        if (m_clickSound->isPlaying()) {
+            m_clickSound->stop();
+        }
+        m_clickSound->play();
+        m_clickTimer.restart();
+    }
 }

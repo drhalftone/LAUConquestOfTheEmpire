@@ -26,5 +26,6 @@
         <file>images/Map.jpg</file>
         <file>images/territories_index.png</file>
         <file>images/territories.csv</file>
+        <file>images/click.wav</file>
     </qresource>
 </RCC>

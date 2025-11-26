@@ -1,7 +1,11 @@
 #include "aiplayer.h"
 #include "player.h"
 #include "playerinfowidget.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include "gamepiece.h"
 #include <QDebug>
 #include <QTime>
