@@ -179,15 +179,22 @@ private:
     QImage m_ownershipImage;  // CPU-side data for updating
     int m_borderRadius = 8;   // Border thickness in pixels
 
-    // City icons
+    // City and building icons
     QOpenGLTexture *m_cityIconTexture = nullptr;
     QOpenGLTexture *m_fortifiedCityIconTexture = nullptr;
-    QOpenGLTexture *m_galleyIconTexture = nullptr;
-    QOpenGLTexture *m_caesarIconTexture = nullptr;
-    QOpenGLTexture *m_generalIconTexture = nullptr;
-    QOpenGLTexture *m_infantryIconTexture = nullptr;
-    QOpenGLTexture *m_cavalryIconTexture = nullptr;
-    QOpenGLTexture *m_catapultIconTexture = nullptr;
+
+    // Constants for icon arrays (must be defined before arrays that use them)
+    static constexpr int NUM_UNIT_TYPES = 5;
+    static constexpr int NUM_PLAYER_COLORS = 6;
+
+    // Galley icons indexed by player color
+    QOpenGLTexture *m_galleyIconTextures[NUM_PLAYER_COLORS] = {nullptr};
+
+    // Unit icons indexed by [unitType][playerIndex]
+    // Unit types: 0=Caesar, 1=General, 2=Infantry, 3=Cavalry, 4=Catapult
+    // Player indices: 0=A(red), 1=B(blue), 2=C(green), 3=D(yellow), 4=E(orange), 5=F(black)
+    QOpenGLTexture *m_unitIconTextures[NUM_UNIT_TYPES][NUM_PLAYER_COLORS] = {{nullptr}};
+
     QOpenGLShaderProgram *m_iconShader = nullptr;
     QOpenGLBuffer m_iconVbo;
     QOpenGLVertexArrayObject m_iconVao;

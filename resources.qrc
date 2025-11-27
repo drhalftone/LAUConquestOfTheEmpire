@@ -31,6 +31,42 @@
         <file>images/retreatIcon.png</file>
         <file>images/captureIcon.png</file>
         <file>images/walledCityIcon.png</file>
+        <file>images/colored/infantryIcon_red.png</file>
+        <file>images/colored/infantryIcon_blue.png</file>
+        <file>images/colored/infantryIcon_green.png</file>
+        <file>images/colored/infantryIcon_yellow.png</file>
+        <file>images/colored/infantryIcon_orange.png</file>
+        <file>images/colored/infantryIcon_black.png</file>
+        <file>images/colored/cavalryIcon_red.png</file>
+        <file>images/colored/cavalryIcon_blue.png</file>
+        <file>images/colored/cavalryIcon_green.png</file>
+        <file>images/colored/cavalryIcon_yellow.png</file>
+        <file>images/colored/cavalryIcon_orange.png</file>
+        <file>images/colored/cavalryIcon_black.png</file>
+        <file>images/colored/catapultIcon_red.png</file>
+        <file>images/colored/catapultIcon_blue.png</file>
+        <file>images/colored/catapultIcon_green.png</file>
+        <file>images/colored/catapultIcon_yellow.png</file>
+        <file>images/colored/catapultIcon_orange.png</file>
+        <file>images/colored/catapultIcon_black.png</file>
+        <file>images/colored/generalIcon_red.png</file>
+        <file>images/colored/generalIcon_blue.png</file>
+        <file>images/colored/generalIcon_green.png</file>
+        <file>images/colored/generalIcon_yellow.png</file>
+        <file>images/colored/generalIcon_orange.png</file>
+        <file>images/colored/generalIcon_black.png</file>
+        <file>images/colored/ceasarIcon_red.png</file>
+        <file>images/colored/ceasarIcon_blue.png</file>
+        <file>images/colored/ceasarIcon_green.png</file>
+        <file>images/colored/ceasarIcon_yellow.png</file>
+        <file>images/colored/ceasarIcon_orange.png</file>
+        <file>images/colored/ceasarIcon_black.png</file>
+        <file>images/colored/galleyIcon_red.png</file>
+        <file>images/colored/galleyIcon_blue.png</file>
+        <file>images/colored/galleyIcon_green.png</file>
+        <file>images/colored/galleyIcon_yellow.png</file>
+        <file>images/colored/galleyIcon_orange.png</file>
+        <file>images/colored/galleyIcon_black.png</file>
         <file>images/Map.jpg</file>
         <file>images/territories_index.png</file>
         <file>images/territories.csv</file>

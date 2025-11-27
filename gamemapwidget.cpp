@@ -200,12 +200,14 @@ GameMapWidget::~GameMapWidget()
     delete m_ownershipTexture;
     delete m_cityIconTexture;
     delete m_fortifiedCityIconTexture;
-    delete m_galleyIconTexture;
-    delete m_caesarIconTexture;
-    delete m_generalIconTexture;
-    delete m_infantryIconTexture;
-    delete m_cavalryIconTexture;
-    delete m_catapultIconTexture;
+    for (int p = 0; p < NUM_PLAYER_COLORS; ++p) {
+        delete m_galleyIconTextures[p];
+    }
+    for (int u = 0; u < NUM_UNIT_TYPES; ++u) {
+        for (int p = 0; p < NUM_PLAYER_COLORS; ++p) {
+            delete m_unitIconTextures[u][p];
+        }
+    }
     delete m_fbo;
     m_vbo.destroy();
     m_vao.destroy();
@@ -560,77 +562,43 @@ void GameMapWidget::createIconResources()
         qWarning() << "Failed to load fortified city icon texture";
     }
 
-    // Load galley icon texture
-    QImage galleyImage(":/images/galleyIcon.png");
-    if (!galleyImage.isNull()) {
-        m_galleyIconTexture = new QOpenGLTexture(galleyImage.mirrored());
-        m_galleyIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_galleyIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_galleyIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "Galley icon texture loaded:" << galleyImage.size();
-    } else {
-        qWarning() << "Failed to load galley icon texture";
+    // Load player-colored galley icon textures
+    const char* galleyColorNames[NUM_PLAYER_COLORS] = {"red", "blue", "green", "yellow", "orange", "black"};
+    for (int p = 0; p < NUM_PLAYER_COLORS; ++p) {
+        QString path = QString(":/images/colored/galleyIcon_%1.png").arg(galleyColorNames[p]);
+        QImage galleyImage(path);
+        if (!galleyImage.isNull()) {
+            m_galleyIconTextures[p] = new QOpenGLTexture(galleyImage.mirrored());
+            m_galleyIconTextures[p]->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+            m_galleyIconTextures[p]->setMagnificationFilter(QOpenGLTexture::Linear);
+            m_galleyIconTextures[p]->setWrapMode(QOpenGLTexture::ClampToEdge);
+        } else {
+            qWarning() << "Failed to load galley icon texture:" << path;
+        }
     }
+    qDebug() << "Galley icon textures loaded";
 
-    // Load caesar icon texture
-    QImage caesarImage(":/images/ceasarIcon.png");
-    if (!caesarImage.isNull()) {
-        m_caesarIconTexture = new QOpenGLTexture(caesarImage.mirrored());
-        m_caesarIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_caesarIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_caesarIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "Caesar icon texture loaded:" << caesarImage.size();
-    } else {
-        qWarning() << "Failed to load caesar icon texture";
-    }
+    // Load player-colored unit icon textures
+    // Unit types: 0=Caesar, 1=General, 2=Infantry, 3=Cavalry, 4=Catapult
+    // Player colors: 0=red, 1=blue, 2=green, 3=yellow, 4=orange, 5=black
+    const char* unitNames[NUM_UNIT_TYPES] = {"ceasar", "general", "infantry", "cavalry", "catapult"};
+    const char* colorNames[NUM_PLAYER_COLORS] = {"red", "blue", "green", "yellow", "orange", "black"};
 
-    // Load general icon texture
-    QImage generalImage(":/images/generalIcon.png");
-    if (!generalImage.isNull()) {
-        m_generalIconTexture = new QOpenGLTexture(generalImage.mirrored());
-        m_generalIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_generalIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_generalIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "General icon texture loaded:" << generalImage.size();
-    } else {
-        qWarning() << "Failed to load general icon texture";
+    for (int u = 0; u < NUM_UNIT_TYPES; ++u) {
+        for (int p = 0; p < NUM_PLAYER_COLORS; ++p) {
+            QString path = QString(":/images/colored/%1Icon_%2.png").arg(unitNames[u]).arg(colorNames[p]);
+            QImage image(path);
+            if (!image.isNull()) {
+                m_unitIconTextures[u][p] = new QOpenGLTexture(image.mirrored());
+                m_unitIconTextures[u][p]->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+                m_unitIconTextures[u][p]->setMagnificationFilter(QOpenGLTexture::Linear);
+                m_unitIconTextures[u][p]->setWrapMode(QOpenGLTexture::ClampToEdge);
+            } else {
+                qWarning() << "Failed to load unit icon texture:" << path;
+            }
+        }
     }
-
-    // Load infantry icon texture
-    QImage infantryImage(":/images/infantryIcon.png");
-    if (!infantryImage.isNull()) {
-        m_infantryIconTexture = new QOpenGLTexture(infantryImage.mirrored());
-        m_infantryIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_infantryIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_infantryIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "Infantry icon texture loaded:" << infantryImage.size();
-    } else {
-        qWarning() << "Failed to load infantry icon texture";
-    }
-
-    // Load cavalry icon texture
-    QImage cavalryImage(":/images/cavalryIcon.png");
-    if (!cavalryImage.isNull()) {
-        m_cavalryIconTexture = new QOpenGLTexture(cavalryImage.mirrored());
-        m_cavalryIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_cavalryIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_cavalryIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "Cavalry icon texture loaded:" << cavalryImage.size();
-    } else {
-        qWarning() << "Failed to load cavalry icon texture";
-    }
-
-    // Load catapult icon texture
-    QImage catapultImage(":/images/catapultIcon.png");
-    if (!catapultImage.isNull()) {
-        m_catapultIconTexture = new QOpenGLTexture(catapultImage.mirrored());
-        m_catapultIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
-        m_catapultIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-        m_catapultIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
-        qDebug() << "Catapult icon texture loaded:" << catapultImage.size();
-    } else {
-        qWarning() << "Failed to load catapult icon texture";
-    }
+    qDebug() << "Unit icon textures loaded";
 
     // Create VAO and VBO for icon rendering (dynamic, will be updated each frame)
     m_iconVao.create();
@@ -750,16 +718,32 @@ void GameMapWidget::renderCityIcons()
     }
 
     // === Render Galleys ===
-    if (m_galleyIconTexture) {
+    if (m_galleyIconTextures[0]) {
+        // Helper to convert player ID to color index
+        auto playerToColorIndex = [](QChar playerId) -> int {
+            // Must match Player::getColorForPlayer() mapping
+            switch (playerId.toLatin1()) {
+                case 'A': return 0;  // red
+                case 'B': return 2;  // green
+                case 'C': return 1;  // blue
+                case 'D': return 3;  // yellow
+                case 'E': return 5;  // black
+                case 'F': return 4;  // orange
+                default:  return 0;
+            }
+        };
+
         // First pass: compute base position for each galley
         struct GalleyRenderInfo {
             GalleyPiece *galley;
             QPointF basePos;
             float scale;
+            int playerIndex;  // For texture selection
         };
         QList<GalleyRenderInfo> galleyInfos;
 
         for (Player *player : m_players) {
+            int playerIdx = playerToColorIndex(player->getId());
             for (GalleyPiece *galley : player->getGalleys()) {
                 QString territoryName = galley->getTerritoryName();
                 Territory territory = m_graph->getTerritory(territoryName);
@@ -778,7 +762,7 @@ void GameMapWidget::renderCityIcons()
                 float areaRatio = static_cast<float>(territory.area) / referenceArea;
                 float scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
 
-                galleyInfos.append({galley, basePos, scale});
+                galleyInfos.append({galley, basePos, scale, playerIdx});
             }
         }
 
@@ -841,12 +825,13 @@ void GameMapWidget::renderCityIcons()
                                       reinterpret_cast<void*>(2 * sizeof(float)));
 
                 glActiveTexture(GL_TEXTURE0);
-                m_galleyIconTexture->bind();
+                int texIdx = qBound(0, info.playerIndex, NUM_PLAYER_COLORS - 1);
+                m_galleyIconTextures[texIdx]->bind();
                 m_iconShader->setUniformValue("iconTexture", 0);
 
                 glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
-                m_galleyIconTexture->release();
+                m_galleyIconTextures[texIdx]->release();
                 m_iconVbo.release();
                 m_iconVao.release();
             }
@@ -854,23 +839,40 @@ void GameMapWidget::renderCityIcons()
     }
 
     // === Render Units (Caesars, Generals, Infantry, Cavalry, Catapults) with Poisson disc distribution ===
-    if (m_caesarIconTexture && m_generalIconTexture && m_infantryIconTexture && m_cavalryIconTexture && m_catapultIconTexture) {
-        // Unit types for texture selection
-        enum class UnitType { Caesar, General, Infantry, Cavalry, Catapult };
-
+    // Check if at least some unit textures are loaded
+    if (m_unitIconTextures[0][0]) {
+        // Unit types for texture selection (must match array indices)
+        // 0=Caesar, 1=General, 2=Infantry, 3=Cavalry, 4=Catapult
         struct UnitInfo {
             GamePiece *piece;
-            UnitType type;
+            int unitType;      // Index into m_unitIconTextures first dimension
+            int playerIndex;   // Index into m_unitIconTextures second dimension
         };
         QMap<QString, QList<UnitInfo>> unitsByTerritory;
 
+        // Helper to convert player ID to color index
+        auto playerToColorIndex = [](QChar playerId) -> int {
+            // Must match Player::getColorForPlayer() mapping
+            switch (playerId.toLatin1()) {
+                case 'A': return 0;  // red
+                case 'B': return 2;  // green
+                case 'C': return 1;  // blue
+                case 'D': return 3;  // yellow
+                case 'E': return 5;  // black
+                case 'F': return 4;  // orange
+                default:  return 0;
+            }
+        };
+
         for (Player *player : m_players) {
+            int colorIdx = playerToColorIndex(player->getId());
+
             // Collect caesars
             for (CaesarPiece *caesar : player->getCaesars()) {
                 if (caesar->isOnGalley()) continue;
                 QString territory = caesar->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({caesar, UnitType::Caesar});
+                    unitsByTerritory[territory].append({caesar, 0, colorIdx});
                 }
             }
             // Collect generals
@@ -878,7 +880,7 @@ void GameMapWidget::renderCityIcons()
                 if (general->isOnGalley()) continue;
                 QString territory = general->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({general, UnitType::General});
+                    unitsByTerritory[territory].append({general, 1, colorIdx});
                 }
             }
             // Collect infantry
@@ -886,7 +888,7 @@ void GameMapWidget::renderCityIcons()
                 if (infantry->isOnGalley()) continue;
                 QString territory = infantry->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({infantry, UnitType::Infantry});
+                    unitsByTerritory[territory].append({infantry, 2, colorIdx});
                 }
             }
             // Collect cavalry
@@ -894,7 +896,7 @@ void GameMapWidget::renderCityIcons()
                 if (cavalry->isOnGalley()) continue;
                 QString territory = cavalry->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({cavalry, UnitType::Cavalry});
+                    unitsByTerritory[territory].append({cavalry, 3, colorIdx});
                 }
             }
             // Collect catapults
@@ -902,7 +904,7 @@ void GameMapWidget::renderCityIcons()
                 if (catapult->isOnGalley()) continue;
                 QString territory = catapult->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({catapult, UnitType::Catapult});
+                    unitsByTerritory[territory].append({catapult, 4, colorIdx});
                 }
             }
         }
@@ -932,6 +934,10 @@ void GameMapWidget::renderCityIcons()
                 const UnitInfo &unit = units[i];
                 QPointF unitPos = positions[i];
 
+                // Get the player-colored texture for this unit
+                QOpenGLTexture *texture = m_unitIconTextures[unit.unitType][unit.playerIndex];
+                if (!texture) continue;
+
                 float halfIconW = scaledIconSize / 2.0f;
                 float halfIconH = scaledIconSize / 2.0f;
 
@@ -960,24 +966,12 @@ void GameMapWidget::renderCityIcons()
                                       reinterpret_cast<void*>(2 * sizeof(float)));
 
                 glActiveTexture(GL_TEXTURE0);
-                switch (unit.type) {
-                    case UnitType::Caesar:   m_caesarIconTexture->bind(); break;
-                    case UnitType::General:  m_generalIconTexture->bind(); break;
-                    case UnitType::Infantry: m_infantryIconTexture->bind(); break;
-                    case UnitType::Cavalry:  m_cavalryIconTexture->bind(); break;
-                    case UnitType::Catapult: m_catapultIconTexture->bind(); break;
-                }
+                texture->bind();
                 m_iconShader->setUniformValue("iconTexture", 0);
 
                 glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
-                switch (unit.type) {
-                    case UnitType::Caesar:   m_caesarIconTexture->release(); break;
-                    case UnitType::General:  m_generalIconTexture->release(); break;
-                    case UnitType::Infantry: m_infantryIconTexture->release(); break;
-                    case UnitType::Cavalry:  m_cavalryIconTexture->release(); break;
-                    case UnitType::Catapult: m_catapultIconTexture->release(); break;
-                }
+                texture->release();
                 m_iconVbo.release();
                 m_iconVao.release();
             }
