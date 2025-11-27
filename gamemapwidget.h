@@ -99,6 +99,8 @@ public:
 
     // Highlight control (for external menus)
     void setHoveredTerritoryById(int territoryId);
+    void setHighlightedTerritory(const QString &territoryName);
+    void clearHighlightedTerritory();
 
 public slots:
     void saveGame();
@@ -203,6 +205,7 @@ private:
     // Territory detection (CPU side for mouse lookup)
     QImage m_indexImage;
     int m_hoveredTerritoryId = 0;  // Currently hovered territory ID (0 = none/background)
+    int m_highlightedTerritoryId = 0;  // Territory to highlight (e.g., for city destruction selection)
 
     // Map dimensions
     QSize m_mapSize;

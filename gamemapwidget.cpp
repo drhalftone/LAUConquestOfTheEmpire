@@ -39,13 +39,17 @@ static QString loadShaderSource(const QString &resourcePath)
 // Uses index image to verify points are inside the territory
 // seed parameter ensures deterministic results for the same territory
 static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, float minDistance,
-                                         uint seed, const QImage &indexImage, int territoryId)
+                                         uint seed, const QImage &indexImage, int territoryId,
+                                         const QPointF &cityPos = QPointF(), float cityExclusionRadius = 0.0f)
 {
     QList<QPointF> points;
     if (numPoints <= 0) return points;
 
     // Check if index image is valid
     bool hasValidImage = !indexImage.isNull() && indexImage.width() > 0 && indexImage.height() > 0;
+
+    // Check if we need to exclude city area
+    bool hasCity = !cityPos.isNull() && cityExclusionRadius > 0.0f;
 
     // Helper lambda to check if a point is inside the territory
     auto isInsideTerritory = [&](const QPointF &pt) -> bool {
@@ -55,9 +59,21 @@ static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, fl
         return indexImage.pixelColor(x, y).red() == territoryId;
     };
 
-    // First point at center (should always be valid)
+    // Helper lambda to check if a point is too close to the city
+    auto isTooCloseToCity = [&](const QPointF &pt) -> bool {
+        if (!hasCity) return false;
+        float dist = qSqrt(qPow(pt.x() - cityPos.x(), 2) + qPow(pt.y() - cityPos.y(), 2));
+        return dist < cityExclusionRadius;
+    };
+
+    // First point at center (unless there's a city there)
     if (numPoints == 1) {
-        points.append(center);
+        if (!isTooCloseToCity(center)) {
+            points.append(center);
+        } else {
+            // Place next to city instead
+            points.append(QPointF(center.x() + cityExclusionRadius * 1.2f, center.y()));
+        }
         return points;
     }
 
@@ -67,20 +83,21 @@ static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, fl
     // For small numbers of points, try circular arrangement first, validate against territory
     if (numPoints <= 8) {
         float angleStep = 2.0f * M_PI / numPoints;
-        float radius = minDistance * 0.6f;
+        // If there's a city, place units outside the exclusion zone, otherwise use tight circle
+        float radius = hasCity ? (cityExclusionRadius * 1.3f) : (minDistance * 0.6f);
 
         for (int i = 0; i < numPoints; ++i) {
             float angle = i * angleStep - M_PI / 2;
             QPointF candidate(center.x() + radius * qCos(angle),
                               center.y() + radius * qSin(angle));
 
-            // If outside territory, try to find a valid point nearby
-            if (!isInsideTerritory(candidate)) {
+            // If outside territory or too close to city, try to find a valid point nearby
+            if (!isInsideTerritory(candidate) || isTooCloseToCity(candidate)) {
                 bool found = false;
                 std::uniform_real_distribution<float> offsetDist(-minDistance, minDistance);
                 for (int attempt = 0; attempt < 20 && !found; ++attempt) {
                     QPointF adjusted(center.x() + offsetDist(gen), center.y() + offsetDist(gen));
-                    if (isInsideTerritory(adjusted)) {
+                    if (isInsideTerritory(adjusted) && !isTooCloseToCity(adjusted)) {
                         // Check distance from existing points
                         bool farEnough = true;
                         for (const QPointF &existing : points) {
@@ -98,8 +115,15 @@ static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, fl
                     }
                 }
                 if (!found) {
-                    // Fall back to center with small offset
-                    candidate = center;
+                    // Fall back: if there's a city, offset from it, otherwise use center
+                    if (hasCity) {
+                        // Place at edge of city exclusion zone
+                        float angle = i * angleStep - M_PI / 2;
+                        candidate = QPointF(center.x() + cityExclusionRadius * 1.3f * qCos(angle),
+                                           center.y() + cityExclusionRadius * 1.3f * qSin(angle));
+                    } else {
+                        candidate = center;
+                    }
                 }
             }
             points.append(candidate);
@@ -130,8 +154,8 @@ static QList<QPointF> poissonDiscSample(const QPointF &center, int numPoints, fl
             QPointF candidate(point.x() + radius * qCos(angle),
                               point.y() + radius * qSin(angle));
 
-            // Check if candidate is inside the territory
-            if (!isInsideTerritory(candidate)) continue;
+            // Check if candidate is inside the territory and not too close to city
+            if (!isInsideTerritory(candidate) || isTooCloseToCity(candidate)) continue;
 
             // Check if candidate is far enough from all existing points
             bool valid = true;
@@ -258,6 +282,20 @@ void GameMapWidget::createMenuBar()
         this,
         &QWidget::close,
         QKeySequence::Quit
+    );
+
+    // View menu
+    QMenu *viewMenu = m_menuBar->addMenu("&View");
+    QAction *showPlayerViewerAction = viewMenu->addAction(
+        "Show &Player Viewer",
+        this,
+        [this]() {
+            if (m_playerInfoWidget) {
+                m_playerInfoWidget->show();
+                m_playerInfoWidget->raise();
+                m_playerInfoWidget->activateWindow();
+            }
+        }
     );
 
     QMenu *helpMenu = m_menuBar->addMenu("&Help");
@@ -487,6 +525,17 @@ void GameMapWidget::updateTerritoryOwnership()
     // Update ownership colors based on player territories
     for (Player *player : m_players) {
         QColor playerColor = getPlayerColor(player->getId());
+
+        // Darken the color if it's not this player's turn
+        if (!player->isMyTurn()) {
+            // Make it darker (multiply RGB by 0.65 for a dimmed effect)
+            playerColor = QColor(
+                static_cast<int>(playerColor.red() * 0.65),
+                static_cast<int>(playerColor.green() * 0.65),
+                static_cast<int>(playerColor.blue() * 0.65)
+            );
+        }
+
         const QList<QString> &territories = player->getOwnedTerritories();
 
         for (const QString &territoryName : territories) {
@@ -619,6 +668,7 @@ void GameMapWidget::renderCityIcons()
         QPointF centroid;
         bool isFortified;
         float scale;  // Scale factor based on territory area
+        Player *owner;  // Player who owns this city
     };
     QList<CityInfo> cities;
 
@@ -639,6 +689,7 @@ void GameMapWidget::renderCityIcons()
                     // Scale based on sqrt of area ratio (clamped to reasonable range)
                     float areaRatio = static_cast<float>(territory.area) / referenceArea;
                     info.scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
+                    info.owner = player;  // Track the owner
                     cities.append(info);
                 }
             }
@@ -704,6 +755,10 @@ void GameMapWidget::renderCityIcons()
         }
         m_iconShader->setUniformValue("iconTexture", 0);
 
+        // Set brightness based on whether it's this player's turn
+        float brightness = (city.owner && city.owner->isMyTurn()) ? 1.0f : 0.65f;
+        m_iconShader->setUniformValue("brightness", brightness);
+
         // Draw the icon quad
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
@@ -739,6 +794,7 @@ void GameMapWidget::renderCityIcons()
             QPointF basePos;
             float scale;
             int playerIndex;  // For texture selection
+            Player *owner;  // Player who owns this galley
         };
         QList<GalleyRenderInfo> galleyInfos;
 
@@ -762,7 +818,7 @@ void GameMapWidget::renderCityIcons()
                 float areaRatio = static_cast<float>(territory.area) / referenceArea;
                 float scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
 
-                galleyInfos.append({galley, basePos, scale, playerIdx});
+                galleyInfos.append({galley, basePos, scale, playerIdx, player});
             }
         }
 
@@ -829,6 +885,10 @@ void GameMapWidget::renderCityIcons()
                 m_galleyIconTextures[texIdx]->bind();
                 m_iconShader->setUniformValue("iconTexture", 0);
 
+                // Set brightness based on whether it's this player's turn
+                float brightness = (info.owner && info.owner->isMyTurn()) ? 1.0f : 0.65f;
+                m_iconShader->setUniformValue("brightness", brightness);
+
                 glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
                 m_galleyIconTextures[texIdx]->release();
@@ -847,6 +907,7 @@ void GameMapWidget::renderCityIcons()
             GamePiece *piece;
             int unitType;      // Index into m_unitIconTextures first dimension
             int playerIndex;   // Index into m_unitIconTextures second dimension
+            Player *owner;     // Player who owns this unit
         };
         QMap<QString, QList<UnitInfo>> unitsByTerritory;
 
@@ -872,7 +933,7 @@ void GameMapWidget::renderCityIcons()
                 if (caesar->isOnGalley()) continue;
                 QString territory = caesar->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({caesar, 0, colorIdx});
+                    unitsByTerritory[territory].append({caesar, 0, colorIdx, player});
                 }
             }
             // Collect generals
@@ -880,7 +941,7 @@ void GameMapWidget::renderCityIcons()
                 if (general->isOnGalley()) continue;
                 QString territory = general->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({general, 1, colorIdx});
+                    unitsByTerritory[territory].append({general, 1, colorIdx, player});
                 }
             }
             // Collect infantry
@@ -888,7 +949,7 @@ void GameMapWidget::renderCityIcons()
                 if (infantry->isOnGalley()) continue;
                 QString territory = infantry->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({infantry, 2, colorIdx});
+                    unitsByTerritory[territory].append({infantry, 2, colorIdx, player});
                 }
             }
             // Collect cavalry
@@ -896,7 +957,7 @@ void GameMapWidget::renderCityIcons()
                 if (cavalry->isOnGalley()) continue;
                 QString territory = cavalry->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({cavalry, 3, colorIdx});
+                    unitsByTerritory[territory].append({cavalry, 3, colorIdx, player});
                 }
             }
             // Collect catapults
@@ -904,7 +965,7 @@ void GameMapWidget::renderCityIcons()
                 if (catapult->isOnGalley()) continue;
                 QString territory = catapult->getTerritoryName();
                 if (!territory.isEmpty()) {
-                    unitsByTerritory[territory].append({catapult, 4, colorIdx});
+                    unitsByTerritory[territory].append({catapult, 4, colorIdx, player});
                 }
             }
         }
@@ -922,12 +983,28 @@ void GameMapWidget::renderCityIcons()
             float scale = qBound(0.85f, qSqrt(areaRatio), 1.5f);  // Reduced scaling range
             float scaledIconSize = m_iconSize * scale;
 
+            // Check if there's a city in this territory
+            QPointF cityPos;
+            float cityExclusionRadius = 0.0f;
+            for (Player *player : m_players) {
+                City *city = player->getCityAtTerritory(territoryName);
+                if (city) {
+                    // City found - use territory centroid and exclude area around it
+                    cityPos = territory.centroid;
+                    // Exclusion radius is half the scaled city icon size (just the city itself)
+                    float cityScale = qBound(0.85f, qSqrt(areaRatio), 1.5f);
+                    cityExclusionRadius = (m_iconSize * cityScale) * 0.5f;  // Half the city icon size
+                    break;
+                }
+            }
+
             // Use Poisson disc sampling to distribute units within territory bounds
             // Seed with territory ID for deterministic positioning
             // Use base icon size for spacing to keep it consistent across territories
             float minDistance = m_iconSize * 0.5f;  // Consistent spacing regardless of territory size
             QList<QPointF> positions = poissonDiscSample(territory.centroid, units.size(), minDistance,
-                                                          territory.id, m_indexImage, territory.id);
+                                                          territory.id, m_indexImage, territory.id,
+                                                          cityPos, cityExclusionRadius);
 
             // Render each unit at its distributed position
             for (int i = 0; i < units.size() && i < positions.size(); ++i) {
@@ -938,8 +1015,20 @@ void GameMapWidget::renderCityIcons()
                 QOpenGLTexture *texture = m_unitIconTextures[unit.unitType][unit.playerIndex];
                 if (!texture) continue;
 
-                float halfIconW = scaledIconSize / 2.0f;
-                float halfIconH = scaledIconSize / 2.0f;
+                // Apply type-specific scaling
+                // Caesar/General: 20% smaller (0.8x), Troops: 20% larger (1.2x)
+                float typeScale = 1.0f;
+                if (unit.unitType == 0 || unit.unitType == 1) {
+                    // Caesar or General
+                    typeScale = 0.8f;
+                } else if (unit.unitType >= 2 && unit.unitType <= 4) {
+                    // Infantry, Cavalry, or Catapult
+                    typeScale = 1.2f;
+                }
+                float finalIconSize = scaledIconSize * typeScale;
+
+                float halfIconW = finalIconSize / 2.0f;
+                float halfIconH = finalIconSize / 2.0f;
 
                 // Convert position to NDC
                 float ndcX = (unitPos.x() / m_mapSize.width()) * 2.0f - 1.0f;
@@ -968,6 +1057,10 @@ void GameMapWidget::renderCityIcons()
                 glActiveTexture(GL_TEXTURE0);
                 texture->bind();
                 m_iconShader->setUniformValue("iconTexture", 0);
+
+                // Set brightness based on whether it's this player's turn
+                float brightness = (unit.owner && unit.owner->isMyTurn()) ? 1.0f : 0.65f;
+                m_iconShader->setUniformValue("brightness", brightness);
 
                 glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
@@ -1045,6 +1138,7 @@ void GameMapWidget::paintGL()
     QMatrix4x4 identityMatrix;
     m_shaderProgram->setUniformValue("mvp", identityMatrix);
     m_shaderProgram->setUniformValue("highlightedTerritory", m_hoveredTerritoryId);
+    m_shaderProgram->setUniformValue("selectedTerritory", m_highlightedTerritoryId);
     m_shaderProgram->setUniformValue("borderRadius", m_borderRadius);
     m_shaderProgram->setUniformValue("mapSize", QVector2D(m_mapSize.width(), m_mapSize.height()));
 
@@ -1210,6 +1304,9 @@ void GameMapWidget::setPlayers(const QList<Player*> &players)
     for (Player *player : m_players) {
         connect(player, &Player::territoryClaimed, this, &GameMapWidget::updateTerritoryOwnership);
         connect(player, &Player::territoryUnclaimed, this, &GameMapWidget::updateTerritoryOwnership);
+        // Update border colors when turn state changes
+        connect(player, &Player::turnStarted, this, &GameMapWidget::updateTerritoryOwnership);
+        connect(player, &Player::turnEnded, this, &GameMapWidget::updateTerritoryOwnership);
     }
 
     // Initial ownership update
@@ -1220,11 +1317,11 @@ QColor GameMapWidget::getPlayerColor(QChar player) const
 {
     switch (player.toLatin1()) {
         case 'A': return QColor(255, 0, 0);      // Red
-        case 'B': return QColor(0, 0, 255);      // Blue
-        case 'C': return QColor(0, 200, 0);      // Green
+        case 'B': return QColor(0, 255, 0);      // Green
+        case 'C': return QColor(0, 0, 255);      // Blue
         case 'D': return QColor(255, 255, 0);    // Yellow
-        case 'E': return QColor(255, 165, 0);    // Orange
-        case 'F': return QColor(128, 0, 128);    // Purple
+        case 'E': return QColor(128, 128, 128);  // Gray (Black would be invisible)
+        case 'F': return QColor(255, 165, 0);    // Orange
         default: return QColor(128, 128, 128);   // Gray
     }
 }
@@ -1573,8 +1670,50 @@ void GameMapWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void GameMapWidget::closeEvent(QCloseEvent *event)
 {
-    // TODO: Prompt to save game
-    event->accept();
+    // Warn user about losing game progress
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Exit Game");
+    msgBox.setText("Closing the map will exit the game.\n\n"
+                   "All unsaved progress will be lost!\n\n"
+                   "Do you want to save your game before exiting?");
+    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    msgBox.setDefaultButton(QMessageBox::Save);
+
+    int reply = msgBox.exec();
+
+    if (reply == QMessageBox::Save) {
+        // Try to save the game
+        saveGame();
+        // Only exit if we're at start of turn (save would have succeeded)
+        if (m_isAtStartOfTurn) {
+            event->accept();
+            qApp->quit();
+        } else {
+            // Save was blocked due to mid-turn, ask if they still want to exit
+            QMessageBox confirmBox(this);
+            confirmBox.setWindowTitle("Exit Without Saving");
+            confirmBox.setText("Cannot save mid-turn.\n\n"
+                               "Do you still want to exit and lose your progress?");
+            confirmBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            confirmBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            confirmBox.setDefaultButton(QMessageBox::No);
+
+            if (confirmBox.exec() == QMessageBox::Yes) {
+                event->accept();
+                qApp->quit();
+            } else {
+                event->ignore();
+            }
+        }
+    } else if (reply == QMessageBox::Discard) {
+        // Exit without saving
+        event->accept();
+        qApp->quit();
+    } else {
+        // Cancel - don't close
+        event->ignore();
+    }
 }
 
 void GameMapWidget::onMomentumTick()
@@ -1623,6 +1762,21 @@ void GameMapWidget::setHoveredTerritoryById(int territoryId)
         m_hoveredTerritoryId = territoryId;
         update();
     }
+}
+
+void GameMapWidget::setHighlightedTerritory(const QString &territoryName)
+{
+    Territory territory = m_graph->getTerritory(territoryName);
+    if (!territory.name.isEmpty()) {
+        m_highlightedTerritoryId = territory.id;
+        update();
+    }
+}
+
+void GameMapWidget::clearHighlightedTerritory()
+{
+    m_highlightedTerritoryId = 0;
+    update();
 }
 
 void GameMapWidget::zoomToTerritory(const QString &name)
@@ -2345,14 +2499,15 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
         // Build pieces string for this player
         if (hasCaesar || !generals.isEmpty() || infantryCount > 0 || cavalryCount > 0 || catapultCount > 0 || galleyCount > 0) {
             QStringList playerPieces;
-            if (hasCaesar) playerPieces << "Caesar";
-            if (!generals.isEmpty()) playerPieces << generals.join(", ");
-            if (infantryCount > 0) playerPieces << QString("%1 Infantry").arg(infantryCount);
-            if (cavalryCount > 0) playerPieces << QString("%1 Cavalry").arg(cavalryCount);
-            if (catapultCount > 0) playerPieces << QString("%1 Catapult").arg(catapultCount);
-            if (galleyCount > 0) playerPieces << QString("%1 Galley").arg(galleyCount);
+            playerPieces << QString("Player %1:").arg(player->getId());
+            if (hasCaesar) playerPieces << "    1 Caesar";
+            if (!generals.isEmpty()) playerPieces << QString("    %1 General%2").arg(generals.size()).arg(generals.size() > 1 ? "s" : "");
+            if (infantryCount > 0) playerPieces << QString("    %1 Infantry").arg(infantryCount);
+            if (cavalryCount > 0) playerPieces << QString("    %1 Cavalry").arg(cavalryCount);
+            if (catapultCount > 0) playerPieces << QString("    %1 Catapult%2").arg(catapultCount).arg(catapultCount > 1 ? "s" : "");
+            if (galleyCount > 0) playerPieces << QString("    %1 Galley%2").arg(galleyCount).arg(galleyCount > 1 ? "s" : "");
 
-            pieces << QString("Player %1: %2").arg(player->getId()).arg(playerPieces.join(", "));
+            pieces << playerPieces.join("<br>");
         }
     }
 

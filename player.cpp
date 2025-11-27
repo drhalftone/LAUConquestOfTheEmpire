@@ -79,7 +79,7 @@ QColor Player::getColorForPlayer(QChar playerId) const
         case 'B': return Qt::green;
         case 'C': return Qt::blue;
         case 'D': return Qt::yellow;
-        case 'E': return Qt::black;
+        case 'E': return QColor(128, 128, 128); // Gray (Black would be invisible)
         case 'F': return QColor(255, 165, 0); // Orange
         default: return Qt::gray;
     }

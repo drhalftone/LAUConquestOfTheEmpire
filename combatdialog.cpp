@@ -1628,7 +1628,7 @@ bool CombatDialog::checkCombatEnd()
         City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
         if (city) {
             // First, destroy any roads connected to this city (roads require both ends to be same owner)
-            Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
+            // Note: combatPos already declared above at line 1616
             QList<Road*> roadsToRemove;
             for (Road *road : m_defendingPlayer->getRoads()) {
                 // Check if this road connects to the conquered territory (using positions)
@@ -1700,8 +1700,7 @@ bool CombatDialog::checkCombatEnd()
         m_mapWidget->updateRoads();
 
         // In land combat, destroy all docked galleys belonging to the losing side (defender)
-        Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
-        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
+        // Note: combatPos and isSea already declared above at line 1616-1617
         if (!isSea) {
             // This is land combat - destroy all defending galleys at this location
             QList<GalleyPiece*> defeatedGalleys;

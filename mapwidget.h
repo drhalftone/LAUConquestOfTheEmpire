@@ -85,7 +85,7 @@ public:
     QVector<HomeProvinceInfo> getRandomHomeProvinces();
 
     // Set player list for querying pieces and ownership
-    void setPlayers(const QList<Player*> &players) { m_players = players; }
+    void setPlayers(const QList<Player*> &players);
 
     // Set current player turn index
     void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
@@ -134,6 +134,10 @@ public:
 
     // Build graph from grid (for loading saved games)
     void buildGraphFromGrid();
+
+    // Highlight a territory by name (for UI feedback)
+    void setHighlightedTerritory(const QString &territoryName);
+    void clearHighlightedTerritory();
 
 public slots:
     void saveGame();
@@ -216,6 +220,9 @@ private:
     // Graph-based map system
     MapGraph *m_graph;  // Graph representation of the map (coexists with grid during migration)
     bool m_graphDebugMode;  // Show graph visualization overlay
+
+    // Territory highlighting (for UI feedback like city destruction selection)
+    QString m_highlightedTerritory;  // Territory to highlight with a special border
 };
 
 #endif // MAPWIDGET_H

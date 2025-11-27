@@ -177,6 +177,24 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 QChar owner = getTerritoryOwnerAt(row, col);
                 if (owner != '\0') {
                     QColor ownerColor = getPlayerColor(owner);
+
+                    // Darken the color if it's not this player's turn
+                    Player *ownerPlayer = nullptr;
+                    for (Player *player : m_players) {
+                        if (player->getId() == owner) {
+                            ownerPlayer = player;
+                            break;
+                        }
+                    }
+                    if (ownerPlayer && !ownerPlayer->isMyTurn()) {
+                        // Make it darker (multiply RGB by 0.65 for a dimmed effect)
+                        ownerColor = QColor(
+                            static_cast<int>(ownerColor.red() * 0.65),
+                            static_cast<int>(ownerColor.green() * 0.65),
+                            static_cast<int>(ownerColor.blue() * 0.65)
+                        );
+                    }
+
                     painter.setPen(QPen(ownerColor, 8));  // Thicker border
                     painter.drawRect(x + 4, y + 4, m_tileWidth - 8, m_tileHeight - 8);
                 }
@@ -187,6 +205,12 @@ void MapWidget::paintEvent(QPaintEvent *event)
             bool isDisputed = false;
             QChar firstPlayer = '\0';
             QString territoryName = getTerritoryNameAt(row, col);
+
+            // Draw special highlight for selected territory (e.g., city destruction selection)
+            if (!m_highlightedTerritory.isEmpty() && territoryName == m_highlightedTerritory) {
+                painter.setPen(QPen(QColor(255, 80, 0), 10));  // Bright orange, very thick
+                painter.drawRect(x + 2, y + 2, m_tileWidth - 4, m_tileHeight - 4);
+            }
             for (Player *player : m_players) {
                 QList<GamePiece*> pieces = player->getPiecesAtTerritory(territoryName);
 
@@ -285,6 +309,16 @@ void MapWidget::paintEvent(QPaintEvent *event)
     // Draw roads for all players
     for (Player *player : m_players) {
         QColor playerColor = getPlayerColor(player->getId());
+
+        // Darken the color if it's not this player's turn
+        if (!player->isMyTurn()) {
+            playerColor = QColor(
+                static_cast<int>(playerColor.red() * 0.65),
+                static_cast<int>(playerColor.green() * 0.65),
+                static_cast<int>(playerColor.blue() * 0.65)
+            );
+        }
+
         painter.setPen(QPen(playerColor, 4));  // Thick line in player color
 
         for (Road *road : player->getRoads()) {
@@ -391,9 +425,6 @@ void MapWidget::paintEvent(QPaintEvent *event)
 
                 // Draw as ghost if not current player's turn
                 bool isGhost = !player->isMyTurn();
-                if (isGhost) {
-                    painter.setOpacity(0.3);
-                }
 
                 // Get player color (gray for black player so icon is visible)
                 QColor playerColor = getPlayerColor(playerId);
@@ -405,8 +436,36 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 QPixmap icon(iconPath);
                 if (!icon.isNull()) {
                     // Scale icon to fit (about 70% of diameter)
-                    int iconSize = static_cast<int>(radius * 1.4);
+                    int baseIconSize = static_cast<int>(radius * 1.4);
+
+                    // Apply type-specific scaling
+                    // Caesar/General: 20% smaller (0.8x), Troops: 20% larger (1.2x)
+                    float typeScale = 1.0f;
+                    if (pieceType == GamePiece::Type::Caesar || pieceType == GamePiece::Type::General) {
+                        typeScale = 0.8f;
+                    } else if (pieceType == GamePiece::Type::Infantry ||
+                               pieceType == GamePiece::Type::Cavalry ||
+                               pieceType == GamePiece::Type::Catapult) {
+                        typeScale = 1.2f;
+                    }
+                    int iconSize = static_cast<int>(baseIconSize * typeScale);
+
                     QPixmap scaledIcon = icon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+                    // Darken icon if not current player's turn
+                    if (isGhost) {
+                        QImage image = scaledIcon.toImage().convertToFormat(QImage::Format_ARGB32);
+                        for (int y = 0; y < image.height(); ++y) {
+                            for (int x = 0; x < image.width(); ++x) {
+                                QRgb pixel = image.pixel(x, y);
+                                int r = static_cast<int>(qRed(pixel) * 0.65);
+                                int g = static_cast<int>(qGreen(pixel) * 0.65);
+                                int b = static_cast<int>(qBlue(pixel) * 0.65);
+                                image.setPixel(x, y, qRgba(r, g, b, qAlpha(pixel)));
+                            }
+                        }
+                        scaledIcon = QPixmap::fromImage(image);
+                    }
 
                     // Draw flat oval pedestal at bottom of icon (35% height, 80% width)
                     int ovalHeight = static_cast<int>(scaledIcon.height() * 0.35);
@@ -420,10 +479,6 @@ void MapWidget::paintEvent(QPaintEvent *event)
                     int iconX = centerX - scaledIcon.width() / 2;
                     int iconY = centerY - scaledIcon.height() / 2;
                     painter.drawPixmap(iconX, iconY, scaledIcon);
-                }
-
-                if (isGhost) {
-                    painter.setOpacity(1.0);
                 }
             }
         }
@@ -1377,10 +1432,21 @@ void MapWidget::createMenuBar()
         QApplication::style()->standardIcon(QStyle::SP_DialogCloseButton),
         "E&xit"
     );
-    connect(exitAction, &QAction::triggered, qApp, &QApplication::quit);
+    connect(exitAction, &QAction::triggered, this, &MapWidget::close);
 
     // View menu (for debug options)
     QMenu *viewMenu = m_menuBar->addMenu("&View");
+
+    QAction *showPlayerViewerAction = viewMenu->addAction("Show &Player Viewer");
+    connect(showPlayerViewerAction, &QAction::triggered, this, [this]() {
+        if (m_playerInfoWidget) {
+            m_playerInfoWidget->show();
+            m_playerInfoWidget->raise();
+            m_playerInfoWidget->activateWindow();
+        }
+    });
+
+    viewMenu->addSeparator();
 
     QAction *graphDebugAction = viewMenu->addAction("Show &Graph Debug Overlay");
     graphDebugAction->setCheckable(true);
@@ -1458,6 +1524,33 @@ void MapWidget::closeEvent(QCloseEvent *event)
         // Cancel - don't close
         event->ignore();
     }
+}
+
+void MapWidget::setPlayers(const QList<Player*> &players)
+{
+    m_players = players;
+
+    // Connect to each player's turn signals to update border colors when turn state changes
+    for (Player *player : m_players) {
+        connect(player, &Player::turnStarted, this, [this]() {
+            update();  // Trigger repaint to update border colors
+        });
+        connect(player, &Player::turnEnded, this, [this]() {
+            update();  // Trigger repaint to update border colors
+        });
+    }
+}
+
+void MapWidget::setHighlightedTerritory(const QString &territoryName)
+{
+    m_highlightedTerritory = territoryName;
+    update();
+}
+
+void MapWidget::clearHighlightedTerritory()
+{
+    m_highlightedTerritory.clear();
+    update();
 }
 
 void MapWidget::saveGame()

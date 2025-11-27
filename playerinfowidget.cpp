@@ -3997,175 +3997,7 @@ void PlayerInfoWidget::onEndTurnClicked()
         }
     }
 
-    // FIRST: Show city destruction dialog with ALL cities as checkboxes
-    QList<City*> allCities = currentPlayer->getCities();
-    if (!allCities.isEmpty()) {
-        // Create custom dialog for selecting cities to destroy
-        QDialog cityDestructionDialog(this);
-        cityDestructionDialog.setWindowTitle("City Destruction Selection");
-
-        QHBoxLayout *topLayout = new QHBoxLayout(&cityDestructionDialog);
-
-        // Add fire city icon on the left side
-        QLabel *iconLabel = new QLabel();
-        QPixmap fireCityPixmap(":/images/fireCityIcon.png");
-        iconLabel->setPixmap(fireCityPixmap.scaled(128, 128, Qt::KeepAspectRatio, Qt::FastTransformation));
-        iconLabel->setAlignment(Qt::AlignTop);
-        topLayout->addWidget(iconLabel);
-
-        // Add spacing between icon and content
-        topLayout->addSpacing(20);
-
-        // Main content on the right
-        QVBoxLayout *mainLayout = new QVBoxLayout();
-
-        QLabel *headerLabel = new QLabel(
-            QString("Player %1: Select cities to destroy (optional)").arg(currentPlayer->getId()));
-        headerLabel->setStyleSheet("font-weight: bold; font-size: 12pt;");
-        mainLayout->addWidget(headerLabel);
-
-        QLabel *infoLabel = new QLabel(
-            "Cities marked during your turn are pre-selected.\n"
-            "You may change your selection before confirming.");
-        mainLayout->addWidget(infoLabel);
-
-        mainLayout->addSpacing(10);
-
-        // Create checkboxes for each city
-        QList<QCheckBox*> cityCheckboxes;
-        for (City *city : allCities) {
-            QString cityType = city->isFortified() ? "Walled City" : "City";
-            QString cityLabel = QString("%1 at %2").arg(cityType).arg(city->getTerritoryName());
-
-            QCheckBox *checkbox = new QCheckBox(cityLabel);
-            checkbox->setChecked(city->isMarkedForDestruction());  // Pre-check marked cities
-            checkbox->setProperty("cityPtr", QVariant::fromValue(static_cast<void*>(city)));
-            cityCheckboxes.append(checkbox);
-            mainLayout->addWidget(checkbox);
-        }
-
-        mainLayout->addSpacing(10);
-
-        // Add OK button (no cancel - must proceed)
-        QPushButton *okButton = new QPushButton("Continue");
-        okButton->setObjectName("continueButton");
-        connect(okButton, &QPushButton::clicked, &cityDestructionDialog, &QDialog::accept);
-        mainLayout->addWidget(okButton);
-
-        topLayout->addLayout(mainLayout);
-
-        // AI Auto-Mode: Schedule auto-click of Continue button (don't destroy any cities)
-        AIPlayer *currentAI = getAIPlayerForPlayer(currentPlayer->getId());
-        if (m_aiAutoMode || currentAI) {
-            int delayMs = currentAI ? 1500 : m_aiAutoModeDelayMs;
-            qDebug() << "AI Auto-Mode: Will auto-dismiss city destruction dialog in" << delayMs << "ms";
-            QTimer::singleShot(delayMs, &cityDestructionDialog, [&cityDestructionDialog]() {
-                // Uncheck all checkboxes (don't destroy any cities)
-                QList<QCheckBox*> checkboxes = cityDestructionDialog.findChildren<QCheckBox*>();
-                for (QCheckBox *cb : checkboxes) {
-                    cb->setChecked(false);
-                }
-                // Click the continue button
-                cityDestructionDialog.accept();
-                qDebug() << "AI Auto-Mode: City destruction dialog auto-dismissed";
-            });
-        }
-
-        // Show dialog and collect results
-        if (cityDestructionDialog.exec() == QDialog::Accepted) {
-            // First, update all cities' markedForDestruction flags based on checkbox state
-            for (QCheckBox *checkbox : cityCheckboxes) {
-                City *city = static_cast<City*>(checkbox->property("cityPtr").value<void*>());
-                city->setMarkedForDestruction(checkbox->isChecked());
-            }
-
-            // Collect selected cities
-            QList<City*> citiesToDestroy;
-            QStringList cityNames;
-            for (QCheckBox *checkbox : cityCheckboxes) {
-                if (checkbox->isChecked()) {
-                    City *city = static_cast<City*>(checkbox->property("cityPtr").value<void*>());
-                    citiesToDestroy.append(city);
-                    QString cityType = city->isFortified() ? "Walled City" : "City";
-                    cityNames.append(QString("%1 at %2").arg(cityType).arg(city->getTerritoryName()));
-                }
-            }
-
-            // Update the display to reflect any changes in marked cities
-            updatePlayerInfo(currentPlayer);
-            if (m_mapWidget) {
-                m_mapWidget->update();
-            }
-
-            // If cities were selected, show confirmation dialog
-            if (!citiesToDestroy.isEmpty()) {
-                QMessageBox::StandardButton reply = QMessageBox::question(this,
-                    "Confirm City Destruction",
-                    QString("Are you sure you want to destroy the following cities?\n\n%1\n\n"
-                            "This action cannot be undone!")
-                    .arg(cityNames.join("\n")),
-                    QMessageBox::Yes | QMessageBox::No);
-
-                if (reply == QMessageBox::No) {
-                    // User said no to confirmation - don't destroy cities, but continue with turn end
-                    qDebug() << "Player" << currentPlayer->getId() << "declined city destruction confirmation";
-                } else {
-                    // User confirmed - proceed with destruction
-                    qDebug() << "Player" << currentPlayer->getId() << "destroying" << citiesToDestroy.size() << "cities";
-
-                    for (City *city : citiesToDestroy) {
-                        qDebug() << "  Destroying city at" << city->getTerritoryName()
-                                 << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
-
-                        QString territoryName = city->getTerritoryName();
-                        Position cityPosition = city->getPosition();
-
-                        // Find and remove all roads connected to this city's territory
-                        QList<Road*> roadsAtTerritory = currentPlayer->getRoadsAtTerritory(territoryName);
-                        for (Road *road : roadsAtTerritory) {
-                            qDebug() << "    Destroying road at" << road->getTerritoryName();
-                            currentPlayer->removeRoad(road);
-                            delete road;
-                        }
-
-                        // Also check for roads that have this position as either endpoint
-                        QList<Road*> allRoads = currentPlayer->getRoads();
-                        for (Road *road : allRoads) {
-                            if (road->getFromPosition() == cityPosition || road->getToPosition() == cityPosition) {
-                                qDebug() << "    Destroying connected road from"
-                                         << road->getFromPosition().row << "," << road->getFromPosition().col
-                                         << " to " << road->getToPosition().row << "," << road->getToPosition().col;
-                                currentPlayer->removeRoad(road);
-                                delete road;
-                            }
-                        }
-
-                        // Remove city and fortification from MapWidget grids
-                        if (m_mapWidget) {
-                            m_mapWidget->removeCityAt(cityPosition.row, cityPosition.col);
-                            m_mapWidget->removeFortificationAt(cityPosition.row, cityPosition.col);
-                        }
-
-                        // Remove city from player's inventory
-                        currentPlayer->removeCity(city);
-
-                        // Delete the city object
-                        delete city;
-                    }
-
-                    // Update display after destroying cities
-                    updateAllPlayers();
-                    if (m_mapWidget) {
-                        m_mapWidget->update();
-                    }
-                }
-            } else {
-                qDebug() << "Player" << currentPlayer->getId() << "chose not to destroy any cities";
-            }
-        }
-    }
-
-    // SECOND: Build options for PurchaseDialog
+    // Build options for Purchase Dialog (with optional city destruction)
     QString homeProvinceName = currentPlayer->getHomeProvinceName();
 
     // Build list of territories available for city placement
@@ -4231,8 +4063,14 @@ void PlayerInfoWidget::onEndTurnClicked()
     int availableCatapults = qMax(0, TOTAL_CATAPULT_PIECES - totalCatapults);
     int availableGalleys = qMax(0, TOTAL_GALLEY_PIECES - totalGalleys);
 
-    // Open purchase dialog
-    PurchaseDialog *purchaseDialog = new PurchaseDialog(
+    // Get list of all cities for optional destruction
+    QList<City*> allCities = currentPlayer->getCities();
+
+    // Loop until user confirms their purchases and city destructions
+    bool purchaseConfirmed = false;
+    while (!purchaseConfirmed) {
+        // Open purchase dialog (with optional city destruction)
+        PurchaseDialog *purchaseDialog = new PurchaseDialog(
         currentPlayer->getId(),
         currentPlayer->getWallet(),
         m_mapWidget ? m_mapWidget->getInflationMultiplier() : 1,  // inflation multiplier
@@ -4244,6 +4082,9 @@ void PlayerInfoWidget::onEndTurnClicked()
         availableCavalry,
         availableCatapults,
         availableGalleys,
+        allCities,  // Cities available for destruction
+        m_mapWidget,  // For territory highlighting
+        currentPlayer->getHomeProvinceName(),  // Home province name
         this
     );
 
@@ -4355,15 +4196,32 @@ void PlayerInfoWidget::onEndTurnClicked()
         purchaseDialog->setupAIAutoMode(m_aiAutoModeDelayMs, purchases);
     }
 
-    if (purchaseDialog->exec() == QDialog::Accepted) {
-        // Get purchase result
-        PurchaseResult result = purchaseDialog->getPurchaseResult();
+        int dialogResult = purchaseDialog->exec();
 
-        // Deduct money from player's wallet
-        if (result.totalCost > 0) {
-            currentPlayer->spendMoney(result.totalCost);
-            qDebug() << "Player" << currentPlayer->getId() << "spent" << result.totalCost << "talents";
+        // Clear territory hover highlight when dialog closes
+        if (m_mapWidget) {
+            m_mapWidget->setHoveredTerritoryById(0);  // Clear hover effect
         }
+
+        if (dialogResult == QDialog::Accepted) {
+            // Get purchase result
+            PurchaseResult result = purchaseDialog->getPurchaseResult();
+
+            // Debug: Check what cities are marked for destruction
+            qDebug() << "Cities to destroy count:" << result.citiesToDestroy.size();
+            for (City *city : result.citiesToDestroy) {
+                qDebug() << "  - City at" << city->getTerritoryName();
+            }
+
+            // User confirmed in the purchase dialog's internal confirmation
+            // Proceed with purchases and destructions
+            purchaseConfirmed = true;
+
+            // Deduct money from player's wallet
+            if (result.totalCost > 0) {
+                currentPlayer->spendMoney(result.totalCost);
+                qDebug() << "Player" << currentPlayer->getId() << "spent" << result.totalCost << "talents";
+            }
 
         // Create purchased cities
         for (const PurchaseResult::CityPurchase &cityPurchase : result.cities) {
@@ -4442,9 +4300,60 @@ void PlayerInfoWidget::onEndTurnClicked()
             qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
                      << "galleys at" << homeProvince << "facing" << galleyPurchase.seaTerritoryName;
         }
-    }
 
-    delete purchaseDialog;
+        // Destroy selected cities
+        for (City *city : result.citiesToDestroy) {
+            qDebug() << "  Destroying city at" << city->getTerritoryName()
+                     << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
+
+            QString territoryName = city->getTerritoryName();
+            Position cityPosition = city->getPosition();
+
+            // Find and remove all roads connected to this city's territory
+            QList<Road*> roadsAtTerritory = currentPlayer->getRoadsAtTerritory(territoryName);
+            for (Road *road : roadsAtTerritory) {
+                qDebug() << "    Destroying road at" << road->getTerritoryName();
+                currentPlayer->removeRoad(road);
+                delete road;
+            }
+
+            // Also check for roads that have this position as either endpoint
+            QList<Road*> allRoads = currentPlayer->getRoads();
+            for (Road *road : allRoads) {
+                if (road->getFromPosition() == cityPosition || road->getToPosition() == cityPosition) {
+                    qDebug() << "    Destroying connected road from"
+                             << road->getFromPosition().row << "," << road->getFromPosition().col
+                             << " to " << road->getToPosition().row << "," << road->getToPosition().col;
+                    currentPlayer->removeRoad(road);
+                    delete road;
+                }
+            }
+
+            // Remove city and fortification from MapWidget grids
+            if (m_mapWidget) {
+                m_mapWidget->removeCityAt(cityPosition.row, cityPosition.col);
+                m_mapWidget->removeFortificationAt(cityPosition.row, cityPosition.col);
+            }
+
+            // Remove city from player's inventory
+            currentPlayer->removeCity(city);
+
+            // Delete the city object
+            delete city;
+        }
+
+        if (!result.citiesToDestroy.isEmpty()) {
+            qDebug() << "Player" << currentPlayer->getId() << "destroyed" << result.citiesToDestroy.size() << "cities";
+            // Update display after destroying cities
+            updateAllPlayers();
+            if (m_mapWidget) {
+                m_mapWidget->update();
+            }
+        }
+        }  // End if (dialogResult == QDialog::Accepted)
+
+        delete purchaseDialog;
+    }  // End while (!purchaseConfirmed)
 
     // End current player's turn
     currentPlayer->endTurn();

@@ -25,24 +25,29 @@
 #include <QSurfaceFormat>
 
 // Home provinces by player count (from Conquest of the Empire Classic Rules)
-// Order follows clockwise around Mediterranean: Macedonia, Galatia, Mesopotamia, Egyptus, Numidia, Hispania, Italia
+// Six provinces: Hispania, Italia, Macedonia, Numidia, Egyptus, Galatia
+// Turn order follows clockwise around Mediterranean: Macedonia, Galatia, Egyptus, Numidia, Hispania, Italia
+// Provinces are ordered clockwise - first in list goes first
 QStringList getHomeProvincesForPlayerCount(int numPlayers)
 {
     switch (numPlayers) {
         case 2:
-            return {"Hispania", "Egyptus"};
+            // Egyptus goes first (clockwise before Hispania)
+            return {"Egyptus", "Hispania"};
         case 3:
+            // Macedonia, then clockwise: Egyptus, Hispania
             return {"Macedonia", "Egyptus", "Hispania"};
         case 4:
-            return {"Hispania", "Macedonia", "Mesopotamia", "Numidia"};
+            // Ordered clockwise: Macedonia, Galatia, Numidia, Hispania
+            return {"Macedonia", "Galatia", "Numidia", "Hispania"};
         case 5:
-            // Omit Numidia and Galatia
-            return {"Hispania", "Italia", "Macedonia", "Mesopotamia", "Egyptus"};
+            // Ordered clockwise: Macedonia, Galatia, Egyptus, Hispania, Italia
+            return {"Macedonia", "Galatia", "Egyptus", "Hispania", "Italia"};
         case 6:
-            // Omit Mesopotamia
-            return {"Hispania", "Italia", "Macedonia", "Galatia", "Numidia", "Egyptus"};
+            // All six provinces ordered clockwise: Macedonia, Galatia, Egyptus, Numidia, Hispania, Italia
+            return {"Macedonia", "Galatia", "Egyptus", "Numidia", "Hispania", "Italia"};
         default:
-            return {"Hispania", "Egyptus"};  // Default to 2 players
+            return {"Egyptus", "Hispania"};  // Default to 2 players
     }
 }
 
@@ -207,6 +212,11 @@ int main(int argc, char *argv[])
     infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
     infoWidget->setPlayers(players);
     mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget
+    infoWidget->setAttribute(Qt::WA_QuitOnClose, false);  // Don't quit app when this closes
+
+    // Connect mapWidget close to infoWidget close
+    QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
+
     infoWidget->show();
 
     ScoreWindow *scoreWindow = nullptr;
@@ -217,6 +227,11 @@ int main(int argc, char *argv[])
     infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
     infoWidget->setPlayers(players);
     mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget for right-click movement
+    infoWidget->setAttribute(Qt::WA_QuitOnClose, false);  // Don't quit app when this closes
+
+    // Connect mapWidget close to infoWidget close
+    QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
+
     infoWidget->show();
 
     // Create score window (kept for backward compatibility but can be removed)

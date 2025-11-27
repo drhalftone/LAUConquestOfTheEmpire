@@ -1,4 +1,7 @@
 #include "purchasedialog.h"
+#include "building.h"
+#include "gamemapwidget.h"
+#include "mapgraph.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -10,6 +13,7 @@
 #include <QPixmap>
 #include <QPainter>
 #include <QApplication>
+#include <QDialog>
 
 PurchaseDialog::PurchaseDialog(QChar player,
                                int availableMoney,
@@ -22,6 +26,9 @@ PurchaseDialog::PurchaseDialog(QChar player,
                                int availableCavalry,
                                int availableCatapults,
                                int availableGalleys,
+                               const QList<City*> &citiesToDestroy,
+                               GameMapWidget *mapWidget,
+                               const QString &homeProvinceName,
                                QWidget *parent,
                                bool combatUnitsOnly)
     : QDialog(parent)
@@ -37,6 +44,11 @@ PurchaseDialog::PurchaseDialog(QChar player,
     , m_cityOptions(cityOptions)
     , m_fortificationOptions(fortificationOptions)
     , m_galleyOptions(galleyOptions)
+    , m_availableCitiesToDestroy(citiesToDestroy)
+    , m_mapWidget(mapWidget)
+    , m_homeProvinceName(homeProvinceName)
+    , m_troopsGroupBox(nullptr)
+    , m_galleysGroupBox(nullptr)
     , m_combatUnitsOnly(combatUnitsOnly)
 {
     if (combatUnitsOnly) {
@@ -124,6 +136,61 @@ void PurchaseDialog::setupUI()
 
     mainLayout->addSpacing(10);
 
+    // === City Destruction Section (Optional) ===
+    if (!m_availableCitiesToDestroy.isEmpty()) {
+        QGroupBox *destructionGroupBox = new QGroupBox("Destroy Cities (Optional)");
+        QFont groupFont = destructionGroupBox->font();
+        groupFont.setBold(true);
+        groupFont.setPointSize(11);
+        destructionGroupBox->setFont(groupFont);
+        destructionGroupBox->setStyleSheet("QGroupBox { border: 2px solid #d9534f; border-radius: 5px; margin-top: 10px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }");
+
+        QVBoxLayout *destructionLayout = new QVBoxLayout();
+
+        QLabel *destructionInfo = new QLabel("You may destroy your own cities to prevent them from being captured.\nCities marked during your turn are pre-selected.");
+        destructionInfo->setWordWrap(true);
+        destructionInfo->setStyleSheet("font-weight: normal; font-style: italic;");
+        destructionLayout->addWidget(destructionInfo);
+
+        destructionLayout->addSpacing(5);
+
+        // Create checkboxes for each city
+        for (City *city : m_availableCitiesToDestroy) {
+            QString cityType = city->isFortified() ? "Walled City" : "City";
+            QString cityLabel = QString("%1 at %2").arg(cityType).arg(city->getTerritoryName());
+
+            QCheckBox *checkbox = new QCheckBox(cityLabel);
+            checkbox->setChecked(city->isMarkedForDestruction());  // Pre-check if marked
+            checkbox->setStyleSheet("font-weight: normal;");
+
+            // Connect to highlight territory on map (like hover effect)
+            // Only highlight if checkbox is checked (last checked city is highlighted)
+            connect(checkbox, &QCheckBox::toggled, this, [this, city](bool checked) {
+                if (m_mapWidget && m_mapWidget->getGraph()) {
+                    if (checked) {
+                        // Get territory ID and highlight it with hover effect
+                        Territory territory = m_mapWidget->getGraph()->getTerritory(city->getTerritoryName());
+                        if (territory.id > 0) {
+                            m_mapWidget->setHoveredTerritoryById(territory.id);
+                        }
+                    } else {
+                        // Unchecked - clear highlight
+                        m_mapWidget->setHoveredTerritoryById(0);
+                    }
+                }
+                // Check if this affects home city and update troop group boxes
+                onCityDestructionToggled();
+            });
+
+            m_cityDestructionCheckboxes[checkbox] = city;
+            destructionLayout->addWidget(checkbox);
+        }
+
+        destructionGroupBox->setLayout(destructionLayout);
+        mainLayout->addWidget(destructionGroupBox);
+        mainLayout->addSpacing(10);
+    }
+
     // Scroll area for all options
     QScrollArea *scrollArea = new QScrollArea();
     scrollArea->setWidgetResizable(true);
@@ -133,7 +200,7 @@ void PurchaseDialog::setupUI()
     QVBoxLayout *scrollLayout = new QVBoxLayout(scrollWidget);
 
     // ===== TROOPS SECTION =====
-    QGroupBox *troopsGroup = new QGroupBox("Military Units (Placed at Home Province)");
+    m_troopsGroupBox = new QGroupBox("Military Units (Placed at Home Province)");
     QGridLayout *troopsLayout = new QGridLayout();
 
     int row = 0;
@@ -195,8 +262,8 @@ void PurchaseDialog::setupUI()
     connect(m_catapultSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &PurchaseDialog::updateTotals);
     row++;
 
-    troopsGroup->setLayout(troopsLayout);
-    scrollLayout->addWidget(troopsGroup);
+    m_troopsGroupBox->setLayout(troopsLayout);
+    scrollLayout->addWidget(m_troopsGroupBox);
 
     // ===== CITIES SECTION =====
     // Combine new cities and fortifications into one group with two columns
@@ -289,7 +356,7 @@ void PurchaseDialog::setupUI()
     // ===== GALLEYS SECTION =====
     // Skip if in combat units only mode
     if (!m_combatUnitsOnly && !m_galleyOptions.isEmpty()) {
-        QGroupBox *galleysGroup = new QGroupBox(
+        m_galleysGroupBox = new QGroupBox(
             QString("Galleys (Naval Units) - You own %1/%2, %3 available in box")
             .arg(m_currentGalleyCount)
             .arg(MAX_GALLEYS)
@@ -352,8 +419,8 @@ void PurchaseDialog::setupUI()
             galleyRow++;
         }
 
-        galleysGroup->setLayout(galleysLayout);
-        scrollLayout->addWidget(galleysGroup);
+        m_galleysGroupBox->setLayout(galleysLayout);
+        scrollLayout->addWidget(m_galleysGroupBox);
     }
 
     scrollLayout->addStretch();
@@ -384,7 +451,7 @@ void PurchaseDialog::setupUI()
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
 
-    m_purchaseButton = new QPushButton("Complete Purchase");
+    m_purchaseButton = new QPushButton("Complete Action");
     m_purchaseButton->setMinimumHeight(40);
     QFont buttonFont = m_purchaseButton->font();
     buttonFont.setPointSize(11);
@@ -399,16 +466,21 @@ void PurchaseDialog::setupUI()
 
     // Initial update
     updateTotals();
+
+    // Check if home city exists and disable troop/galley groups if it doesn't
+    onCityDestructionToggled();
 }
 
 void PurchaseDialog::updateTotals()
 {
     int totalCost = 0;
 
-    // Calculate troop costs
-    totalCost += m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST);
-    totalCost += m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST);
-    totalCost += m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST);
+    // Calculate troop costs (only if troops group box is enabled)
+    if (!m_troopsGroupBox || m_troopsGroupBox->isEnabled()) {
+        totalCost += m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST);
+        totalCost += m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST);
+        totalCost += m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST);
+    }
 
     // Calculate city costs
     for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
@@ -431,12 +503,14 @@ void PurchaseDialog::updateTotals()
         }
     }
 
-    // Calculate galley costs and check total galley count
+    // Calculate galley costs and check total galley count (only if galleys group box is enabled)
     int totalGalleysPurchasing = 0;
-    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
-        int count = it.key()->value();
-        totalCost += count * getCurrentPrice(GALLEY_BASE_COST);
-        totalGalleysPurchasing += count;
+    if (!m_galleysGroupBox || m_galleysGroupBox->isEnabled()) {
+        for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+            int count = it.key()->value();
+            totalCost += count * getCurrentPrice(GALLEY_BASE_COST);
+            totalGalleysPurchasing += count;
+        }
     }
 
     m_totalSpent = totalCost;
@@ -474,10 +548,16 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
     PurchaseResult result;
     result.totalCost = m_totalSpent;
 
-    // Get troops
-    result.infantry = m_infantrySpinBox->value();
-    result.cavalry = m_cavalrySpinBox->value();
-    result.catapults = m_catapultSpinBox->value();
+    // Get troops (only if troops group box is enabled)
+    if (!m_troopsGroupBox || m_troopsGroupBox->isEnabled()) {
+        result.infantry = m_infantrySpinBox->value();
+        result.cavalry = m_cavalrySpinBox->value();
+        result.catapults = m_catapultSpinBox->value();
+    } else {
+        result.infantry = 0;
+        result.cavalry = 0;
+        result.catapults = 0;
+    }
 
     // Get cities
     for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
@@ -506,14 +586,23 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
         }
     }
 
-    // Get galleys
-    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
-        int count = it.key()->value();
-        if (count > 0) {
-            PurchaseResult::GalleyPurchase galley;
-            galley.seaTerritoryName = it.value().seaTerritoryName;
-            galley.count = count;
-            result.galleys.append(galley);
+    // Get galleys (only if galleys group box is enabled)
+    if (!m_galleysGroupBox || m_galleysGroupBox->isEnabled()) {
+        for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
+            int count = it.key()->value();
+            if (count > 0) {
+                PurchaseResult::GalleyPurchase galley;
+                galley.seaTerritoryName = it.value().seaTerritoryName;
+                galley.count = count;
+                result.galleys.append(galley);
+            }
+        }
+    }
+
+    // Get cities selected for destruction
+    for (auto it = m_cityDestructionCheckboxes.begin(); it != m_cityDestructionCheckboxes.end(); ++it) {
+        if (it.key()->isChecked()) {
+            result.citiesToDestroy.append(it.value());
         }
     }
 
@@ -522,213 +611,238 @@ PurchaseResult PurchaseDialog::getPurchaseResult() const
 
 void PurchaseDialog::onPurchaseClicked()
 {
-    // If nothing was purchased, just accept
-    if (m_totalSpent == 0) {
-        accept();
-        return;
-    }
+    // Build confirmation dialog showing both purchases and destructions
+    PurchaseResult result = getPurchaseResult();
 
-    // Create custom confirmation dialog with icon collages
-    QDialog confirmDialog(this);
-    confirmDialog.setWindowTitle(m_aiAutoMode ? "AI Purchase Summary" : "Confirm Purchase");
-    confirmDialog.setModal(true);
+    bool hasPurchases = (result.infantry > 0 || result.cavalry > 0 || result.catapults > 0 ||
+                        !result.cities.isEmpty() || !result.fortifications.isEmpty() || !result.galleys.isEmpty());
+    bool hasDestructions = !result.citiesToDestroy.isEmpty();
 
-    // In AI mode, auto-close after delay so observers can see
-    if (m_aiAutoMode) {
-        QTimer::singleShot(1500, &confirmDialog, &QDialog::accept);
-    }
+    if (hasPurchases || hasDestructions) {
+        // Create custom confirmation dialog
+        QDialog confirmDialog(this);
+        confirmDialog.setWindowTitle("Confirm Turn End");
+        confirmDialog.setModal(true);
 
-    QVBoxLayout *mainLayout = new QVBoxLayout(&confirmDialog);
+        QHBoxLayout *topLayout = new QHBoxLayout(&confirmDialog);
 
-    // Title
-    QLabel *titleLabel = new QLabel(QString("Player %1 - Purchase Summary").arg(m_player));
-    QFont titleFont = titleLabel->font();
-    titleFont.setPointSize(14);
-    titleFont.setBold(true);
-    titleLabel->setFont(titleFont);
-    titleLabel->setAlignment(Qt::AlignCenter);
-    mainLayout->addWidget(titleLabel);
-
-    mainLayout->addSpacing(10);
-
-    // Add troop collages
-    if (m_infantrySpinBox->value() > 0) {
-        QHBoxLayout *infantryRow = new QHBoxLayout();
-        QLabel *infantryCollage = new QLabel();
-        infantryCollage->setPixmap(createIconCollage(":/images/infantryIcon.png", m_infantrySpinBox->value()));
-        infantryRow->addWidget(infantryCollage);
-        infantryRow->addWidget(new QLabel(QString("%1 Infantry - %2 talents")
-            .arg(m_infantrySpinBox->value())
-            .arg(m_infantrySpinBox->value() * getCurrentPrice(INFANTRY_BASE_COST))));
-        infantryRow->addStretch();
-        mainLayout->addLayout(infantryRow);
-    }
-
-    if (m_cavalrySpinBox->value() > 0) {
-        QHBoxLayout *cavalryRow = new QHBoxLayout();
-        QLabel *cavalryCollage = new QLabel();
-        cavalryCollage->setPixmap(createIconCollage(":/images/cavalryIcon.png", m_cavalrySpinBox->value()));
-        cavalryRow->addWidget(cavalryCollage);
-        cavalryRow->addWidget(new QLabel(QString("%1 Cavalry - %2 talents")
-            .arg(m_cavalrySpinBox->value())
-            .arg(m_cavalrySpinBox->value() * getCurrentPrice(CAVALRY_BASE_COST))));
-        cavalryRow->addStretch();
-        mainLayout->addLayout(cavalryRow);
-    }
-
-    if (m_catapultSpinBox->value() > 0) {
-        QHBoxLayout *catapultRow = new QHBoxLayout();
-        QLabel *catapultCollage = new QLabel();
-        catapultCollage->setPixmap(createIconCollage(":/images/catapultIcon.png", m_catapultSpinBox->value()));
-        catapultRow->addWidget(catapultCollage);
-        catapultRow->addWidget(new QLabel(QString("%1 Catapults - %2 talents")
-            .arg(m_catapultSpinBox->value())
-            .arg(m_catapultSpinBox->value() * getCurrentPrice(CATAPULT_BASE_COST))));
-        catapultRow->addStretch();
-        mainLayout->addLayout(catapultRow);
-    }
-
-    // Count cities and show collage
-    int cityCount = 0;
-    int fortifiedCityCount = 0;
-    QStringList cityDetails;
-    QStringList fortifiedCityDetails;
-
-    for (auto it = m_cityCheckboxes.begin(); it != m_cityCheckboxes.end(); ++it) {
-        if (it.key()->isChecked()) {
-            cityCount++;
-            cityDetails.append(it.value().territoryName);
+        // Add icon on the left (burning city if destroying, otherwise normal)
+        QLabel *iconLabel = new QLabel();
+        QPixmap iconPixmap;
+        if (hasDestructions) {
+            iconPixmap = QPixmap(":/images/fireCityIcon.png");
+        } else {
+            iconPixmap = QPixmap(":/images/cityIcon.png");
         }
-    }
+        iconLabel->setPixmap(iconPixmap.scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        iconLabel->setAlignment(Qt::AlignTop);
+        topLayout->addWidget(iconLabel);
 
-    for (auto it = m_fortifiedCityCheckboxes.begin(); it != m_fortifiedCityCheckboxes.end(); ++it) {
-        if (it.key()->isChecked()) {
-            fortifiedCityCount++;
-            fortifiedCityDetails.append(it.value().territoryName);
+        topLayout->addSpacing(20);
+
+        // Main content on the right
+        QVBoxLayout *mainLayout = new QVBoxLayout();
+
+        QLabel *headerLabel = new QLabel(QString("Player %1 - Turn Summary").arg(m_player));
+        headerLabel->setStyleSheet("font-weight: bold; font-size: 14pt;");
+        mainLayout->addWidget(headerLabel);
+
+        mainLayout->addSpacing(10);
+
+        // Build purchase summary with icons
+        if (hasPurchases) {
+            QLabel *purchaseHeader = new QLabel("<b>Purchases:</b>");
+            mainLayout->addWidget(purchaseHeader);
+            mainLayout->addSpacing(5);
+
+            // Create a grid layout for purchases with icons
+            QGridLayout *purchaseGrid = new QGridLayout();
+            int row = 0;
+
+            // Infantry
+            if (result.infantry > 0) {
+                QLabel *infantryIcon = new QLabel();
+                infantryIcon->setPixmap(QPixmap(":/images/infantryIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                purchaseGrid->addWidget(infantryIcon, row, 0);
+                QLabel *infantryLabel = new QLabel(QString("%1 Infantry").arg(result.infantry));
+                purchaseGrid->addWidget(infantryLabel, row, 1);
+                row++;
+            }
+
+            // Cavalry
+            if (result.cavalry > 0) {
+                QLabel *cavalryIcon = new QLabel();
+                cavalryIcon->setPixmap(QPixmap(":/images/cavalryIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                purchaseGrid->addWidget(cavalryIcon, row, 0);
+                QLabel *cavalryLabel = new QLabel(QString("%1 Cavalry").arg(result.cavalry));
+                purchaseGrid->addWidget(cavalryLabel, row, 1);
+                row++;
+            }
+
+            // Catapults
+            if (result.catapults > 0) {
+                QLabel *catapultIcon = new QLabel();
+                catapultIcon->setPixmap(QPixmap(":/images/catapultIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                purchaseGrid->addWidget(catapultIcon, row, 0);
+                QLabel *catapultLabel = new QLabel(QString("%1 Catapult%2").arg(result.catapults).arg(result.catapults > 1 ? "s" : ""));
+                purchaseGrid->addWidget(catapultLabel, row, 1);
+                row++;
+            }
+
+            // Cities
+            for (const auto &city : result.cities) {
+                QLabel *cityIcon = new QLabel();
+                if (city.fortified) {
+                    // Show both city and wall icons for fortified cities
+                    QPixmap cityPixmap = QPixmap(":/images/newCityIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    QPixmap wallPixmap = QPixmap(":/images/wallIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    QPixmap combined(48, 24);
+                    combined.fill(Qt::transparent);
+                    QPainter painter(&combined);
+                    painter.drawPixmap(0, 0, cityPixmap);
+                    painter.drawPixmap(24, 0, wallPixmap);
+                    cityIcon->setPixmap(combined);
+                } else {
+                    cityIcon->setPixmap(QPixmap(":/images/newCityIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                }
+                purchaseGrid->addWidget(cityIcon, row, 0);
+                QString cityType = city.fortified ? "Fortified City" : "City";
+                QLabel *cityLabel = new QLabel(QString("%1 at %2").arg(cityType).arg(city.territoryName));
+                purchaseGrid->addWidget(cityLabel, row, 1);
+                row++;
+            }
+
+            // Fortifications
+            for (const QString &fort : result.fortifications) {
+                QLabel *wallIcon = new QLabel();
+                wallIcon->setPixmap(QPixmap(":/images/wallIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                purchaseGrid->addWidget(wallIcon, row, 0);
+                QLabel *fortLabel = new QLabel(QString("Fortification at %1").arg(fort));
+                purchaseGrid->addWidget(fortLabel, row, 1);
+                row++;
+            }
+
+            // Galleys
+            for (const auto &galley : result.galleys) {
+                QLabel *galleyIcon = new QLabel();
+                galleyIcon->setPixmap(QPixmap(":/images/galleyIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                purchaseGrid->addWidget(galleyIcon, row, 0);
+                QLabel *galleyLabel = new QLabel(QString("%1 Galley%2 at %3").arg(galley.count).arg(galley.count > 1 ? "s" : "").arg(galley.seaTerritoryName));
+                purchaseGrid->addWidget(galleyLabel, row, 1);
+                row++;
+            }
+
+            mainLayout->addLayout(purchaseGrid);
+            mainLayout->addSpacing(10);
+
+            QLabel *costLabel = new QLabel(QString("<b>Total Cost: %1 talents</b>").arg(result.totalCost));
+            mainLayout->addWidget(costLabel);
         }
-    }
 
-    if (cityCount > 0) {
-        QHBoxLayout *cityRow = new QHBoxLayout();
-        QLabel *cityCollage = new QLabel();
-        cityCollage->setPixmap(createIconCollage(":/images/newCityIcon.png", cityCount));
-        cityRow->addWidget(cityCollage);
-        cityRow->addWidget(new QLabel(QString("%1 City(s) at %2 - %3 talents")
-            .arg(cityCount)
-            .arg(cityDetails.join(", "))
-            .arg(cityCount * getCurrentPrice(CITY_BASE_COST))));
-        cityRow->addStretch();
-        mainLayout->addLayout(cityRow);
-    }
+        if (hasDestructions) {
+            if (hasPurchases) {
+                mainLayout->addSpacing(15);  // Extra spacing between sections
+            }
 
-    if (fortifiedCityCount > 0) {
-        QHBoxLayout *fortCityRow = new QHBoxLayout();
+            QLabel *destroyHeader = new QLabel("<b><span style='color: #d9534f;'>Cities to Destroy:</span></b>");
+            mainLayout->addWidget(destroyHeader);
+            mainLayout->addSpacing(5);
 
-        // City icon
-        QLabel *cityCollage = new QLabel();
-        cityCollage->setPixmap(createIconCollage(":/images/newCityIcon.png", fortifiedCityCount));
-        fortCityRow->addWidget(cityCollage);
+            // Create a grid layout for cities to destroy with burning city icons
+            QGridLayout *destroyGrid = new QGridLayout();
+            int row = 0;
 
-        // Wall icon
-        QLabel *wallCollage = new QLabel();
-        wallCollage->setPixmap(createIconCollage(":/images/wallIcon.png", fortifiedCityCount));
-        fortCityRow->addWidget(wallCollage);
+            for (City *city : result.citiesToDestroy) {
+                QLabel *burnIcon = new QLabel();
+                burnIcon->setPixmap(QPixmap(":/images/fireCityIcon.png").scaled(24, 24, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                destroyGrid->addWidget(burnIcon, row, 0);
 
-        fortCityRow->addWidget(new QLabel(QString("%1 Fortified City(s) at %2 - %3 talents")
-            .arg(fortifiedCityCount)
-            .arg(fortifiedCityDetails.join(", "))
-            .arg(fortifiedCityCount * getCurrentPrice(CITY_BASE_COST + FORTIFICATION_BASE_COST))));
-        fortCityRow->addStretch();
-        mainLayout->addLayout(fortCityRow);
-    }
+                QString cityType = city->isFortified() ? "Walled City" : "City";
+                QLabel *cityLabel = new QLabel(QString("<span style='color: #d9534f;'>%1 at %2</span>")
+                    .arg(cityType)
+                    .arg(city->getTerritoryName()));
+                destroyGrid->addWidget(cityLabel, row, 1);
+                row++;
+            }
 
-    // Count fortifications (walls added to existing cities)
-    int fortificationCount = 0;
-    QStringList fortificationDetails;
-    for (auto it = m_fortificationCheckboxes.begin(); it != m_fortificationCheckboxes.end(); ++it) {
-        if (it.key()->isChecked()) {
-            fortificationCount++;
-            fortificationDetails.append(it.value().territoryName);
+            mainLayout->addLayout(destroyGrid);
         }
-    }
 
-    if (fortificationCount > 0) {
-        QHBoxLayout *fortRow = new QHBoxLayout();
-        QLabel *wallCollage = new QLabel();
-        wallCollage->setPixmap(createIconCollage(":/images/wallIcon.png", fortificationCount));
-        fortRow->addWidget(wallCollage);
-        fortRow->addWidget(new QLabel(QString("%1 Fortification(s) at %2 - %3 talents")
-            .arg(fortificationCount)
-            .arg(fortificationDetails.join(", "))
-            .arg(fortificationCount * getCurrentPrice(FORTIFICATION_BASE_COST))));
-        fortRow->addStretch();
-        mainLayout->addLayout(fortRow);
-    }
+        mainLayout->addSpacing(20);
 
-    // Count galleys and show collage
-    int totalGalleys = 0;
-    QStringList galleyDetails;
-    for (auto it = m_galleySpinboxes.begin(); it != m_galleySpinboxes.end(); ++it) {
-        int count = it.key()->value();
-        if (count > 0) {
-            totalGalleys += count;
-            galleyDetails.append(QString("%1 at %2 %3")
-                .arg(count)
-                .arg(it.value().direction)
-                .arg(it.value().seaTerritoryName));
-        }
-    }
+        // Buttons
+        QHBoxLayout *buttonLayout = new QHBoxLayout();
+        buttonLayout->addStretch();
 
-    if (totalGalleys > 0) {
-        QHBoxLayout *galleyRow = new QHBoxLayout();
-        QLabel *galleyCollage = new QLabel();
-        galleyCollage->setPixmap(createIconCollage(":/images/galleyIcon.png", totalGalleys));
-        galleyRow->addWidget(galleyCollage);
-        galleyRow->addWidget(new QLabel(QString("%1 Galley(s): %2 - %3 talents")
-            .arg(totalGalleys)
-            .arg(galleyDetails.join(", "))
-            .arg(totalGalleys * getCurrentPrice(GALLEY_BASE_COST))));
-        galleyRow->addStretch();
-        mainLayout->addLayout(galleyRow);
-    }
-
-    mainLayout->addSpacing(15);
-
-    // Cost summary
-    QLabel *costLabel = new QLabel(QString("Total Cost: %1 talents\nRemaining: %2 talents")
-        .arg(m_totalSpent)
-        .arg(m_availableMoney - m_totalSpent));
-    QFont costFont = costLabel->font();
-    costFont.setBold(true);
-    costLabel->setFont(costFont);
-    mainLayout->addWidget(costLabel);
-
-    mainLayout->addSpacing(10);
-
-    QLabel *questionLabel = new QLabel(m_aiAutoMode ?
-        "AI has completed purchasing." :
-        "Are you sure you want to complete this purchase?");
-    mainLayout->addWidget(questionLabel);
-
-    // Buttons
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    QPushButton *yesButton = new QPushButton(m_aiAutoMode ? "OK" : "Yes");
-    connect(yesButton, &QPushButton::clicked, &confirmDialog, &QDialog::accept);
-    buttonLayout->addStretch();
-    buttonLayout->addWidget(yesButton);
-
-    if (!m_aiAutoMode) {
-        QPushButton *noButton = new QPushButton("No");
+        QPushButton *noButton = new QPushButton("No - Go Back");
+        noButton->setMinimumHeight(35);
         connect(noButton, &QPushButton::clicked, &confirmDialog, &QDialog::reject);
         buttonLayout->addWidget(noButton);
+
+        buttonLayout->addSpacing(10);
+
+        QPushButton *yesButton = new QPushButton("Yes - End Turn");
+        yesButton->setMinimumHeight(35);
+        yesButton->setDefault(true);
+        QFont yesFont = yesButton->font();
+        yesFont.setBold(true);
+        yesButton->setFont(yesFont);
+        yesButton->setStyleSheet("background-color: #5cb85c; color: white;");
+        connect(yesButton, &QPushButton::clicked, &confirmDialog, &QDialog::accept);
+        buttonLayout->addWidget(yesButton);
+
+        buttonLayout->addStretch();
+        mainLayout->addLayout(buttonLayout);
+
+        topLayout->addLayout(mainLayout);
+
+        // Show confirmation and only accept purchase dialog if user confirms
+        if (confirmDialog.exec() != QDialog::Accepted) {
+            // User declined - go back to purchase dialog
+            return;  // Don't call accept()
+        }
     }
 
-    buttonLayout->addStretch();
-    mainLayout->addLayout(buttonLayout);
+    // User confirmed or nothing to confirm - accept the purchase dialog
+    accept();
+}
 
-    if (confirmDialog.exec() == QDialog::Accepted) {
-        accept();
+void PurchaseDialog::onCityDestructionToggled()
+{
+    // Check if home city exists or is being destroyed
+    bool hasHomeCity = false;
+    bool destroyingHomeCity = false;
+
+    // Check if any of the available cities to destroy is the home city
+    for (City *city : m_availableCitiesToDestroy) {
+        if (city->getTerritoryName() == m_homeProvinceName) {
+            hasHomeCity = true;
+            // Check if this home city is checked for destruction
+            for (auto it = m_cityDestructionCheckboxes.begin(); it != m_cityDestructionCheckboxes.end(); ++it) {
+                if (it.value() == city && it.key()->isChecked()) {
+                    destroyingHomeCity = true;
+                    break;
+                }
+            }
+            break;
+        }
     }
+
+    // Determine if troops/galleys should be disabled
+    bool shouldDisable = !hasHomeCity || destroyingHomeCity;
+
+    // Disable or enable the troops group box (preserve spinbox values)
+    if (m_troopsGroupBox) {
+        m_troopsGroupBox->setEnabled(!shouldDisable);
+    }
+
+    // Disable or enable the galleys group box (preserve spinbox values)
+    if (m_galleysGroupBox) {
+        m_galleysGroupBox->setEnabled(!shouldDisable);
+    }
+
+    // Update totals after disabling/enabling
+    updateTotals();
 }
 
 // =============================================================================

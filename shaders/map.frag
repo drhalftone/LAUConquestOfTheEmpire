@@ -5,7 +5,8 @@ out vec4 fragColor;
 uniform sampler2D mapTexture;
 uniform sampler2D indexTexture;
 uniform sampler2D ownershipTexture;  // 60 rows x 4 cols, RGB - row=territory ID, col 0=border color
-uniform int highlightedTerritory;
+uniform int highlightedTerritory;  // Hovered territory
+uniform int selectedTerritory;     // Selected territory (e.g., for city destruction)
 uniform int borderRadius;
 uniform vec2 mapSize;  // Map dimensions in pixels for neighbor sampling
 
@@ -52,8 +53,14 @@ void main() {
 
     // Apply highlighting, border, and interior tint
     if (drawBorder) {
-        // Draw border with solid player color
-        fragColor = vec4(borderColor, 1.0);
+        // Check if this is the selected territory - if so, make border thicker/brighter
+        if (selectedTerritory > 0 && territoryId == selectedTerritory) {
+            // Bright orange/red border for selected territory
+            fragColor = vec4(1.0, 0.3, 0.0, 1.0);
+        } else {
+            // Draw border with solid player color
+            fragColor = vec4(borderColor, 1.0);
+        }
     } else if (territoryId > 0) {
         // Check if this territory is owned (for interior tinting)
         vec2 ownershipCoord = vec2(0.5 / 4.0, (float(territoryId) - 0.5) / 60.0);

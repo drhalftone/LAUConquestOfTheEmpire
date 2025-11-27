@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QGroupBox>
 #include <QMap>
 #include <QString>
 #include <QTimer>
@@ -26,6 +27,10 @@ struct GalleyPlacementOption {
     QString seaTerritoryName;
     QString direction;  // "North", "South", "East", "West" (for display only)
 };
+
+// Forward declaration
+class City;
+class GameMapWidget;
 
 // Structure to return what was purchased
 struct PurchaseResult {
@@ -51,6 +56,9 @@ struct PurchaseResult {
     };
     QList<GalleyPurchase> galleys;
 
+    // Cities to destroy
+    QList<City*> citiesToDestroy;
+
     int totalCost;
 };
 
@@ -70,6 +78,9 @@ public:
                            int availableCavalry,
                            int availableCatapults,
                            int availableGalleys,
+                           const QList<City*> &citiesToDestroy,
+                           GameMapWidget *mapWidget,
+                           const QString &homeProvinceName,
                            QWidget *parent = nullptr,
                            bool combatUnitsOnly = false);
 
@@ -95,6 +106,7 @@ public:
 private slots:
     void updateTotals();
     void onPurchaseClicked();
+    void onCityDestructionToggled();
 
 private:
     void setupUI();
@@ -126,6 +138,9 @@ private:
     QList<CityPlacementOption> m_cityOptions;
     QList<FortificationOption> m_fortificationOptions;
     QList<GalleyPlacementOption> m_galleyOptions;
+    QList<City*> m_availableCitiesToDestroy;
+    GameMapWidget *m_mapWidget;
+    QString m_homeProvinceName;
 
     // Troop spinboxes
     QSpinBox *m_infantrySpinBox;
@@ -142,6 +157,9 @@ private:
     // Galley spinboxes (maps spinbox to sea border option)
     QMap<QSpinBox*, GalleyPlacementOption> m_galleySpinboxes;
 
+    // City destruction checkboxes (maps checkbox to city object)
+    QMap<QCheckBox*, City*> m_cityDestructionCheckboxes;
+
     // Summary labels
     QLabel *m_availableLabel;
     QLabel *m_spendingLabel;
@@ -149,6 +167,10 @@ private:
 
     // Purchase button
     QPushButton *m_purchaseButton;
+
+    // Group boxes that need to be disabled if home city is destroyed
+    QGroupBox *m_troopsGroupBox;
+    QGroupBox *m_galleysGroupBox;
 
     // AI mode flag - skip confirmation dialog
     bool m_aiAutoMode = false;

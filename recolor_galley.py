@@ -10,14 +10,14 @@ from PIL import Image
 import colorsys
 import numpy as np
 
-# Player colors (matching Qt code in gamemapwidget.cpp)
+# Player colors (matching Qt code in gamemapwidget.cpp and player.cpp)
 PLAYER_COLORS = {
-    'red': (255, 0, 0),
-    'blue': (0, 0, 255),
-    'green': (0, 200, 0),
-    'yellow': (255, 255, 0),
-    'orange': (255, 165, 0),
-    'black': (128, 128, 128),  # Gray for visibility
+    'red': (255, 0, 0),      # Player A
+    'green': (0, 255, 0),    # Player B
+    'blue': (0, 0, 255),     # Player C
+    'yellow': (255, 255, 0), # Player D
+    'gray': (128, 128, 128), # Player E (Black would be invisible)
+    'orange': (255, 165, 0), # Player F
 }
 
 def rgb_to_hsv(r, g, b):
