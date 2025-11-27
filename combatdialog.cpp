@@ -159,6 +159,14 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     connect(m_retreatButton, &QPushButton::clicked, this, &CombatDialog::onRetreatClicked);
     buttonLayout->addWidget(m_retreatButton);
 
+    // Disable retreat button in naval combat
+    if (m_mapWidget && m_mapWidget->getGraph()) {
+        if (m_mapWidget->getGraph()->isSeaTerritory(m_combatTerritoryName)) {
+            m_retreatButton->setEnabled(false);
+            m_retreatButton->setToolTip("Retreats are not allowed in naval combat");
+        }
+    }
+
     mainLayout->addLayout(buttonLayout);
 
     // Update advantage display
@@ -1010,15 +1018,15 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         GalleyPiece *galley = m_defendingGalleyButtons[clickedButton];
         if (!galley) return;
 
-        // Galley combat: need 4+ to hit (no advantage modifier)
-        bool isHit = (dieValue >= 4);
+        // Galley combat: need 3+ to hit (no advantage modifier)
+        bool isHit = (dieValue >= 3);
 
         QString resultMessage;
         if (isHit) {
-            resultMessage = QString("SUNK! Roll: %1 (needed 4+)\n\nDefending galley (ID: %2) has been destroyed.")
+            resultMessage = QString("SUNK! Roll: %1 (needed 3+)\n\nDefending galley (ID: %2) has been destroyed.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         } else {
-            resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nDefending galley (ID: %2) survived.")
+            resultMessage = QString("MISS! Roll: %1 (needed 3+)\n\nDefending galley (ID: %2) survived.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         }
         showCombatResult("Naval Combat Result", resultMessage);
@@ -1051,15 +1059,15 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         GalleyPiece *galley = m_attackingGalleyButtons[clickedButton];
         if (!galley) return;
 
-        // Galley combat: need 4+ to hit (no advantage modifier)
-        bool isHit = (dieValue >= 4);
+        // Galley combat: need 3+ to hit (no advantage modifier)
+        bool isHit = (dieValue >= 3);
 
         QString resultMessage;
         if (isHit) {
-            resultMessage = QString("SUNK! Roll: %1 (needed 4+)\n\nAttacking galley (ID: %2) has been destroyed.")
+            resultMessage = QString("SUNK! Roll: %1 (needed 3+)\n\nAttacking galley (ID: %2) has been destroyed.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         } else {
-            resultMessage = QString("MISS! Roll: %1 (needed 4+)\n\nAttacking galley (ID: %2) survived.")
+            resultMessage = QString("MISS! Roll: %1 (needed 3+)\n\nAttacking galley (ID: %2) survived.")
                                 .arg(dieValue).arg(galley->getSerialNumber());
         }
         showCombatResult("Naval Combat Result", resultMessage);
@@ -1691,6 +1699,27 @@ bool CombatDialog::checkCombatEnd()
         // Update roads after territory ownership changed
         m_mapWidget->updateRoads();
 
+        // In land combat, destroy all docked galleys belonging to the losing side (defender)
+        Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
+        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
+        if (!isSea) {
+            // This is land combat - destroy all defending galleys at this location
+            QList<GalleyPiece*> defeatedGalleys;
+            for (GalleyPiece *galley : m_defendingPlayer->getGalleys()) {
+                if (galley && galley->getTerritoryName() == m_combatTerritoryName) {
+                    defeatedGalleys.append(galley);
+                }
+            }
+            for (GalleyPiece *galley : defeatedGalleys) {
+                qDebug() << "Destroying docked galley" << galley->getSerialNumber() << "- losing side in land combat";
+                m_defendingPlayer->removeGalley(galley);
+                galley->deleteLater();
+            }
+            if (!defeatedGalleys.isEmpty()) {
+                qDebug() << "Destroyed" << defeatedGalleys.size() << "docked galleys";
+            }
+        }
+
         m_combatResult = CombatResult::AttackerWins;
         accept();
         return true;
@@ -1962,6 +1991,27 @@ bool CombatDialog::checkCombatEnd()
         if (m_attackingPlayer->ownsTerritory(m_combatTerritoryName)) {
             qDebug() << "Unclaiming territory" << m_combatTerritoryName << "from defeated attacker" << m_attackingPlayer->getId();
             m_attackingPlayer->unclaimTerritory(m_combatTerritoryName);
+        }
+
+        // In land combat, destroy all docked galleys belonging to the losing side (attacker)
+        Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
+        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
+        if (!isSea) {
+            // This is land combat - destroy all attacking galleys at this location
+            QList<GalleyPiece*> defeatedGalleys;
+            for (GalleyPiece *galley : m_attackingPlayer->getGalleys()) {
+                if (galley && galley->getTerritoryName() == m_combatTerritoryName) {
+                    defeatedGalleys.append(galley);
+                }
+            }
+            for (GalleyPiece *galley : defeatedGalleys) {
+                qDebug() << "Destroying docked galley" << galley->getSerialNumber() << "- losing side in land combat";
+                m_attackingPlayer->removeGalley(galley);
+                galley->deleteLater();
+            }
+            if (!defeatedGalleys.isEmpty()) {
+                qDebug() << "Destroyed" << defeatedGalleys.size() << "docked galleys";
+            }
         }
 
         QMessageBox defenderWinsMsg(this);
