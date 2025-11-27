@@ -1,0 +1,76 @@
+Land ID,Land Name,Sea ID,Sea Name,Beach X,Beach Y
+1,Britannia,39,Oceanus Britannicus,536,200
+2,Belgica,39,Oceanus Britannicus,967,274
+8,Hispania,52,Mare Baliaricum,800,1305
+8,Hispania,55,Mare Cantabricum,429,941
+8,Hispania,56,Mare Narbo,800,1305
+9,Cilicia,34,Mare Rhodus,3172,1175
+10,Achaia,45,Mare Epirus,2307,1343
+10,Achaia,51,Mare Aegaeum,2307,1343
+12,Palestina,49,Mare Pelusium,3327,1515
+14,Tingitana,35,Mare Hispalis,502,1677
+14,Tingitana,52,Mare Baliaricum,502,1677
+16,Narbonensis,56,Mare Narbo,1140,972
+17,Macedonia,45,Mare Epirus,2025,1050
+17,Macedonia,51,Mare Aegaeum,2310,1124
+18,Galatia,34,Mare Rhodus,2847,1307
+19,Neopolis,6,Mare Adriatico,1723,1080
+19,Neopolis,33,Mare Tyrrhenum,1723,1080
+19,Neopolis,45,Mare Epirus,1723,1080
+20,Syria,34,Mare Rhodus,3348,1320
+20,Syria,49,Mare Pelusium,3348,1320
+21,Sardinia,33,Mare Tyrrhenum,1368,1206
+21,Sardinia,48,Mare Numidia,1368,1206
+21,Sardinia,56,Mare Narbo,1368,1206
+22,Cyprus,11,Mare Alexandria,3081,1332
+22,Cyprus,34,Mare Rhodus,3081,1332
+22,Cyprus,49,Mare Pelusium,3081,1332
+23,Baleares,48,Mare Numidia,1013,1307
+23,Baleares,52,Mare Baliaricum,1013,1307
+23,Baleares,56,Mare Narbo,1013,1307
+24,Sicilia,13,Mare Sabrata,1765,1415
+24,Sicilia,33,Mare Tyrrhenum,1765,1415
+24,Sicilia,45,Mare Epirus,1765,1415
+24,Sicilia,48,Mare Numidia,1765,1415
+24,Sicilia,59,Mare Libycum,1765,1415
+25,Creta,11,Mare Alexandria,2417,1457
+25,Creta,34,Mare Rhodus,2417,1457
+25,Creta,45,Mare Epirus,2417,1457
+25,Creta,51,Mare Aegaeum,2417,1457
+25,Creta,59,Mare Libycum,2417,1457
+26,Cyrenaica,11,Mare Alexandria,2435,1718
+26,Cyrenaica,59,Mare Libycum,2435,1718
+28,Lugudunensis,39,Oceanus Britannicus,549,485
+28,Lugudunensis,50,Oceanus Atlanticus,549,485
+29,Armenia,40,Mare Amisus,3462,631
+30,Dalmatia,6,Mare Adriatico,1877,934
+30,Dalmatia,45,Mare Epirus,1877,934
+31,Pontus Et Bithynia,5,Mare Pontus Euxinus,2889,741
+31,Pontus Et Bithynia,40,Mare Amisus,2889,741
+32,Thracia,5,Mare Pontus Euxinus,2521,941
+32,Thracia,51,Mare Aegaeum,2521,941
+36,Caesariensis,48,Mare Numidia,1028,1523
+36,Caesariensis,52,Mare Baliaricum,1028,1523
+37,Egyptus,11,Mare Alexandria,3109,1643
+37,Egyptus,49,Mare Pelusium,3109,1643
+38,Africa Procons,13,Mare Sabrata,1814,1729
+38,Africa Procons,59,Mare Libycum,1814,1729
+41,Moesia,5,Mare Pontus Euxinus,2499,636
+42,Aquitania,50,Oceanus Atlanticus,743,736
+42,Aquitania,55,Mare Cantabricum,743,736
+43,Italia,6,Mare Adriatico,1569,756
+43,Italia,33,Mare Tyrrhenum,1365,869
+43,Italia,56,Mare Narbo,1365,869
+44,Asia,5,Mare Pontus Euxinus,2657,1013
+44,Asia,34,Mare Rhodus,2657,1013
+44,Asia,51,Mare Aegaeum,2657,1013
+46,Corsica,33,Mare Tyrrhenum,1374,1053
+46,Corsica,56,Mare Narbo,1374,1053
+47,Lusitania,35,Mare Hispalis,253,1201
+47,Lusitania,55,Mare Cantabricum,253,1201
+53,Germania,39,Oceanus Britannicus,1073,157
+54,Cappadocia,40,Mare Amisus,3251,708
+58,Baetica,35,Mare Hispalis,524,1575
+58,Baetica,52,Mare Baliaricum,524,1575
+60,Numidia,13,Mare Sabrata,1561,1483
+60,Numidia,48,Mare Numidia,1561,1483
