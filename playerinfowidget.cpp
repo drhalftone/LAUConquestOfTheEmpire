@@ -162,12 +162,7 @@ QGroupBox* PlayerInfoWidget::createBasicInfoSection(Player *player)
     // Home Province
     layout->addWidget(new QLabel("<b>Home Province:</b>"), 2, 0);
     QString homeName = player->getHomeProvinceName();
-    Position homePos = m_mapWidget->territoryNameToPosition(homeName);  // Convert for display
-    QString homeText = QString("%1 [Row: %2, Col: %3]")
-                       .arg(homeName)
-                       .arg(homePos.row)
-                       .arg(homePos.col);
-    layout->addWidget(new QLabel(homeText), 2, 1);
+    layout->addWidget(new QLabel(homeName), 2, 1);
 
     // Home Fortified City
     layout->addWidget(new QLabel("<b>Home City:</b>"), 3, 0);
@@ -289,12 +284,6 @@ QGroupBox* PlayerInfoWidget::createTerritoriesSection(Player *player)
                 if (city->isMarkedForDestruction()) {
                     itemText += " (MARKED FOR DESTRUCTION)";
                 }
-            }
-
-            // Add roads if any
-            QList<Road*> roads = player->getRoadsAtTerritory(territoryName);
-            if (!roads.isEmpty()) {
-                itemText += QString(" [%1 road(s)]").arg(roads.size());
             }
 
             // Create a label for this territory
@@ -710,6 +699,9 @@ void PlayerInfoWidget::updatePlayerInfo(Player *player)
 
 void PlayerInfoWidget::updateAllPlayers()
 {
+    // Save current tab index to restore after all updates
+    int currentTabIndex = m_tabWidget->currentIndex();
+
     for (int i = 0; i < m_players.size(); ++i) {
         Player *player = m_players[i];
         updatePlayerInfo(player);
@@ -721,6 +713,9 @@ void PlayerInfoWidget::updateAllPlayers()
             tabWidget->setEnabled(player->isMyTurn());
         }
     }
+
+    // Restore the tab index (prevents tab jumping during updates)
+    m_tabWidget->setCurrentIndex(currentTabIndex);
 }
 
 void PlayerInfoWidget::showCaesarContextMenu(CaesarPiece *piece, const QPoint &pos)
@@ -1077,6 +1072,10 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
     QMenu menu(this);
     menu.setTitle(QString("Territory: %1").arg(territoryName));
 
+    // Track actions to territory names for hover highlighting
+    QMap<QAction*, QString> actionToTerritory;
+    QList<QMenu*> leaderSubmenus;
+
     // Add each leader with their movement submenu
     for (GamePiece *leader : leaders) {
         QString leaderName;
@@ -1097,6 +1096,7 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
 
         // Create submenu for this leader's movement options
         QMenu *leaderSubmenu = menu.addMenu(leaderIcon, leaderName);
+        leaderSubmenus.append(leaderSubmenu);
 
         // Check if leader is on a galley (for disembarking)
         bool isOnGalley = leader->isOnGalley();
@@ -1113,72 +1113,59 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
 
         // Get neighbors using MapGraph
         QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
+        qDebug() << "Movement menu: territory=" << territoryName << "neighbors=" << neighbors;
 
-        // Get territories connected by roads from this territory using BFS to find all reachable territories
-        QList<QString> roadConnectedTerritories;
-        QSet<QString> visited;
-        QList<QString> toVisit;
+        // Get territories connected by roads from this territory (computed on-the-fly)
+        QStringList roadConnectedTerritories = m_mapWidget->getGraph()->getRoadConnectedTerritories(territoryName, player);
+        qDebug() << "Movement menu: roadConnectedTerritories=" << roadConnectedTerritories;
 
-        visited.insert(territoryName);
-        toVisit.append(territoryName);
-
-        // BFS through road network (with safety limit)
-        int maxIterations = 100;  // Safety limit to prevent infinite loops
-        int iterations = 0;
-        while (!toVisit.isEmpty() && iterations < maxIterations) {
-            iterations++;
-            QString currentTerritory = toVisit.takeFirst();
-
-            // Look through all roads for connections from currentTerritory
-            for (Road *road : player->getRoads()) {
-                QString territory1 = road->getTerritoryName();  // "from" territory
-                Position toPos = road->getToPosition();
-
-                // Validate position bounds
-                if (toPos.row < 0 || toPos.row >= m_mapWidget->rows() ||
-                    toPos.col < 0 || toPos.col >= m_mapWidget->cols()) {
-                    continue;
-                }
-
-                QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);  // "to" territory
-
-                // Skip if either territory name is empty
-                if (territory1.isEmpty() || territory2.isEmpty()) {
-                    continue;
-                }
-
-                QString nextTerritory;
-                if (territory1 == currentTerritory && !visited.contains(territory2)) {
-                    nextTerritory = territory2;
-                } else if (territory2 == currentTerritory && !visited.contains(territory1)) {
-                    nextTerritory = territory1;
-                }
-
-                if (!nextTerritory.isEmpty()) {
-                    visited.insert(nextTerritory);
-                    toVisit.append(nextTerritory);
-                    // Only add to destinations if it's not already a neighbor
-                    if (!neighbors.contains(nextTerritory)) {
-                        roadConnectedTerritories.append(nextTerritory);
-                    }
-                }
+        // Filter out territories that are already neighbors (roads are only useful for non-adjacent)
+        QList<QString> roadOnlyTerritories;
+        for (const QString &roadTerritory : roadConnectedTerritories) {
+            if (!neighbors.contains(roadTerritory)) {
+                roadOnlyTerritories.append(roadTerritory);
             }
         }
+        qDebug() << "Movement menu: roadOnlyTerritories (non-adjacent)=" << roadOnlyTerritories;
 
         // Combine neighbors and road-connected territories
-        QList<QString> allDestinations = neighbors + roadConnectedTerritories;
+        QList<QString> allDestinations = neighbors + roadOnlyTerritories;
+        qDebug() << "Movement menu: allDestinations=" << allDestinations;
 
         // Add each destination as a movement option
         for (const QString &destinationName : allDestinations) {
-            Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
-            int value = m_mapWidget->getTerritoryValueAt(destPos.row, destPos.col);
-            bool isSea = m_mapWidget->isSeaTerritory(destPos.row, destPos.col);
-            QChar owner = m_mapWidget->getTerritoryOwnerAt(destPos.row, destPos.col);
+            // Use graph-based queries instead of grid-based
+            int value = m_mapWidget->getGraph()->getValue(destinationName);
+            bool isSea = m_mapWidget->getGraph()->isSeaTerritory(destinationName);
+
+            // Find owner by checking which player owns the territory
+            QChar owner = '\0';
+            for (Player *p : m_players) {
+                if (p->ownsTerritory(destinationName)) {
+                    owner = p->getId();
+                    break;
+                }
+            }
 
             // Build display text - indicate if this is via road
-            bool isViaRoad = roadConnectedTerritories.contains(destinationName);
+            bool isViaRoad = roadOnlyTerritories.contains(destinationName);
             QString ownership = (owner == '\0') ? "[Unclaimed]" : (owner == leader->getPlayer()) ? "[You]" : QString("[Player %1]").arg(owner);
-            QString troops = getTroopInfoAt(destPos.row, destPos.col);
+
+            // Get troop info by checking all players' pieces at this territory
+            QStringList troopParts;
+            for (Player *p : m_players) {
+                QList<GamePiece*> pieces = p->getPiecesAtTerritory(destinationName);
+                int inf = 0, cav = 0, cat = 0;
+                for (GamePiece *piece : pieces) {
+                    if (piece->getType() == GamePiece::Type::Infantry) inf++;
+                    else if (piece->getType() == GamePiece::Type::Cavalry) cav++;
+                    else if (piece->getType() == GamePiece::Type::Catapult) cat++;
+                }
+                if (inf > 0) troopParts << QString("%1I").arg(inf);
+                if (cav > 0) troopParts << QString("%1C").arg(cav);
+                if (cat > 0) troopParts << QString("%1T").arg(cat);
+            }
+            QString troops = troopParts.isEmpty() ? "" : QString(" [%1]").arg(troopParts.join(","));
             QString roadIndicator = isViaRoad ? " [via road]" : "";
             QString displayText = (value > 0) ? QString("%1 (%2) %3%4%5").arg(destinationName).arg(value).arg(ownership).arg(troops).arg(roadIndicator)
                                               : QString("%1 %2%3%4").arg(destinationName).arg(ownership).arg(troops).arg(roadIndicator);
@@ -1285,6 +1272,7 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                         .arg(galley->getSerialNumber())
                         .arg(galley->getMovesRemaining());
                     QAction *galleyAction = galleySubmenu->addAction(QIcon(":/images/galleyIcon.png"), galleyText);
+                    actionToTerritory[galleyAction] = destinationName;  // Track for hover highlighting
                     connect(galleyAction, &QAction::triggered, [this, leader, destinationName, player, galley]() {
                         boardGalleySpecific(leader, destinationName, player, galley);
                     });
@@ -1293,6 +1281,7 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
                 // Single destination or single galley - use regular action
                 QAction *moveToAction = leaderSubmenu->addAction(moveIcon, displayText);
                 moveToAction->setEnabled(canMove);
+                actionToTerritory[moveToAction] = destinationName;  // Track for hover highlighting
 
                 // Connect to movement handler
                 connect(moveToAction, &QAction::triggered, [this, leader, destinationName, isSea, player, isOnGalley, leaderGalley, availableGalleys]() {
@@ -1363,6 +1352,54 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
     // Connect hover sound to menu
     connect(&menu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
 
+    // Connect hover sound to leader submenus
+    for (QMenu *submenu : leaderSubmenus) {
+        connect(submenu, &QMenu::hovered, this, &PlayerInfoWidget::playMenuClickSound);
+    }
+
+    // Get the current territory for highlighting
+    Territory currentTerritoryInfo = m_mapWidget->getGraph()->getTerritory(territoryName);
+    int currentTerritoryId = currentTerritoryInfo.id;
+
+    // Setup hover highlighting with timer
+    QTimer hoverTimer;
+    hoverTimer.setInterval(50);  // Check every 50ms
+
+    connect(&hoverTimer, &QTimer::timeout, [this, &actionToTerritory, currentTerritoryId, &leaderSubmenus]() {
+        QAction *activeAction = nullptr;
+        QWidget *activeWidget = QApplication::activePopupWidget();
+
+        if (activeWidget) {
+            QMenu *activeMenu = qobject_cast<QMenu*>(activeWidget);
+            if (activeMenu) {
+                activeAction = activeMenu->activeAction();
+            }
+        }
+
+        // Check if hovering over a leader submenu action itself (highlight current territory)
+        bool isOnLeaderSubmenu = false;
+        for (QMenu *submenu : leaderSubmenus) {
+            if (activeAction == submenu->menuAction()) {
+                m_mapWidget->setHoveredTerritoryById(currentTerritoryId);
+                isOnLeaderSubmenu = true;
+                break;
+            }
+        }
+
+        if (!isOnLeaderSubmenu && activeAction && actionToTerritory.contains(activeAction)) {
+            // Highlight destination territory
+            QString hoveredTerritoryName = actionToTerritory[activeAction];
+            if (m_mapWidget->getGraph()) {
+                Territory hoveredTerritory = m_mapWidget->getGraph()->getTerritory(hoveredTerritoryName);
+                if (hoveredTerritory.id > 0) {
+                    m_mapWidget->setHoveredTerritoryById(hoveredTerritory.id);
+                }
+            }
+        }
+    });
+
+    hoverTimer.start();
+
     // Always show the menu
     menu.exec(globalPos);
 }
@@ -1381,11 +1418,22 @@ void OLD_UNUSED_GRID_CODE() {
 
     // Check if there's a road connection from CURRENT position (not destination)
     Position upPos = {currentPos.row - 1, currentPos.col};
-    QList<Position> roadConnectionsFromHere = m_mapWidget->getTerritoriesConnectedByRoad(currentPos, piece->getPlayer());
 
-    // Filter to find road destinations that are NOT adjacent (true road travel)
+    // Get road-connected territories using MapGraph and convert to positions
+    QString currentTerritoryName = m_mapWidget->getTerritoryNameAt(currentPos.row, currentPos.col);
+    Player *owningPlayer = nullptr;
+    for (Player *p : m_players) {
+        if (p->getId() == piece->getPlayer()) {
+            owningPlayer = p;
+            break;
+        }
+    }
+    QStringList roadConnectedNames = owningPlayer ? m_mapWidget->getGraph()->getRoadConnectedTerritories(currentTerritoryName, owningPlayer) : QStringList();
+
+    // Convert to positions and filter to find road destinations that are NOT adjacent (true road travel)
     QList<Position> upRoadConnections;
-    for (const Position &roadDest : roadConnectionsFromHere) {
+    for (const QString &roadTerritory : roadConnectedNames) {
+        Position roadDest = m_mapWidget->territoryNameToPosition(roadTerritory);
         // Skip adjacent positions - those aren't "via road" moves
         if (qAbs(roadDest.row - currentPos.row) + qAbs(roadDest.col - currentPos.col) > 1) {
             upRoadConnections.append(roadDest);
@@ -1529,9 +1577,16 @@ void OLD_UNUSED_GRID_CODE() {
         downIcon = style()->standardIcon(QStyle::SP_ArrowDown);
     }
 
-    // Check if there's a road connection downward
+    // Check if there's a road connection downward (using MapGraph)
     Position downPos = {currentPos.row + 1, currentPos.col};
-    QList<Position> downRoadConnections = (currentPos.row < 7) ? m_mapWidget->getTerritoriesConnectedByRoad(downPos, piece->getPlayer()) : QList<Position>();
+    // Filter road connections for down direction (non-adjacent territories only)
+    QList<Position> downRoadConnections;
+    for (const QString &roadTerritory : roadConnectedNames) {
+        Position roadDest = m_mapWidget->territoryNameToPosition(roadTerritory);
+        if (qAbs(roadDest.row - currentPos.row) + qAbs(roadDest.col - currentPos.col) > 1) {
+            downRoadConnections.append(roadDest);
+        }
+    }
 
     if (downRoadConnections.size() > 1) {
         // There's a road network - create submenu
@@ -1627,9 +1682,16 @@ void OLD_UNUSED_GRID_CODE() {
         leftIcon = style()->standardIcon(QStyle::SP_ArrowBack);
     }
 
-    // Check if there's a road connection leftward
+    // Check if there's a road connection leftward (using MapGraph)
     Position leftPos = {currentPos.row, currentPos.col - 1};
-    QList<Position> leftRoadConnections = (currentPos.col > 0) ? m_mapWidget->getTerritoriesConnectedByRoad(leftPos, piece->getPlayer()) : QList<Position>();
+    // Filter road connections for left direction (non-adjacent territories only)
+    QList<Position> leftRoadConnections;
+    for (const QString &roadTerritory : roadConnectedNames) {
+        Position roadDest = m_mapWidget->territoryNameToPosition(roadTerritory);
+        if (qAbs(roadDest.row - currentPos.row) + qAbs(roadDest.col - currentPos.col) > 1) {
+            leftRoadConnections.append(roadDest);
+        }
+    }
 
     if (leftRoadConnections.size() > 1) {
         // There's a road network - create submenu
@@ -1725,9 +1787,16 @@ void OLD_UNUSED_GRID_CODE() {
         rightIcon = style()->standardIcon(QStyle::SP_ArrowForward);
     }
 
-    // Check if there's a road connection rightward
+    // Check if there's a road connection rightward (using MapGraph)
     Position rightPos = {currentPos.row, currentPos.col + 1};
-    QList<Position> rightRoadConnections = (currentPos.col < 11) ? m_mapWidget->getTerritoriesConnectedByRoad(rightPos, piece->getPlayer()) : QList<Position>();
+    // Filter road connections for right direction (non-adjacent territories only)
+    QList<Position> rightRoadConnections;
+    for (const QString &roadTerritory : roadConnectedNames) {
+        Position roadDest = m_mapWidget->territoryNameToPosition(roadTerritory);
+        if (qAbs(roadDest.row - currentPos.row) + qAbs(roadDest.col - currentPos.col) > 1) {
+            rightRoadConnections.append(roadDest);
+        }
+    }
 
     if (rightRoadConnections.size() > 1) {
         // There's a road network - create submenu
@@ -3606,26 +3675,11 @@ void PlayerInfoWidget::conquestTerritory(const QString &territoryName, Player *n
         Position territoryPos = m_mapWidget->territoryNameToPosition(territoryName);
 
         // Transfer or destroy any city at this territory
+        // Note: Roads are computed on-the-fly from city positions, so no road cleanup needed
         City *city = previousOwner->getCityAtTerritory(territoryName);
         if (city) {
             qDebug() << "Transferring city at" << territoryName << "from"
                      << previousOwner->getId() << "to" << newOwner->getId();
-
-            // First, destroy any roads connected to this city (roads require both ends to be same owner)
-            QList<Road*> roadsToRemove;
-            for (Road *road : previousOwner->getRoads()) {
-                Position fromPos = road->getFromPosition();
-                Position toPos = road->getToPosition();
-                if ((fromPos.row == territoryPos.row && fromPos.col == territoryPos.col) ||
-                    (toPos.row == territoryPos.row && toPos.col == territoryPos.col)) {
-                    roadsToRemove.append(road);
-                }
-            }
-            for (Road *road : roadsToRemove) {
-                qDebug() << "Destroying road connected to conquered territory";
-                previousOwner->removeRoad(road);
-                delete road;
-            }
 
             // Remove city from previous owner
             previousOwner->removeCity(city);
@@ -3633,22 +3687,6 @@ void PlayerInfoWidget::conquestTerritory(const QString &territoryName, Player *n
             city->setOwner(newOwner->getId());
             // Add to new owner
             newOwner->addCity(city);
-        } else {
-            // No city, but check for roads that pass through this territory
-            QList<Road*> roadsToRemove;
-            for (Road *road : previousOwner->getRoads()) {
-                Position fromPos = road->getFromPosition();
-                Position toPos = road->getToPosition();
-                if ((fromPos.row == territoryPos.row && fromPos.col == territoryPos.col) ||
-                    (toPos.row == territoryPos.row && toPos.col == territoryPos.col)) {
-                    roadsToRemove.append(road);
-                }
-            }
-            for (Road *road : roadsToRemove) {
-                qDebug() << "Destroying road connected to conquered territory (no city)";
-                previousOwner->removeRoad(road);
-                delete road;
-            }
         }
 
         // Unclaim from previous owner
@@ -3933,25 +3971,30 @@ void PlayerInfoWidget::onEndTurnClicked()
             }
 
             if (enemyPlayer) {
-                // Current player is the attacker (their turn), enemy player is the defender
-                CombatDialog *combatDialog = new CombatDialog(currentPlayer, enemyPlayer, selectedTerritory, m_mapWidget, this);
+                // Skip combat if disabled (test mode)
+                if (m_combatDisabled) {
+                    qDebug() << "Combat SKIPPED (test mode) at" << selectedTerritory;
+                } else {
+                    // Current player is the attacker (their turn), enemy player is the defender
+                    CombatDialog *combatDialog = new CombatDialog(currentPlayer, enemyPlayer, selectedTerritory, m_mapWidget, this);
 
-                // Set up AI players for combat if either player is AI-controlled
-                AIPlayer *attackerAI = getAIPlayerForPlayer(currentPlayer->getId());
-                AIPlayer *defenderAI = getAIPlayerForPlayer(enemyPlayer->getId());
-                if (attackerAI || defenderAI) {
-                    combatDialog->setupAIPlayers(attackerAI, defenderAI);
-                }
+                    // Set up AI players for combat if either player is AI-controlled
+                    AIPlayer *attackerAI = getAIPlayerForPlayer(currentPlayer->getId());
+                    AIPlayer *defenderAI = getAIPlayerForPlayer(enemyPlayer->getId());
+                    if (attackerAI || defenderAI) {
+                        combatDialog->setupAIPlayers(attackerAI, defenderAI);
+                    }
 
-                combatDialog->exec();
-                combatDialog->deleteLater();
+                    combatDialog->exec();
+                    combatDialog->deleteLater();
 
-                // Update map display IMMEDIATELY after this combat resolves
-                // This lets the player see territory ownership changes before next combat
-                if (m_mapWidget) {
-                    m_mapWidget->update();
-                    // Process events to ensure the map repaints before next dialog
-                    QApplication::processEvents();
+                    // Update map display IMMEDIATELY after this combat resolves
+                    // This lets the player see territory ownership changes before next combat
+                    if (m_mapWidget) {
+                        m_mapWidget->update();
+                        // Process events to ensure the map repaints before next dialog
+                        QApplication::processEvents();
+                    }
                 }
             }
         }
@@ -4302,32 +4345,12 @@ void PlayerInfoWidget::onEndTurnClicked()
         }
 
         // Destroy selected cities
+        // Note: Roads are computed on-the-fly from city positions, so no road cleanup needed
         for (City *city : result.citiesToDestroy) {
             qDebug() << "  Destroying city at" << city->getTerritoryName()
                      << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
 
-            QString territoryName = city->getTerritoryName();
             Position cityPosition = city->getPosition();
-
-            // Find and remove all roads connected to this city's territory
-            QList<Road*> roadsAtTerritory = currentPlayer->getRoadsAtTerritory(territoryName);
-            for (Road *road : roadsAtTerritory) {
-                qDebug() << "    Destroying road at" << road->getTerritoryName();
-                currentPlayer->removeRoad(road);
-                delete road;
-            }
-
-            // Also check for roads that have this position as either endpoint
-            QList<Road*> allRoads = currentPlayer->getRoads();
-            for (Road *road : allRoads) {
-                if (road->getFromPosition() == cityPosition || road->getToPosition() == cityPosition) {
-                    qDebug() << "    Destroying connected road from"
-                             << road->getFromPosition().row << "," << road->getFromPosition().col
-                             << " to " << road->getToPosition().row << "," << road->getToPosition().col;
-                    currentPlayer->removeRoad(road);
-                    delete road;
-                }
-            }
 
             // Remove city and fortification from MapWidget grids
             if (m_mapWidget) {
@@ -4361,12 +4384,6 @@ void PlayerInfoWidget::onEndTurnClicked()
     // Start next player's turn (wrap around to first player after last)
     int nextPlayerIndex = (currentPlayerIndex + 1) % m_players.size();
     m_players[nextPlayerIndex]->startTurn();
-
-    // Update roads at start of turn (not during mid-turn territory changes)
-    // This ensures roads don't appear until combat is fully resolved
-    if (m_mapWidget) {
-        m_mapWidget->updateRoads();
-    }
 
     // Update all player displays
     updateAllPlayers();
@@ -4919,42 +4936,19 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
     // Get neighbors using MapGraph
     QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
 
-    // Get territories connected by roads (BFS through road network)
-    QList<QString> roadConnectedTerritories;
-    QSet<QString> visited;
-    QList<QString> toVisit;
+    // Get territories connected by roads (computed on-the-fly)
+    QStringList roadConnectedTerritories = m_mapWidget->getGraph()->getRoadConnectedTerritories(territoryName, player);
 
-    visited.insert(territoryName);
-    toVisit.append(territoryName);
-
-    // BFS through road network
-    while (!toVisit.isEmpty()) {
-        QString currentTerritory = toVisit.takeFirst();
-
-        for (Road *road : player->getRoads()) {
-            QString territory1 = road->getTerritoryName();
-            Position toPos = road->getToPosition();
-            QString territory2 = m_mapWidget->getTerritoryNameAt(toPos.row, toPos.col);
-
-            QString nextTerritory;
-            if (territory1 == currentTerritory && !visited.contains(territory2)) {
-                nextTerritory = territory2;
-            } else if (territory2 == currentTerritory && !visited.contains(territory1)) {
-                nextTerritory = territory1;
-            }
-
-            if (!nextTerritory.isEmpty()) {
-                visited.insert(nextTerritory);
-                toVisit.append(nextTerritory);
-                if (!neighbors.contains(nextTerritory)) {
-                    roadConnectedTerritories.append(nextTerritory);
-                }
-            }
+    // Filter out territories that are already neighbors
+    QList<QString> roadOnlyTerritories;
+    for (const QString &roadTerritory : roadConnectedTerritories) {
+        if (!neighbors.contains(roadTerritory)) {
+            roadOnlyTerritories.append(roadTerritory);
         }
     }
 
     // Combine neighbors and road-connected territories
-    QList<QString> allDestinations = neighbors + roadConnectedTerritories;
+    QList<QString> allDestinations = neighbors + roadOnlyTerritories;
 
     // Build MoveOption for each destination
     for (const QString &destinationName : allDestinations) {
@@ -4981,7 +4975,7 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
             }
         }
         option.isOwnTerritory = (option.owner == leader->getPlayer());
-        option.isViaRoad = roadConnectedTerritories.contains(destinationName);
+        option.isViaRoad = roadOnlyTerritories.contains(destinationName);
 
         Position destPos = m_mapWidget->territoryNameToPosition(destinationName);
         option.troopInfo = getTroopInfoAt(destPos.row, destPos.col);

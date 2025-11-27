@@ -11,6 +11,7 @@
 #include <QCloseEvent>
 #include <QtMath>
 #include <QVector2D>
+#include <QVector4D>
 #include <QFile>
 #include <QFileInfo>
 #include <QFileDialog>
@@ -219,11 +220,13 @@ GameMapWidget::~GameMapWidget()
     delete m_shaderProgram;
     delete m_screenShader;
     delete m_iconShader;
+    delete m_lineShader;
     delete m_mapTexture;
     delete m_indexTexture;
     delete m_ownershipTexture;
     delete m_cityIconTexture;
     delete m_fortifiedCityIconTexture;
+    delete m_burningCityIconTexture;
     for (int p = 0; p < NUM_PLAYER_COLORS; ++p) {
         delete m_galleyIconTextures[p];
     }
@@ -587,6 +590,36 @@ void GameMapWidget::createIconResources()
 
     qDebug() << "Icon shader compiled and linked successfully";
 
+    // Create line shader for roads (simple solid color)
+    m_lineShader = new QOpenGLShaderProgram(this);
+
+    const char* lineVertSource = R"(
+        #version 330 core
+        layout(location = 0) in vec2 position;
+        void main() {
+            gl_Position = vec4(position, 0.0, 1.0);
+        }
+    )";
+
+    const char* lineFragSource = R"(
+        #version 330 core
+        uniform vec4 lineColor;
+        out vec4 fragColor;
+        void main() {
+            fragColor = lineColor;
+        }
+    )";
+
+    if (!m_lineShader->addShaderFromSourceCode(QOpenGLShader::Vertex, lineVertSource)) {
+        qWarning() << "Line vertex shader compilation failed:" << m_lineShader->log();
+    } else if (!m_lineShader->addShaderFromSourceCode(QOpenGLShader::Fragment, lineFragSource)) {
+        qWarning() << "Line fragment shader compilation failed:" << m_lineShader->log();
+    } else if (!m_lineShader->link()) {
+        qWarning() << "Line shader linking failed:" << m_lineShader->log();
+    } else {
+        qDebug() << "Line shader compiled and linked successfully";
+    }
+
     // Load city icon texture
     QImage cityImage(":/images/newCityIcon.png");
     if (!cityImage.isNull()) {
@@ -609,6 +642,18 @@ void GameMapWidget::createIconResources()
         qDebug() << "Fortified city icon texture loaded:" << fortifiedImage.size();
     } else {
         qWarning() << "Failed to load fortified city icon texture";
+    }
+
+    // Load burning city icon texture (for cities marked for destruction)
+    QImage burningImage(":/images/fireCityIcon.png");
+    if (!burningImage.isNull()) {
+        m_burningCityIconTexture = new QOpenGLTexture(burningImage.mirrored());
+        m_burningCityIconTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        m_burningCityIconTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+        m_burningCityIconTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        qDebug() << "Burning city icon texture loaded:" << burningImage.size();
+    } else {
+        qWarning() << "Failed to load burning city icon texture";
     }
 
     // Load player-colored galley icon textures
@@ -657,6 +702,99 @@ void GameMapWidget::createIconResources()
     qDebug() << "Icon resources created";
 }
 
+void GameMapWidget::renderRoads()
+{
+    if (!m_lineShader || !m_graph) {
+        return;
+    }
+
+    // Collect all road segments from all players
+    struct RoadSegment {
+        QPointF from;
+        QPointF to;
+    };
+    QList<RoadSegment> segments;
+
+    for (Player *player : m_players) {
+        QList<QPair<QString, QString>> playerRoads = m_graph->getRoadSegments(player);
+        for (const auto &road : playerRoads) {
+            Territory fromTerritory = m_graph->getTerritory(road.first);
+            Territory toTerritory = m_graph->getTerritory(road.second);
+            if (!fromTerritory.name.isEmpty() && !toTerritory.name.isEmpty()) {
+                RoadSegment seg;
+                seg.from = fromTerritory.centroid;
+                seg.to = toTerritory.centroid;
+                segments.append(seg);
+            }
+        }
+    }
+
+    if (segments.isEmpty()) {
+        return;
+    }
+
+    // Enable alpha blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    m_lineShader->bind();
+
+    // Light gray color with some transparency
+    m_lineShader->setUniformValue("lineColor", QVector4D(0.7f, 0.7f, 0.7f, 0.8f));
+
+    // Road thickness in map pixels
+    const float roadThickness = 8.0f;
+
+    // Draw each road segment as a thick line (quad)
+    m_iconVao.bind();
+    m_iconVbo.bind();
+
+    for (const RoadSegment &seg : segments) {
+        // Calculate direction vector
+        float dx = seg.to.x() - seg.from.x();
+        float dy = seg.to.y() - seg.from.y();
+        float length = qSqrt(dx * dx + dy * dy);
+        if (length < 0.001f) continue;
+
+        // Perpendicular vector for thickness
+        float perpX = -dy / length * roadThickness / 2.0f;
+        float perpY = dx / length * roadThickness / 2.0f;
+
+        // Convert to NDC
+        auto toNDC = [this](float x, float y) -> QPointF {
+            float ndcX = (x / m_mapSize.width()) * 2.0f - 1.0f;
+            float ndcY = 1.0f - (y / m_mapSize.height()) * 2.0f;
+            return QPointF(ndcX, ndcY);
+        };
+
+        QPointF p1 = toNDC(seg.from.x() + perpX, seg.from.y() + perpY);
+        QPointF p2 = toNDC(seg.from.x() - perpX, seg.from.y() - perpY);
+        QPointF p3 = toNDC(seg.to.x() - perpX, seg.to.y() - perpY);
+        QPointF p4 = toNDC(seg.to.x() + perpX, seg.to.y() + perpY);
+
+        // Create quad vertices (two triangles)
+        float vertices[] = {
+            (float)p1.x(), (float)p1.y(),
+            (float)p2.x(), (float)p2.y(),
+            (float)p3.x(), (float)p3.y(),
+            (float)p1.x(), (float)p1.y(),
+            (float)p3.x(), (float)p3.y(),
+            (float)p4.x(), (float)p4.y(),
+        };
+
+        m_iconVbo.allocate(vertices, sizeof(vertices));
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    m_iconVbo.release();
+    m_iconVao.release();
+    m_lineShader->release();
+}
+
 void GameMapWidget::renderCityIcons()
 {
     if (!m_iconShader || !m_cityIconTexture || !m_fortifiedCityIconTexture) {
@@ -667,6 +805,7 @@ void GameMapWidget::renderCityIcons()
     struct CityInfo {
         QPointF centroid;
         bool isFortified;
+        bool isMarkedForDestruction;
         float scale;  // Scale factor based on territory area
         Player *owner;  // Player who owns this city
     };
@@ -683,9 +822,10 @@ void GameMapWidget::renderCityIcons()
                 if (!territory.name.isEmpty()) {
                     CityInfo info;
                     info.centroid = territory.centroid;
-                    // Check if city is fortified
+                    // Check if city is fortified and/or marked for destruction
                     City *city = dynamic_cast<City*>(building);
                     info.isFortified = (city && city->isFortified());
+                    info.isMarkedForDestruction = (city && city->isMarkedForDestruction());
                     // Scale based on sqrt of area ratio (clamped to reasonable range)
                     float areaRatio = static_cast<float>(territory.area) / referenceArea;
                     info.scale = qBound(0.75f, qSqrt(areaRatio), 2.0f);
@@ -746,9 +886,11 @@ void GameMapWidget::renderCityIcons()
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                               reinterpret_cast<void*>(2 * sizeof(float)));
 
-        // Bind appropriate texture
+        // Bind appropriate texture (burning > fortified > regular)
         glActiveTexture(GL_TEXTURE0);
-        if (city.isFortified) {
+        if (city.isMarkedForDestruction && m_burningCityIconTexture) {
+            m_burningCityIconTexture->bind();
+        } else if (city.isFortified) {
             m_fortifiedCityIconTexture->bind();
         } else {
             m_cityIconTexture->bind();
@@ -1171,6 +1313,9 @@ void GameMapWidget::paintGL()
 
     m_shaderProgram->release();
 
+    // Render roads first (under cities)
+    renderRoads();
+
     // Render city icons on top of the map (still in FBO)
     renderCityIcons();
 
@@ -1346,219 +1491,6 @@ QMap<QChar, int> GameMapWidget::calculateScores() const
     return scores;
 }
 
-void GameMapWidget::showTerritoryContextMenu(const QPoint &pos, int territoryId)
-{
-    if (!m_graph || !m_playerInfoWidget) return;
-
-    QString territoryName = m_graph->getTerritoryNameById(territoryId);
-    if (territoryName.isEmpty()) return;
-
-    Territory territory = m_graph->getTerritory(territoryName);
-    int originalTerritory = territoryId;
-
-    QMenu menu(this);
-
-    // Find the owner of this territory
-    QChar owner = '\0';
-    for (Player *player : m_players) {
-        if (player && player->ownsTerritory(territoryName)) {
-            owner = player->getId();
-            break;
-        }
-    }
-
-    // Header with territory name and value
-    QString headerText = QString("%1").arg(territory.name);
-    if (territory.value > 0) {
-        headerText += QString(" (%1 pts)").arg(territory.value);
-    } else {
-        headerText += " (Sea)";
-    }
-
-    // Determine flag icon based on owner
-    QIcon flagIcon;
-    if (owner != '\0') {
-        QString flagPath;
-        switch (owner.toLatin1()) {
-            case 'A': flagPath = ":/images/redFlag.png"; break;
-            case 'B': flagPath = ":/images/greenFlag.png"; break;
-            case 'C': flagPath = ":/images/blueFlag.png"; break;
-            case 'D': flagPath = ":/images/yellowFlag.png"; break;
-            case 'E': flagPath = ":/images/blackFlag.png"; break;
-            case 'F': flagPath = ":/images/orangeFlag.png"; break;
-        }
-        if (!flagPath.isEmpty()) {
-            flagIcon = QIcon(flagPath);
-        }
-    }
-
-    QAction *header = menu.addAction(flagIcon, headerText);
-    header->setEnabled(false);
-    QFont boldFont = header->font();
-    boldFont.setBold(true);
-    header->setFont(boldFont);
-
-    menu.addSeparator();
-
-    // Find all movable pieces in this territory for the CURRENT player only
-    bool foundPieces = false;
-
-    // Map to track which actions correspond to which territories (for hover highlighting)
-    QMap<QAction*, QString> actionToTerritory;
-
-    // Only show movement options for the current player's pieces
-    if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
-        Player *currentPlayer = m_players[m_currentPlayerIndex];
-        if (currentPlayer) {
-            // Check for Caesars
-            for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
-                if (caesar->getTerritoryName() == territoryName) {
-                    if (caesar->isOnGalley()) {
-                        // Caesar is aboard a galley - check if galley is beached (can disembark)
-                        GalleyPiece *galley = nullptr;
-                        for (GalleyPiece *g : currentPlayer->getGalleys()) {
-                            if (g->getSerialNumber() == caesar->getOnGalley()) {
-                                galley = g;
-                                break;
-                            }
-                        }
-                        if (galley && galley->isBeached()) {
-                            // Show caesar with disembark option
-                            QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1) [On Galley]").arg(currentPlayer->getId()));
-                            QAction *disembarkAction = caesarMenu->addAction(QIcon(":/images/generalIcon.png"),
-                                QString("Disembark to %1").arg(territoryName));
-                            connect(disembarkAction, &QAction::triggered, [this, caesar, galley, territoryName, currentPlayer]() {
-                                if (m_playerInfoWidget) {
-                                    m_playerInfoWidget->disembarkFromGalley(caesar, territoryName, galley, currentPlayer);
-                                }
-                            });
-                            foundPieces = true;
-                        }
-                    } else if (caesar->getMovesRemaining() > 0) {
-                        // Normal caesar movement
-                        QMenu *caesarMenu = menu.addMenu(QIcon(":/images/ceasarIcon.png"), QString("Caesar (Player %1)").arg(currentPlayer->getId()));
-                        addMovementOptionsToMenu(caesarMenu, caesar, territoryName, actionToTerritory);
-                        foundPieces = true;
-                    }
-                }
-            }
-
-            // Check for Generals
-            for (GeneralPiece *general : currentPlayer->getGenerals()) {
-                if (general->getTerritoryName() == territoryName) {
-                    if (general->isOnGalley()) {
-                        // General is aboard a galley - check if galley is beached (can disembark)
-                        GalleyPiece *galley = nullptr;
-                        for (GalleyPiece *g : currentPlayer->getGalleys()) {
-                            if (g->getSerialNumber() == general->getOnGalley()) {
-                                galley = g;
-                                break;
-                            }
-                        }
-                        if (galley && galley->isBeached()) {
-                            // Show general with disembark option
-                            QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2) [On Galley]").arg(general->getNumber()).arg(currentPlayer->getId()));
-                            QAction *disembarkAction = generalMenu->addAction(QIcon(":/images/generalIcon.png"),
-                                QString("Disembark to %1").arg(territoryName));
-                            connect(disembarkAction, &QAction::triggered, [this, general, galley, territoryName, currentPlayer]() {
-                                if (m_playerInfoWidget) {
-                                    m_playerInfoWidget->disembarkFromGalley(general, territoryName, galley, currentPlayer);
-                                }
-                            });
-                            foundPieces = true;
-                        }
-                    } else if (general->getMovesRemaining() > 0) {
-                        // Normal general movement
-                        QMenu *generalMenu = menu.addMenu(QIcon(":/images/generalIcon.png"), QString("General %1 (Player %2)").arg(general->getNumber()).arg(currentPlayer->getId()));
-                        addMovementOptionsToMenu(generalMenu, general, territoryName, actionToTerritory);
-                        foundPieces = true;
-                    }
-                }
-            }
-
-            // Check for Galleys
-            // Show galleys with moves remaining, but skip beached galleys with leader aboard (leader is shown instead)
-            for (GalleyPiece *galley : currentPlayer->getGalleys()) {
-                if (galley->getTerritoryName() == territoryName) {
-                    bool hasMoves = galley->getMovesRemaining() > 0;
-                    bool leaderShownInstead = galley->isBeached() && galley->hasLeaderAboard();
-
-                    // Only show galley if it has moves AND doesn't have a leader shown separately
-                    if (hasMoves && !leaderShownInstead) {
-                        QString galleyLabel = QString("Galley (Player %1)").arg(currentPlayer->getId());
-                        if (galley->hasLeaderAboard()) {
-                            galleyLabel += " [Leader Aboard]";
-                        }
-                        QMenu *galleyMenu = menu.addMenu(QIcon(":/images/galleyIcon.png"), galleyLabel);
-                        addMovementOptionsToMenu(galleyMenu, galley, territoryName, actionToTerritory);
-                        foundPieces = true;
-                    }
-                }
-            }
-        }
-    }
-
-    if (!foundPieces) {
-        QAction *noPieces = menu.addAction("No movable pieces here");
-        noPieces->setEnabled(false);
-    }
-
-    // Hover timer to highlight territories as user hovers over menu items
-    QTimer hoverTimer;
-    hoverTimer.setInterval(50);
-    connect(&hoverTimer, &QTimer::timeout, this, [this, &actionToTerritory, originalTerritory]() {
-        // Find the currently active menu item (could be in main menu or submenu)
-        QAction *activeAction = nullptr;
-        QWidget *activeWidget = QApplication::activePopupWidget();
-        if (activeWidget) {
-            QMenu *activeMenu = qobject_cast<QMenu*>(activeWidget);
-            if (activeMenu) {
-                activeAction = activeMenu->activeAction();
-            }
-        }
-
-        if (activeAction && actionToTerritory.contains(activeAction)) {
-            QString hoveredTerritoryName = actionToTerritory[activeAction];
-            Territory hoveredTerritory = m_graph->getTerritory(hoveredTerritoryName);
-            if (hoveredTerritory.id > 0 && m_hoveredTerritoryId != hoveredTerritory.id) {
-                m_hoveredTerritoryId = hoveredTerritory.id;
-                // Play click sound for menu hover using the shared method
-                playMenuClickSound(activeAction);
-                update();
-            }
-        } else {
-            if (m_hoveredTerritoryId != originalTerritory) {
-                m_hoveredTerritoryId = originalTerritory;
-                update();
-            }
-        }
-    });
-    hoverTimer.start();
-
-    // Reset last hovered action when menu opens
-    m_lastHoveredAction = nullptr;
-
-    // Connect hover sound to all menus (main and submenus)
-    connect(&menu, &QMenu::hovered, this, &GameMapWidget::playMenuClickSound);
-    for (QMenu *submenu : menu.findChildren<QMenu*>()) {
-        connect(submenu, &QMenu::hovered, this, &GameMapWidget::playMenuClickSound);
-    }
-
-    menu.exec(mapToGlobal(pos));
-
-    hoverTimer.stop();
-
-    // Restore hover after menu closes
-    QPoint globalPos = QCursor::pos();
-    QPoint localPos = mapFromGlobal(globalPos);
-    if (rect().contains(localPos)) {
-        updateHoveredTerritory(localPos);
-    } else {
-        m_hoveredTerritoryId = 0;
-        update();
-    }
-}
-
 void GameMapWidget::wheelEvent(QWheelEvent *event)
 {
     QPointF mousePos = event->position();
@@ -1601,8 +1533,14 @@ void GameMapWidget::mousePressEvent(QMouseEvent *event)
         setCursor(Qt::ClosedHandCursor);
         event->accept();
     } else if (event->button() == Qt::RightButton) {
-        if (m_hoveredTerritoryId > 0) {
-            showTerritoryContextMenu(event->pos(), m_hoveredTerritoryId);
+        if (m_hoveredTerritoryId > 0 && m_playerInfoWidget && m_graph) {
+            // Delegate to PlayerInfoWidget for context menu (single source of truth)
+            QString territoryName = m_graph->getTerritoryNameById(m_hoveredTerritoryId);
+            QChar currentPlayer = '\0';
+            if (m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+                currentPlayer = m_players[m_currentPlayerIndex]->getId();
+            }
+            m_playerInfoWidget->handleTerritoryRightClick(territoryName, mapToGlobal(event->pos()), currentPlayer);
         }
         event->accept();
     }
@@ -2402,14 +2340,6 @@ void GameMapWidget::removeFortificationAt(int row, int col)
     // This is a no-op for compatibility
 }
 
-void GameMapWidget::updateRoads()
-{
-    // Roads are managed by Player objects in OpenGL version
-    // This is a no-op for compatibility
-    // If needed, trigger a repaint to show updated roads
-    update();
-}
-
 QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
 {
     if (territoryName.isEmpty()) {
@@ -2537,197 +2467,6 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
     }
 
     return lines.join("<br>");
-}
-
-void GameMapWidget::addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, const QString &fromTerritory, QMap<QAction*, QString> &actionToTerritory)
-{
-    if (!menu || !piece || !m_graph || !m_playerInfoWidget) return;
-
-    // Get neighboring territories from the graph
-    Territory territory = m_graph->getTerritory(fromTerritory);
-
-    if (territory.neighbors.isEmpty()) {
-        QAction *noMoves = menu->addAction("No adjacent territories");
-        noMoves->setEnabled(false);
-        return;
-    }
-
-    // Check if this piece is a galley (galleys can move to sea, generals/caesars cannot)
-    GalleyPiece *galley = dynamic_cast<GalleyPiece*>(piece);
-    bool isGalley = (galley != nullptr);
-
-    // For beached galleys, determine which sea zones are accessible from current beach
-    QList<QString> allowedSeaZones;
-    if (isGalley && galley->isBeached() && galley->hasLastSeaZone()) {
-        // Get the beach position for this galley
-        QPointF beachPos = m_graph->getBeachPosition(fromTerritory, galley->getLastSeaZone());
-        // Get all sea zones accessible from this beach position
-        allowedSeaZones = m_graph->getSeaZonesAtBeach(fromTerritory, beachPos);
-
-        // If the galley is beached and has a leader aboard, add "Disembark here" option
-        if (galley->hasLeaderAboard()) {
-            QAction *disembarkAction = menu->addAction(QIcon(":/images/generalIcon.png"),
-                QString("Disembark to %1").arg(fromTerritory));
-
-            connect(disembarkAction, &QAction::triggered, [this, galley, fromTerritory]() {
-                if (m_playerInfoWidget && m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
-                    Player *player = m_players[m_currentPlayerIndex];
-                    // Find the leader aboard
-                    int leaderAboardId = galley->getLeaderAboard();
-                    GamePiece *leader = nullptr;
-
-                    for (CaesarPiece *caesar : player->getCaesars()) {
-                        if (caesar->getUniqueId() == leaderAboardId) {
-                            leader = caesar;
-                            break;
-                        }
-                    }
-                    if (!leader) {
-                        for (GeneralPiece *general : player->getGenerals()) {
-                            if (general->getUniqueId() == leaderAboardId) {
-                                leader = general;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (leader) {
-                        m_playerInfoWidget->disembarkFromGalley(leader, fromTerritory, galley, player);
-                    }
-                }
-            });
-
-            menu->addSeparator();
-        }
-    }
-
-    // For generals/caesars, check if there are beached galleys in the same territory they can board
-    if (!isGalley && m_players.size() > m_currentPlayerIndex) {
-        Player *currentPlayer = m_players[m_currentPlayerIndex];
-        if (currentPlayer && currentPlayer->getId() == piece->getPlayer()) {
-            for (GalleyPiece *beachedGalley : currentPlayer->getGalleys()) {
-                // Only show galleys that are in the SAME territory (beached here)
-                if (beachedGalley->getTerritoryName() == fromTerritory &&
-                    beachedGalley->getMovesRemaining() > 0 &&
-                    !beachedGalley->hasLeaderAboard()) {
-
-                    QString galleySeaZone = beachedGalley->getLastSeaZone();
-                    QString displayText = QString("Board Galley → %1").arg(galleySeaZone);
-
-                    QAction *boardAction = menu->addAction(QIcon(":/images/galleyIcon.png"), displayText);
-
-                    // Track this action for hover highlighting (highlight the sea zone)
-                    actionToTerritory[boardAction] = galleySeaZone;
-
-                    // Connect to board the galley (move general to the galley's sea zone destination)
-                    connect(boardAction, &QAction::triggered, [this, piece, beachedGalley, galleySeaZone]() {
-                        if (m_playerInfoWidget) {
-                            // First move the galley to sea, then board the general onto it
-                            // The galley moves to sea, general follows
-                            m_playerInfoWidget->boardGalleyFromBeach(piece, beachedGalley, galleySeaZone);
-                        }
-                    });
-                }
-            }
-        }
-    }
-
-    // Add each neighbor as a movement option
-    for (const QString &neighborName : territory.neighbors) {
-        Territory neighbor = m_graph->getTerritory(neighborName);
-
-        bool isSea = (neighbor.value == 0);
-
-        // Find who owns this territory
-        QChar owner = '\0';
-        for (Player *player : m_players) {
-            if (player && player->ownsTerritory(neighborName)) {
-                owner = player->getId();
-                break;
-            }
-        }
-
-        // For sea territories and non-galley pieces, check if there's a galley we can board
-        bool hasGalley = false;
-        if (isSea && !isGalley && m_players.size() > m_currentPlayerIndex) {
-            Player *currentPlayer = m_players[m_currentPlayerIndex];
-            if (currentPlayer && currentPlayer->getId() == piece->getPlayer()) {
-                // Check if this player has a galley in this sea territory
-                for (GalleyPiece *galley : currentPlayer->getGalleys()) {
-                    if (galley->getTerritoryName() == neighborName) {
-                        hasGalley = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Build display text with territory value
-        QString displayText = neighborName;
-        if (neighbor.value > 0) {
-            displayText += QString(" (%1)").arg(neighbor.value);
-        } else {
-            displayText += " (Sea)";
-        }
-
-        // Determine icon based on owner or galley availability
-        QIcon itemIcon;
-        if (isSea && hasGalley) {
-            // Show galley icon for sea territories with available galley
-            itemIcon = QIcon(":/images/galleyIcon.png");
-        } else if (owner != '\0' && !isSea) {
-            // Show flag icon for owned land territories
-            QString flagPath;
-            switch (owner.toLatin1()) {
-                case 'A': flagPath = ":/images/redFlag.png"; break;
-                case 'B': flagPath = ":/images/greenFlag.png"; break;
-                case 'C': flagPath = ":/images/blueFlag.png"; break;
-                case 'D': flagPath = ":/images/yellowFlag.png"; break;
-                case 'E': flagPath = ":/images/blackFlag.png"; break;
-                case 'F': flagPath = ":/images/orangeFlag.png"; break;
-            }
-            if (!flagPath.isEmpty()) {
-                itemIcon = QIcon(flagPath);
-            }
-        }
-
-        QAction *moveAction = menu->addAction(itemIcon, displayText);
-
-        // Determine if this movement option should be enabled
-        bool enabled = true;
-        if (isGalley && galley->isBeached()) {
-            // Beached galley can only move to sea zones accessible from its beach
-            if (isSea) {
-                // Check if this sea zone is accessible from current beach
-                // AND the galley has at least 1 move remaining (sea zone movement costs 1)
-                enabled = allowedSeaZones.contains(neighborName) && galley->getMovesRemaining() >= 1.0;
-            } else {
-                // Beached galley cannot move to other land territories
-                enabled = false;
-            }
-        } else if (isSea) {
-            // Non-galley pieces can only enter sea if there's a galley to board
-            // Galleys at sea can move to any adjacent sea zone (if they have at least 1 move)
-            if (isGalley) {
-                enabled = galley->getMovesRemaining() >= 1.0;
-            } else {
-                enabled = hasGalley;
-            }
-        }
-
-        moveAction->setEnabled(enabled);
-
-        // Track this action for hover highlighting
-        actionToTerritory[moveAction] = neighborName;
-
-        // Connect the action to trigger movement via PlayerInfoWidget
-        connect(moveAction, &QAction::triggered, [this, piece, neighborName]() {
-            // Delegate to PlayerInfoWidget to handle the movement with legion composition dialog
-            if (m_playerInfoWidget) {
-                m_playerInfoWidget->moveLeaderToTerritory(piece, neighborName);
-            }
-        });
-    }
 }
 
 void GameMapWidget::playMenuClickSound(QAction *action)

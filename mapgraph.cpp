@@ -1,4 +1,5 @@
 #include "mapgraph.h"
+#include "player.h"
 #include <QQueue>
 #include <QSet>
 #include <QJsonDocument>
@@ -335,6 +336,116 @@ QList<QString> MapGraph::getSeaZonesAtBeach(const QString &landTerritory, const 
     }
 
     return seaZones;
+}
+
+// === Road Queries ===
+
+QStringList MapGraph::getRoadConnectedTerritories(const QString &startTerritory, const Player *player) const
+{
+    QStringList result;
+
+    if (!player || !exists(startTerritory)) {
+        return result;
+    }
+
+    // Build set of territories with cities owned by this player
+    QSet<QString> cityTerritories;
+    for (City *city : player->getCities()) {
+        cityTerritories.insert(city->getTerritoryName());
+    }
+
+    // If start territory doesn't have a city, no road connections possible
+    if (!cityTerritories.contains(startTerritory)) {
+        return result;
+    }
+
+    // BFS through road network
+    QSet<QString> visited;
+    QList<QString> toVisit;
+
+    visited.insert(startTerritory);
+    toVisit.append(startTerritory);
+
+    while (!toVisit.isEmpty()) {
+        QString current = toVisit.takeFirst();
+
+        // Check all neighbors for road connections
+        for (const QString &neighbor : getNeighbors(current)) {
+            // Skip if already visited
+            if (visited.contains(neighbor)) {
+                continue;
+            }
+
+            // Skip sea territories (roads only on land)
+            if (isSeaTerritory(neighbor)) {
+                continue;
+            }
+
+            // Skip if player doesn't own this territory
+            if (!player->ownsTerritory(neighbor)) {
+                continue;
+            }
+
+            // Skip if no city at this territory
+            if (!cityTerritories.contains(neighbor)) {
+                continue;
+            }
+
+            // Valid road connection found
+            visited.insert(neighbor);
+            toVisit.append(neighbor);
+            result.append(neighbor);
+        }
+    }
+
+    return result;
+}
+
+QList<QPair<QString, QString>> MapGraph::getRoadSegments(const Player *player) const
+{
+    QList<QPair<QString, QString>> segments;
+
+    if (!player) {
+        return segments;
+    }
+
+    // Build set of territories with cities owned by this player
+    QSet<QString> cityTerritories;
+    for (City *city : player->getCities()) {
+        cityTerritories.insert(city->getTerritoryName());
+    }
+
+    // Track processed pairs to avoid duplicates
+    QSet<QString> processedPairs;
+
+    // For each city territory, check neighbors for road connections
+    for (const QString &cityTerritory : cityTerritories) {
+        // Player must own the territory
+        if (!player->ownsTerritory(cityTerritory)) continue;
+
+        for (const QString &neighbor : getNeighbors(cityTerritory)) {
+            // Skip sea territories
+            if (isSeaTerritory(neighbor)) continue;
+
+            // Skip if no city at neighbor
+            if (!cityTerritories.contains(neighbor)) continue;
+
+            // Skip if player doesn't own neighbor
+            if (!player->ownsTerritory(neighbor)) continue;
+
+            // Create sorted pair key to avoid duplicates (A-B same as B-A)
+            QString key = (cityTerritory < neighbor)
+                ? cityTerritory + "|" + neighbor
+                : neighbor + "|" + cityTerritory;
+
+            if (!processedPairs.contains(key)) {
+                processedPairs.insert(key);
+                segments.append({cityTerritory, neighbor});
+            }
+        }
+    }
+
+    return segments;
 }
 
 // === Pathfinding ===

@@ -5,7 +5,11 @@
 #include <QPointF>
 #include <QList>
 #include <QMap>
+#include <QPair>
 #include <QJsonObject>
+
+// Forward declarations
+class Player;
 
 // Territory type classification (Land or Sea only)
 enum class TerritoryType {
@@ -124,6 +128,19 @@ public:
     // Get all sea zones accessible from a specific beach position on a land territory
     // This is useful for determining which seas a beached galley can launch into
     QList<QString> getSeaZonesAtBeach(const QString &landTerritory, const QPointF &beachPos) const;
+
+    // === Road Queries (computed on-the-fly from city positions) ===
+
+    // Get all territories reachable via roads from startTerritory for given player
+    // Roads exist between adjacent territories where the same player owns both
+    // territories AND has cities in both territories.
+    // Returns list of territory names (excludes startTerritory itself)
+    QStringList getRoadConnectedTerritories(const QString &startTerritory, const Player *player) const;
+
+    // Get all road segments for a player (for rendering)
+    // Returns list of territory name pairs representing road connections
+    // Each pair appears only once (no duplicates for bidirectional roads)
+    QList<QPair<QString, QString>> getRoadSegments(const Player *player) const;
 
     // === Pathfinding ===
 

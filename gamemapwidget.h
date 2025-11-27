@@ -71,7 +71,6 @@ public:
     // Building management (for MapWidget compatibility)
     void removeCityAt(int row, int col);
     void removeFortificationAt(int row, int col);
-    void updateRoads();
 
     // Get player color
     QColor getPlayerColor(QChar player) const;
@@ -138,14 +137,13 @@ private:
     void createOwnershipTexture();
     void createIconResources();
     void renderCityIcons();
+    void renderRoads();
     void updateMvpMatrix();
     void updateHoveredTerritory(const QPointF &widgetPos);
-    void showTerritoryContextMenu(const QPoint &pos, int territoryId);
     QPointF widgetToNormalized(const QPointF &widgetPos) const;
     QPointF widgetToMapCoords(const QPointF &widgetPos) const;
     void createMenuBar();
     QString buildTerritoryTooltip(const QString &territoryName) const;
-    void addMovementOptionsToMenu(QMenu *menu, GamePiece *piece, const QString &fromTerritory, QMap<QAction*, QString> &actionToTerritory);
     void playMenuClickSound(QAction *action);
 
     // Map graph (owned by this widget)
@@ -174,6 +172,7 @@ private:
     // Framebuffer for intermediate rendering
     QOpenGLFramebufferObject *m_fbo = nullptr;
     QOpenGLShaderProgram *m_screenShader = nullptr;  // Renders FBO texture to screen
+    QOpenGLShaderProgram *m_lineShader = nullptr;    // Renders solid color lines (roads)
 
     // Ownership lookup texture (60 rows x 4 columns, RGB)
     // Row = territory ID, Column 0 = border color
@@ -184,6 +183,7 @@ private:
     // City and building icons
     QOpenGLTexture *m_cityIconTexture = nullptr;
     QOpenGLTexture *m_fortifiedCityIconTexture = nullptr;
+    QOpenGLTexture *m_burningCityIconTexture = nullptr;
 
     // Constants for icon arrays (must be defined before arrays that use them)
     static constexpr int NUM_UNIT_TYPES = 5;

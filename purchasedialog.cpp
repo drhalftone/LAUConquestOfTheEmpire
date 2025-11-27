@@ -15,6 +15,14 @@
 #include <QApplication>
 #include <QDialog>
 
+// Destructor - clear any highlights when dialog closes
+PurchaseDialog::~PurchaseDialog()
+{
+    if (m_mapWidget) {
+        m_mapWidget->setHoveredTerritoryById(0);
+    }
+}
+
 PurchaseDialog::PurchaseDialog(QChar player,
                                int availableMoney,
                                int inflationMultiplier,
@@ -294,6 +302,19 @@ void PurchaseDialog::setupUI()
 
             QCheckBox *cityCheckbox = new QCheckBox(QString("City at %1").arg(option.territoryName));
             connect(cityCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
+            // Highlight territory when checkbox is toggled (use hover effect)
+            connect(cityCheckbox, &QCheckBox::toggled, this, [this, option](bool checked) {
+                if (m_mapWidget) {
+                    if (checked) {
+                        Territory territory = m_mapWidget->getGraph()->getTerritory(option.territoryName);
+                        if (territory.id > 0) {
+                            m_mapWidget->setHoveredTerritoryById(territory.id);
+                        }
+                    } else {
+                        m_mapWidget->setHoveredTerritoryById(0);
+                    }
+                }
+            });
             m_cityCheckboxes[cityCheckbox] = option;
             citiesLayout->addWidget(cityCheckbox, gridRow, 1);
             citiesLayout->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(CITY_BASE_COST))), gridRow, 2);
@@ -307,10 +328,22 @@ void PurchaseDialog::setupUI()
             citiesLayout->addWidget(wallIcon, gridRow, 4);
 
             QCheckBox *fortifiedCheckbox = new QCheckBox(QString("Fortified City at %1").arg(option.territoryName));
-            connect(fortifiedCheckbox, &QCheckBox::toggled, this, [this, cityCheckbox, fortifiedCheckbox]() {
+            connect(fortifiedCheckbox, &QCheckBox::toggled, this, [this, cityCheckbox, fortifiedCheckbox, option]() {
                 // If fortified is checked, uncheck regular
                 if (fortifiedCheckbox->isChecked()) {
                     cityCheckbox->setChecked(false);
+                    // Highlight territory (use hover effect)
+                    if (m_mapWidget) {
+                        Territory territory = m_mapWidget->getGraph()->getTerritory(option.territoryName);
+                        if (territory.id > 0) {
+                            m_mapWidget->setHoveredTerritoryById(territory.id);
+                        }
+                    }
+                } else {
+                    // Clear highlight when unchecked
+                    if (m_mapWidget) {
+                        m_mapWidget->setHoveredTerritoryById(0);
+                    }
                 }
                 updateTotals();
             });
@@ -342,6 +375,19 @@ void PurchaseDialog::setupUI()
 
             QCheckBox *fortCheckbox = new QCheckBox(QString("Add walls at %1").arg(option.territoryName));
             connect(fortCheckbox, &QCheckBox::toggled, this, &PurchaseDialog::updateTotals);
+            // Highlight territory when checkbox is toggled (use hover effect)
+            connect(fortCheckbox, &QCheckBox::toggled, this, [this, option](bool checked) {
+                if (m_mapWidget) {
+                    if (checked) {
+                        Territory territory = m_mapWidget->getGraph()->getTerritory(option.territoryName);
+                        if (territory.id > 0) {
+                            m_mapWidget->setHoveredTerritoryById(territory.id);
+                        }
+                    } else {
+                        m_mapWidget->setHoveredTerritoryById(0);
+                    }
+                }
+            });
             m_fortificationCheckboxes[fortCheckbox] = option;
             citiesLayout->addWidget(fortCheckbox, gridRow, 5);
             citiesLayout->addWidget(new QLabel(QString("(%1 talents)").arg(getCurrentPrice(FORTIFICATION_BASE_COST))), gridRow, 6);
@@ -801,6 +847,11 @@ void PurchaseDialog::onPurchaseClicked()
             // User declined - go back to purchase dialog
             return;  // Don't call accept()
         }
+    }
+
+    // Clear any territory highlight before closing
+    if (m_mapWidget) {
+        m_mapWidget->setHoveredTerritoryById(0);
     }
 
     // User confirmed or nothing to confirm - accept the purchase dialog

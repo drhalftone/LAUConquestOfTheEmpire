@@ -67,6 +67,7 @@ class PurchaseDialog : public QDialog
     Q_OBJECT
 
 public:
+    ~PurchaseDialog();
     explicit PurchaseDialog(QChar player,
                            int availableMoney,
                            int inflationMultiplier,

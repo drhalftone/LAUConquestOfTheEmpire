@@ -59,27 +59,3 @@ void City::paint(QPainter &painter, int x, int y, int width, int height) const
         painter.drawLine(iconX + iconSize, iconY, iconX, iconY + iconSize);
     }
 }
-
-// ========== Road Class ==========
-
-Road::Road(QChar owner, const Position &position, const QString &territoryName, QObject *parent)
-    : Building(owner, position, territoryName, parent)
-    , m_toPosition({-1, -1})  // Initialize to invalid position
-{
-}
-
-void Road::paint(QPainter &painter, int x, int y, int width, int height) const
-{
-    // Draw road as a brown line across the tile
-    painter.setPen(QPen(QColor(139, 90, 43), 4));
-
-    // Draw a cross pattern for the road
-    int centerX = x + width / 2;
-    int centerY = y + height / 2;
-
-    // Horizontal line
-    painter.drawLine(x, centerY, x + width, centerY);
-
-    // Vertical line
-    painter.drawLine(centerX, y, centerX, y + height);
-}

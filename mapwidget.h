@@ -105,11 +105,6 @@ public:
     // Update scores display
     void updateScores(const QMap<QChar, int> &scores);
 
-    // Check and create roads between adjacent cities owned by the same player
-    void updateRoads();
-
-    // Get all territories reachable via roads from a starting position for a player
-    QList<Position> getTerritoriesConnectedByRoad(const Position &startPos, QChar playerId);
 
     // Check if we're at the start of a turn (no moves made yet)
     bool isAtStartOfTurn() const { return m_isAtStartOfTurn; }

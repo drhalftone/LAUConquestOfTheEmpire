@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
     // Set application icon
     a.setWindowIcon(QIcon(":/images/coeIcon.png"));
 
-    // Show startup dialog: New Game or Load Game
+    // Show startup dialog: New Game, Single Player, or Load Game
     QMessageBox startupDialog;
     startupDialog.setWindowTitle("Conquest of the Empire");
     startupDialog.setText("Welcome to Conquest of the Empire!");
@@ -81,6 +81,7 @@ int main(int argc, char *argv[])
     startupDialog.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     QPushButton *newGameButton = startupDialog.addButton("New Game", QMessageBox::AcceptRole);
+    QPushButton *singlePlayerButton = startupDialog.addButton("Single Player", QMessageBox::AcceptRole);
     QPushButton *loadGameButton = startupDialog.addButton("Load Game", QMessageBox::ActionRole);
     QPushButton *exitButton = startupDialog.addButton("Exit", QMessageBox::RejectRole);
 
@@ -88,10 +89,25 @@ int main(int argc, char *argv[])
 
     QString loadFileName;
     bool loadGame = false;
+    bool singlePlayerMode = false;
+    int humanPlayerIndex = 0;  // Index of the human player (0 = Macedonia in single player)
 
     int numPlayers = 2;  // Default
 
-    if (startupDialog.clickedButton() == loadGameButton) {
+    if (startupDialog.clickedButton() == singlePlayerButton) {
+        // Single player TEST mode - you play as Macedonia with AI opponents, no combat
+        singlePlayerMode = true;
+        numPlayers = 3;  // Macedonia + 2 AI opponents (Egyptus, Hispania)
+
+        QMessageBox::information(nullptr, "Test Mode",
+            "Starting TEST MODE:\n\n"
+            "- You play as Macedonia (Red)\n"
+            "- 2 AI opponents (Egyptus, Hispania)\n"
+            "- Combat is DISABLED for testing movement and roads\n\n"
+            "Use this to test movement, road drawing, and AI behavior.");
+
+        qDebug() << "Starting single player TEST mode with 3 players (combat disabled)";
+    } else if (startupDialog.clickedButton() == loadGameButton) {
         // Get last used directory from settings, default to Documents folder
         QSettings settings("ConquestOfTheEmpire", "MapWidget");
         QString lastDir = settings.value("lastSaveDirectory",
@@ -213,6 +229,12 @@ int main(int argc, char *argv[])
     infoWidget->setPlayers(players);
     mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget
     infoWidget->setAttribute(Qt::WA_QuitOnClose, false);  // Don't quit app when this closes
+
+    // Disable combat in single player test mode
+    if (singlePlayerMode) {
+        infoWidget->setCombatDisabled(true);
+        qDebug() << "Combat DISABLED for test mode";
+    }
 
     // Connect mapWidget close to infoWidget close
     QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
@@ -388,8 +410,51 @@ int main(int argc, char *argv[])
     return result;
 #else
     // ========================================================================
-    // OpenGL MAP - with PlayerInfoWidget (no AI)
+    // OpenGL MAP - with PlayerInfoWidget
     // ========================================================================
+
+    // AI players for single player mode
+    QList<AIPlayer*> aiPlayers;
+    QList<AIDebugWidget*> debugWidgets;
+
+    if (singlePlayerMode) {
+        qDebug() << "Setting up AI players for single player mode...";
+
+        // Create AI controller for each non-human player
+        for (int i = 0; i < players.size(); ++i) {
+            if (i == humanPlayerIndex) {
+                qDebug() << "Player" << players[i]->getId() << "(" << players[i]->getHomeProvinceName() << ") is HUMAN";
+                continue;  // Skip human player
+            }
+
+            Player *player = players[i];
+
+            // Create AI player controller
+            AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+            ai->setStrategy(AIPlayer::Strategy::Economic);  // Prioritize expansion and economy
+            ai->setDelayMs(800);   // Delay so player can see AI actions
+            ai->setStepMode(false);  // Auto-run, no stepping
+            aiPlayers.append(ai);
+
+            // Register AI player with PlayerInfoWidget for combat handling
+            infoWidget->registerAIPlayer(player->getId(), ai);
+
+            // Connect player's turn signal to AI execution
+            QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+            qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is AI-controlled";
+
+            // Optionally create debug widget for AI (uncomment to see AI decision-making)
+            /*
+            AIDebugWidget *debugWidget = new AIDebugWidget();
+            debugWidget->setAIPlayer(ai);
+            debugWidget->move(900 + i * 50, 100 + i * 50);
+            debugWidget->show();
+            debugWidgets.append(debugWidget);
+            */
+        }
+    }
+
     // Start the current player's turn
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
         qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
@@ -400,6 +465,8 @@ int main(int argc, char *argv[])
     int result = a.exec();
 
     // Clean up
+    qDeleteAll(aiPlayers);
+    qDeleteAll(debugWidgets);
     qDeleteAll(players);
     delete infoWidget;
     delete mapWidget;
@@ -1049,9 +1116,8 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         players.append(player);
     }
 
-    // Now that all players and cities are loaded, generate roads
+    // Set players on the map widget
     mapWidget->setPlayers(players);
-    mapWidget->updateRoads();
 
     return true;
 }

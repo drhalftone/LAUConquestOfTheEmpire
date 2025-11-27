@@ -34,7 +34,6 @@ public:
 
     // Building inventory management
     const QList<City*>& getCities() const { return m_cities; }
-    const QList<Road*>& getRoads() const { return m_roads; }
 
     // Get all pieces (combined from all lists)
     QList<GamePiece*> getAllPieces() const;
@@ -53,7 +52,6 @@ public:
 
     // Add buildings to inventory
     void addCity(City *city);
-    void addRoad(Road *road);
 
     // Remove pieces from inventory
     bool removeCaesar(CaesarPiece *piece);
@@ -66,7 +64,6 @@ public:
 
     // Remove buildings from inventory
     bool removeCity(City *city);
-    bool removeRoad(Road *road);
 
     // Query pieces by location (territory name)
     QList<GamePiece*> getPiecesAtTerritory(const QString &territoryName) const;
@@ -80,7 +77,6 @@ public:
     // Query buildings by location (territory name)
     QList<Building*> getBuildingsAtTerritory(const QString &territoryName) const;
     QList<City*> getCitiesAtTerritory(const QString &territoryName) const;
-    QList<Road*> getRoadsAtTerritory(const QString &territoryName) const;
     City* getCityAtTerritory(const QString &territoryName) const;  // Returns first city found or nullptr
 
     // Count pieces
@@ -96,7 +92,6 @@ public:
     // Count buildings
     int getTotalBuildingCount() const;
     int getCityCount() const { return m_cities.size(); }
-    int getRoadCount() const { return m_roads.size(); }
 
     // Count pieces at a specific location
     int getPieceCountAtTerritory(const QString &territoryName) const;
@@ -200,7 +195,6 @@ private:
 
     // Building inventory lists
     QList<City*> m_cities;                // Can have many cities
-    QList<Road*> m_roads;                 // Can have many roads
 
     // Economic data
     int m_wallet;                         // Accumulated wealth in talents

@@ -1195,9 +1195,6 @@ void CombatDialog::onRetreatClicked()
     }
     retreatMsg.exec();
 
-    // Update roads after potential territory ownership change
-    m_mapWidget->updateRoads();
-
     m_combatResult = CombatResult::AttackerRetreats;
     accept();
 }
@@ -1433,13 +1430,7 @@ bool CombatDialog::checkCombatEnd()
                 m_attackingPlayer->addCity(city);
             }
 
-            // Transfer all roads
-            QList<Road*> roads = m_defendingPlayer->getRoads();
-            for (Road *road : roads) {
-                m_defendingPlayer->removeRoad(road);
-                road->setOwner(m_attackingPlayer->getId());
-                m_attackingPlayer->addRoad(road);
-            }
+            // Roads are now computed on-the-fly from city positions - no transfer needed
 
             // Transfer all generals (they become active generals of the winner)
             QList<GeneralPiece*> generals = m_defendingPlayer->getGenerals();
@@ -1535,9 +1526,6 @@ bool CombatDialog::checkCombatEnd()
             }
             eliminationMsg.exec();
 
-            // Update roads after mass territory transfer
-            m_mapWidget->updateRoads();
-
             accept();
             return true;
         }
@@ -1625,25 +1613,9 @@ bool CombatDialog::checkCombatEnd()
         }
 
         // Transfer any cities at this territory from defender to attacker
+        // Note: Roads are computed on-the-fly from city positions, so no road cleanup needed
         City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
         if (city) {
-            // First, destroy any roads connected to this city (roads require both ends to be same owner)
-            // Note: combatPos already declared above at line 1616
-            QList<Road*> roadsToRemove;
-            for (Road *road : m_defendingPlayer->getRoads()) {
-                // Check if this road connects to the conquered territory (using positions)
-                Position fromPos = road->getFromPosition();
-                Position toPos = road->getToPosition();
-                if ((fromPos.row == combatPos.row && fromPos.col == combatPos.col) ||
-                    (toPos.row == combatPos.row && toPos.col == combatPos.col)) {
-                    roadsToRemove.append(road);
-                }
-            }
-            for (Road *road : roadsToRemove) {
-                m_defendingPlayer->removeRoad(road);
-                delete road;
-            }
-
             // Remove city from defender
             m_defendingPlayer->removeCity(city);
             // Change ownership to attacker
@@ -1695,9 +1667,6 @@ bool CombatDialog::checkCombatEnd()
             QTimer::singleShot(1500, &attackerWinsMsg, &QMessageBox::accept);
         }
         attackerWinsMsg.exec();
-
-        // Update roads after territory ownership changed
-        m_mapWidget->updateRoads();
 
         // In land combat, destroy all docked galleys belonging to the losing side (defender)
         // Note: combatPos and isSea already declared above at line 1616-1617
@@ -1909,9 +1878,6 @@ bool CombatDialog::checkCombatEnd()
                 QTimer::singleShot(2000, &takeoverMsg, &QMessageBox::accept);
             }
             takeoverMsg.exec();
-
-            // Update roads after mass territory transfer
-            m_mapWidget->updateRoads();
 
             accept();
             return true;

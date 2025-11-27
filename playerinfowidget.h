@@ -87,6 +87,11 @@ public:
     // Get player by ID
     Player* getPlayerById(QChar playerId) const;
 
+    // === Test Mode ===
+    // When enabled, combat is skipped (for testing movement and roads)
+    void setCombatDisabled(bool disabled) { m_combatDisabled = disabled; }
+    bool isCombatDisabled() const { return m_combatDisabled; }
+
     // === AI Auto-Mode ===
     // When enabled, dialogs will auto-dismiss after a delay
     void setAIAutoMode(bool enabled, int delayMs = 1000);
@@ -205,6 +210,9 @@ private:
     // Global captured generals section
     QGroupBox *m_capturedGeneralsGroupBox;
     QTableWidget *m_capturedGeneralsTable;
+
+    // Test mode settings
+    bool m_combatDisabled = false;  // Skip combat for testing
 
     // AI Auto-Mode settings
     bool m_aiAutoMode = false;

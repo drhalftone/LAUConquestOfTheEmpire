@@ -69,7 +69,6 @@ Player::~Player()
 
     // Clean up all buildings - we own them
     qDeleteAll(m_cities);
-    qDeleteAll(m_roads);
 }
 
 QColor Player::getColorForPlayer(QChar playerId) const
@@ -130,11 +129,6 @@ QList<Building*> Player::getAllBuildings() const
 
     // Add all cities
     for (City *building : m_cities) {
-        allBuildings.append(building);
-    }
-
-    // Add all roads
-    for (Road *building : m_roads) {
         allBuildings.append(building);
     }
 
@@ -210,14 +204,6 @@ void Player::addCity(City *city)
     }
 }
 
-void Player::addRoad(Road *road)
-{
-    if (road && road->getOwner() == m_id) {
-        m_roads.append(road);
-        emit buildingAdded(road);
-    }
-}
-
 // ========== Remove Pieces ==========
 
 bool Player::removeCaesar(CaesarPiece *piece)
@@ -289,15 +275,6 @@ bool Player::removeCity(City *city)
 {
     if (m_cities.removeOne(city)) {
         emit buildingRemoved(city);
-        return true;
-    }
-    return false;
-}
-
-bool Player::removeRoad(Road *road)
-{
-    if (m_roads.removeOne(road)) {
-        emit buildingRemoved(road);
         return true;
     }
     return false;
@@ -428,13 +405,6 @@ QList<Building*> Player::getBuildingsAtTerritory(const QString &territoryName) c
         }
     }
 
-    // Check roads
-    for (Road *road : m_roads) {
-        if (road->getTerritoryName() == territoryName) {
-            buildings.append(road);
-        }
-    }
-
     return buildings;
 }
 
@@ -447,17 +417,6 @@ QList<City*> Player::getCitiesAtTerritory(const QString &territoryName) const
         }
     }
     return cities;
-}
-
-QList<Road*> Player::getRoadsAtTerritory(const QString &territoryName) const
-{
-    QList<Road*> roads;
-    for (Road *road : m_roads) {
-        if (road->getTerritoryName() == territoryName) {
-            roads.append(road);
-        }
-    }
-    return roads;
 }
 
 City* Player::getCityAtTerritory(const QString &territoryName) const
@@ -485,7 +444,7 @@ int Player::getTotalPieceCount() const
 
 int Player::getTotalBuildingCount() const
 {
-    return m_cities.size() + m_roads.size();
+    return m_cities.size();
 }
 
 int Player::getPieceCountAtTerritory(const QString &territoryName) const
@@ -620,8 +579,6 @@ void Player::clearAllPiecesAndBuildings()
     // Delete and clear all buildings
     qDeleteAll(m_cities);
     m_cities.clear();
-    qDeleteAll(m_roads);
-    m_roads.clear();
 }
 
 // ========== Turn Management ==========
