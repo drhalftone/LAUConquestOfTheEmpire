@@ -1670,6 +1670,11 @@ void MapWidget::saveGame()
                 galleyObj["lastTerritoryCol"] = galley->getLastTerritory().col;
             }
 
+            // Save last sea zone (for beach positioning)
+            if (galley->hasLastSeaZone()) {
+                galleyObj["lastSeaZone"] = galley->getLastSeaZone();
+            }
+
             galleysArray.append(galleyObj);
         }
         playerObj["galleys"] = galleysArray;

@@ -599,6 +599,31 @@ void Player::clearAllTerritories()
     emit territoriesCleared();
 }
 
+void Player::clearAllPiecesAndBuildings()
+{
+    // Delete and clear all pieces
+    qDeleteAll(m_caesars);
+    m_caesars.clear();
+    qDeleteAll(m_generals);
+    m_generals.clear();
+    qDeleteAll(m_capturedGenerals);
+    m_capturedGenerals.clear();
+    qDeleteAll(m_infantry);
+    m_infantry.clear();
+    qDeleteAll(m_cavalry);
+    m_cavalry.clear();
+    qDeleteAll(m_catapults);
+    m_catapults.clear();
+    qDeleteAll(m_galleys);
+    m_galleys.clear();
+
+    // Delete and clear all buildings
+    qDeleteAll(m_cities);
+    m_cities.clear();
+    qDeleteAll(m_roads);
+    m_roads.clear();
+}
+
 // ========== Turn Management ==========
 
 void Player::startTurn()

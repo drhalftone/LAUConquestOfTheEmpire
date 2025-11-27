@@ -11,6 +11,7 @@
 MapGraph::MapGraph()
 {
     loadFromCSV();
+    loadBeachPositions();
 }
 
 void MapGraph::loadFromCSV()
@@ -39,6 +40,7 @@ void MapGraph::loadFromCSV()
         if (fields.size() < 8) continue;
 
         int id = fields[0].toInt();
+        int area = fields[1].toInt();
         double centroidX = fields[3].toDouble();
         double centroidY = fields[4].toDouble();
         QString name = fields[5].trimmed();
@@ -55,7 +57,7 @@ void MapGraph::loadFromCSV()
         int value = pointsStr.isEmpty() ? 0 : pointsStr.toInt();
 
         // Create territory
-        Territory territory(id, name, QPointF(centroidX, centroidY), type, value);
+        Territory territory(id, name, QPointF(centroidX, centroidY), type, value, area);
         m_territories[name] = territory;
         m_idToName[id] = name;
 
@@ -81,6 +83,44 @@ void MapGraph::loadFromCSV()
     }
 
     qDebug() << "Loaded" << m_territories.size() << "territories from CSV";
+}
+
+void MapGraph::loadBeachPositions()
+{
+    QFile file(":/images/beach_positions.csv");
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open beach_positions.csv from resources";
+        return;
+    }
+
+    QTextStream in(&file);
+
+    // Skip header line
+    if (!in.atEnd()) {
+        in.readLine();
+    }
+
+    int count = 0;
+    while (!in.atEnd()) {
+        QString line = in.readLine().trimmed();
+        if (line.isEmpty()) continue;
+
+        QStringList fields = line.split(',');
+        if (fields.size() < 6) continue;
+
+        QString landName = fields[1].trimmed();
+        QString seaName = fields[3].trimmed();
+        double beachX = fields[4].toDouble();
+        double beachY = fields[5].toDouble();
+
+        // Create key as "landName|seaName"
+        QString key = landName + "|" + seaName;
+        m_beachPositions[key] = QPointF(beachX, beachY);
+        count++;
+    }
+
+    file.close();
+    qDebug() << "Loaded" << count << "beach positions from CSV";
 }
 
 // === Territory Management ===
@@ -260,6 +300,41 @@ QList<QString> MapGraph::getAdjacentSeaTerritories(const QString &landTerritoryN
     }
 
     return seaTerritories;
+}
+
+// === Beach Position Queries ===
+
+QPointF MapGraph::getBeachPosition(const QString &landTerritory, const QString &seaTerritory) const
+{
+    QString key = landTerritory + "|" + seaTerritory;
+    return m_beachPositions.value(key, QPointF(0, 0));
+}
+
+bool MapGraph::hasBeachPosition(const QString &landTerritory, const QString &seaTerritory) const
+{
+    QString key = landTerritory + "|" + seaTerritory;
+    return m_beachPositions.contains(key);
+}
+
+QList<QString> MapGraph::getSeaZonesAtBeach(const QString &landTerritory, const QPointF &beachPos) const
+{
+    QList<QString> seaZones;
+
+    // Find all sea zones that share this beach position with the land territory
+    for (auto it = m_beachPositions.begin(); it != m_beachPositions.end(); ++it) {
+        // Check if this entry is for the same land territory and same position
+        if (it.key().startsWith(landTerritory + "|")) {
+            QPointF pos = it.value();
+            // Use small epsilon for floating point comparison
+            if (qAbs(pos.x() - beachPos.x()) < 1.0 && qAbs(pos.y() - beachPos.y()) < 1.0) {
+                // Extract sea name from key
+                QString seaName = it.key().mid(landTerritory.length() + 1);
+                seaZones.append(seaName);
+            }
+        }
+    }
+
+    return seaZones;
 }
 
 // === Pathfinding ===

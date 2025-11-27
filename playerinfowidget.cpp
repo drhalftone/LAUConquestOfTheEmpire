@@ -445,7 +445,7 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     QGroupBox *infantryBox = new QGroupBox(QString("Infantry (%1)").arg(player->getInfantryCount()));
     QTableWidget *infantryTable = new QTableWidget();
     infantryTable->setColumnCount(4);
-    infantryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
+    infantryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "In Legion"});
     infantryTable->horizontalHeader()->setStretchLastSection(true);
     infantryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     infantryTable->setAlternatingRowColors(true);
@@ -456,7 +456,23 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
         infantryTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         infantryTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
         infantryTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        infantryTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
+        // Find which leader this troop belongs to
+        QString inLegion;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            if (caesar->getLegion().contains(piece->getUniqueId())) {
+                inLegion = QString("Caesar %1").arg(caesar->getSerialNumber());
+                break;
+            }
+        }
+        if (inLegion.isEmpty()) {
+            for (GeneralPiece *general : player->getGenerals()) {
+                if (general->getLegion().contains(piece->getUniqueId())) {
+                    inLegion = QString("General #%1").arg(general->getNumber());
+                    break;
+                }
+            }
+        }
+        infantryTable->setItem(row, 3, new QTableWidgetItem(inLegion));
         row++;
     }
     // Resize infantry table to fit content (max 10 rows visible)
@@ -480,7 +496,7 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     QGroupBox *cavalryBox = new QGroupBox(QString("Cavalry (%1)").arg(player->getCavalryCount()));
     QTableWidget *cavalryTable = new QTableWidget();
     cavalryTable->setColumnCount(4);
-    cavalryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
+    cavalryTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "In Legion"});
     cavalryTable->horizontalHeader()->setStretchLastSection(true);
     cavalryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     cavalryTable->setAlternatingRowColors(true);
@@ -491,7 +507,23 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
         cavalryTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         cavalryTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
         cavalryTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        cavalryTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
+        // Find which leader this troop belongs to
+        QString inLegion;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            if (caesar->getLegion().contains(piece->getUniqueId())) {
+                inLegion = QString("Caesar %1").arg(caesar->getSerialNumber());
+                break;
+            }
+        }
+        if (inLegion.isEmpty()) {
+            for (GeneralPiece *general : player->getGenerals()) {
+                if (general->getLegion().contains(piece->getUniqueId())) {
+                    inLegion = QString("General #%1").arg(general->getNumber());
+                    break;
+                }
+            }
+        }
+        cavalryTable->setItem(row, 3, new QTableWidgetItem(inLegion));
         row++;
     }
     // Resize cavalry table to fit content (max 10 rows visible)
@@ -516,7 +548,7 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
     QGroupBox *catapultBox = new QGroupBox(QString("Catapults (%1)").arg(player->getCatapultCount()));
     QTableWidget *catapultTable = new QTableWidget();
     catapultTable->setColumnCount(4);
-    catapultTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "On Galley"});
+    catapultTable->setHorizontalHeaderLabels({"Serial Number", "Territory", "Movement", "In Legion"});
     catapultTable->horizontalHeader()->setStretchLastSection(true);
     catapultTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     catapultTable->setAlternatingRowColors(true);
@@ -527,7 +559,23 @@ QGroupBox* PlayerInfoWidget::createPiecesSection(Player *player)
         catapultTable->setItem(row, 0, new QTableWidgetItem(piece->getSerialNumber()));
         catapultTable->setItem(row, 1, new QTableWidgetItem(piece->getTerritoryName()));
         catapultTable->setItem(row, 2, new QTableWidgetItem(QString::number(piece->getMovesRemaining())));
-        catapultTable->setItem(row, 3, new QTableWidgetItem(piece->getOnGalley()));
+        // Find which leader this troop belongs to
+        QString inLegion;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            if (caesar->getLegion().contains(piece->getUniqueId())) {
+                inLegion = QString("Caesar %1").arg(caesar->getSerialNumber());
+                break;
+            }
+        }
+        if (inLegion.isEmpty()) {
+            for (GeneralPiece *general : player->getGenerals()) {
+                if (general->getLegion().contains(piece->getUniqueId())) {
+                    inLegion = QString("General #%1").arg(general->getNumber());
+                    break;
+                }
+            }
+        }
+        catapultTable->setItem(row, 3, new QTableWidgetItem(inLegion));
         row++;
     }
     // Resize catapult table to fit content (max 10 rows visible)
@@ -1952,7 +2000,91 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         }
     }
 
-    // Always show troop selection dialog if there are ANY troops at this territory
+    // Galleys move independently - they don't select troops
+    // Generals/Caesars board galleys to transport their legions
+    bool isGalley = (leader->getType() == GamePiece::Type::Galley);
+
+    // For galleys, skip troop selection and just move
+    if (isGalley) {
+        // Store last territory before moving (for retreat purposes)
+        GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
+        galley->setLastTerritory(currentPos);
+
+        // Move galley
+        leader->setTerritoryName(destinationTerritory);
+        leader->setPosition(destPos);
+        leader->setMovesRemaining(leader->getMovesRemaining() - 1);
+
+        // Update galley's lastSeaZone for beach positioning
+        bool destIsSea = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
+        bool sourceIsSea = currentTerritory.startsWith("Mare") || currentTerritory.startsWith("Oceanus");
+
+        if (destIsSea) {
+            galley->setLastSeaZone(destinationTerritory);
+        } else if (sourceIsSea) {
+            galley->setLastSeaZone(currentTerritory);
+        }
+
+        // Move any leader and troops aboard the galley
+        // Find leaders by checking if their onGalley matches this galley's serial number
+        QString galleySerial = galley->getSerialNumber();
+        qDebug() << "  Galley serial:" << galleySerial << "- looking for leaders aboard";
+
+        for (Player *p : m_players) {
+            if (p->getId() != galley->getPlayer()) continue;
+
+            // Check caesars - if caesar's onGalley matches this galley, move them
+            for (CaesarPiece *caesar : p->getCaesars()) {
+                if (caesar->getOnGalley() == galleySerial) {
+                    qDebug() << "  Found Caesar aboard galley";
+                    caesar->setTerritoryName(destinationTerritory);
+                    caesar->setPosition(destPos);
+
+                    // Move troops in the caesar's legion
+                    for (int troopId : caesar->getLegion()) {
+                        GamePiece *troop = p->getPieceByUniqueId(troopId);
+                        if (troop) {
+                            troop->setTerritoryName(destinationTerritory);
+                            troop->setPosition(destPos);
+                            qDebug() << "    Moved troop" << troopId << "to" << destinationTerritory;
+                        }
+                    }
+                    qDebug() << "Moved Caesar aboard galley to" << destinationTerritory;
+                }
+            }
+
+            // Check generals - if general's onGalley matches this galley, move them
+            for (GeneralPiece *general : p->getGenerals()) {
+                if (general->getOnGalley() == galleySerial) {
+                    qDebug() << "  Found General" << general->getNumber() << "aboard galley with" << general->getLegion().size() << "troops";
+                    general->setTerritoryName(destinationTerritory);
+                    general->setPosition(destPos);
+
+                    // Move troops in the general's legion
+                    for (int troopId : general->getLegion()) {
+                        GamePiece *troop = p->getPieceByUniqueId(troopId);
+                        if (troop) {
+                            troop->setTerritoryName(destinationTerritory);
+                            troop->setPosition(destPos);
+                            qDebug() << "    Moved troop" << troopId << "to" << destinationTerritory;
+                        }
+                    }
+                    qDebug() << "Moved General" << general->getNumber() << "aboard galley to" << destinationTerritory;
+                }
+            }
+        }
+
+        qDebug() << "Moved galley to" << destinationTerritory;
+
+        // Update display
+        updateAllPlayers();
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+        return;
+    }
+
+    // For Caesars and Generals: show troop selection dialog if there are ANY troops at this territory
     // Loop until user selects valid troops or cancels
     bool validSelection = false;
     QList<int> selectedTroopIds;
@@ -2074,6 +2206,22 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         leader->setPosition(destPos);
         leader->setMovesRemaining(leader->getMovesRemaining() - 1);
 
+        // Update galley's lastSeaZone for beach positioning
+        if (leader->getType() == GamePiece::Type::Galley) {
+            GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
+            bool destIsSea = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
+            bool sourceIsSea = currentTerritory.startsWith("Mare") || currentTerritory.startsWith("Oceanus");
+
+            if (destIsSea) {
+                // Moving into a sea zone - track this as the last sea zone
+                galley->setLastSeaZone(destinationTerritory);
+            } else if (sourceIsSea) {
+                // Moving from sea to land (beaching) - track the sea we came from
+                galley->setLastSeaZone(currentTerritory);
+            }
+            // If moving from land to land (shouldn't happen for galleys), keep existing lastSeaZone
+        }
+
         qDebug() << "Moved leader" << leaderName;
 
         // Move selected troops
@@ -2091,7 +2239,9 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         // Claim the destination territory for the owning player (but not sea territories)
         // Claim if NOT moving into combat, OR if moving into empty enemy territory (no enemy pieces)
         // Use conquestTerritory to handle building transfers when conquering
-        if ((!movingIntoCombat || !hasEnemies) && !m_mapWidget->isSeaTerritory(destPos.row, destPos.col)) {
+        // Check for sea territory by name (works with both grid and OpenGL map)
+        bool destIsSea = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
+        if ((!movingIntoCombat || !hasEnemies) && !destIsSea) {
             conquestTerritory(destinationTerritory, owningPlayer);
             qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
         }
@@ -2129,11 +2279,26 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         leader->setPosition(destPos);
         leader->setMovesRemaining(leader->getMovesRemaining() - 1);
 
+        // Update galley's lastSeaZone for beach positioning
+        if (leader->getType() == GamePiece::Type::Galley) {
+            GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
+            bool destIsSea = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
+            bool sourceIsSea = currentTerritory.startsWith("Mare") || currentTerritory.startsWith("Oceanus");
+
+            if (destIsSea) {
+                galley->setLastSeaZone(destinationTerritory);
+            } else if (sourceIsSea) {
+                galley->setLastSeaZone(currentTerritory);
+            }
+        }
+
         qDebug() << "Moved leader" << leaderName << "(no troops available)";
 
         // Claim the destination territory for the owning player (but not sea territories)
         // Use conquestTerritory to handle building transfers when conquering
-        if (!m_mapWidget->isSeaTerritory(destPos.row, destPos.col)) {
+        // Check for sea territory by name (works with both grid and OpenGL map)
+        bool destIsSeaZone = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
+        if (!destIsSeaZone) {
             conquestTerritory(destinationTerritory, owningPlayer);
             qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
         }
@@ -2149,6 +2314,18 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
 void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player)
 {
     if (!leader || !player || !m_mapWidget) return;
+
+    // Verify leader has full moves (cannot move before embarking)
+    double leaderFullMoves = 2.0;  // Generals and Caesars have 2 moves
+    if (leader->getMovesRemaining() < leaderFullMoves) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("Leaders cannot move before embarking on a galley.\n"
+                       "This leader has already moved this turn.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
 
     qDebug() << "Boarding galley at" << seaTerritory;
 
@@ -2251,16 +2428,23 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
         }
         selectedTroopIds = dialog.getSelectedTroopIds();
 
-        // Validate troops have moves remaining
+        // Validate troops have FULL moves remaining (cannot move before embarking)
         for (GamePiece *troop : allTroops) {
-            if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
-                QMessageBox msgBox(this);
-                msgBox.setWindowTitle("Cannot Board");
-                msgBox.setText("Some selected troops have no moves remaining.\n"
-                               "Please deselect troops without moves.");
-                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                msgBox.exec();
-                return;
+            if (selectedTroopIds.contains(troop->getUniqueId())) {
+                // Check if troop has full movement (hasn't moved yet this turn)
+                double fullMoves = 1.0;  // Default for infantry/catapult
+                if (troop->getType() == GamePiece::Type::Cavalry) {
+                    fullMoves = 2.0;
+                }
+                if (troop->getMovesRemaining() < fullMoves) {
+                    QMessageBox msgBox(this);
+                    msgBox.setWindowTitle("Cannot Board");
+                    msgBox.setText("Troops cannot move before embarking on a galley.\n"
+                                   "Please deselect troops that have already moved this turn.");
+                    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    msgBox.exec();
+                    return;
+                }
             }
         }
     }
@@ -2295,8 +2479,8 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
     }
 
     // Mark galley as having leader aboard (but not yet transported - that happens on disembark)
+    // Note: Embarking does NOT cost galley movement - only troops pay the embark cost
     availableGalley->setLeaderAboard(leader->getUniqueId());
-    availableGalley->setMovesRemaining(availableGalley->getMovesRemaining() - 0.5);  // 0.5 moves for pickup
 
     qDebug() << "Leader" << leaderName << "boarded galley" << availableGalley->getSerialNumber()
              << "with" << selectedTroopIds.size() << "troops";
@@ -2311,6 +2495,18 @@ void PlayerInfoWidget::boardGalley(GamePiece *leader, const QString &seaTerritor
 void PlayerInfoWidget::boardGalleySpecific(GamePiece *leader, const QString &seaTerritory, Player *player, GalleyPiece *galley)
 {
     if (!leader || !player || !galley || !m_mapWidget) return;
+
+    // Verify leader has full moves (cannot move before embarking)
+    double leaderFullMoves = 2.0;  // Generals and Caesars have 2 moves
+    if (leader->getMovesRemaining() < leaderFullMoves) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("Leaders cannot move before embarking on a galley.\n"
+                       "This leader has already moved this turn.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
 
     qDebug() << "Boarding specific galley" << galley->getSerialNumber() << "at" << seaTerritory;
 
@@ -2367,16 +2563,23 @@ void PlayerInfoWidget::boardGalleySpecific(GamePiece *leader, const QString &sea
         }
         selectedTroopIds = dialog.getSelectedTroopIds();
 
-        // Validate troops have moves remaining
+        // Validate troops have FULL moves remaining (cannot move before embarking)
         for (GamePiece *troop : allTroops) {
-            if (selectedTroopIds.contains(troop->getUniqueId()) && troop->getMovesRemaining() <= 0) {
-                QMessageBox msgBox(this);
-                msgBox.setWindowTitle("Cannot Board");
-                msgBox.setText("Some selected troops have no moves remaining.\n"
-                               "Please deselect troops without moves.");
-                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                msgBox.exec();
-                return;
+            if (selectedTroopIds.contains(troop->getUniqueId())) {
+                // Check if troop has full movement (hasn't moved yet this turn)
+                double fullMoves = 1.0;  // Default for infantry/catapult
+                if (troop->getType() == GamePiece::Type::Cavalry) {
+                    fullMoves = 2.0;
+                }
+                if (troop->getMovesRemaining() < fullMoves) {
+                    QMessageBox msgBox(this);
+                    msgBox.setWindowTitle("Cannot Board");
+                    msgBox.setText("Troops cannot move before embarking on a galley.\n"
+                                   "Please deselect troops that have already moved this turn.");
+                    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    msgBox.exec();
+                    return;
+                }
             }
         }
     }
@@ -2411,11 +2614,173 @@ void PlayerInfoWidget::boardGalleySpecific(GamePiece *leader, const QString &sea
     }
 
     // Mark galley as having leader aboard (but not yet transported - that happens on disembark)
+    // Note: Embarking does NOT cost galley movement - only troops pay the embark cost
     galley->setLeaderAboard(leader->getUniqueId());
-    galley->setMovesRemaining(galley->getMovesRemaining() - 0.5);  // 0.5 moves for pickup
 
     qDebug() << "Leader" << leaderName << "boarded galley" << galley->getSerialNumber()
              << "with" << selectedTroopIds.size() << "troops";
+
+    // Update display
+    updateAllPlayers();
+    if (m_mapWidget) {
+        m_mapWidget->update();
+    }
+}
+
+void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *galley, const QString &seaZone)
+{
+    if (!leader || !galley || !m_mapWidget) return;
+
+    // Find the player who owns the leader
+    Player *player = nullptr;
+    for (Player *p : m_players) {
+        if (p->getId() == leader->getPlayer()) {
+            player = p;
+            break;
+        }
+    }
+
+    if (!player) return;
+
+    qDebug() << "Boarding beached galley" << galley->getSerialNumber() << "from"
+             << leader->getTerritoryName() << "launching to" << seaZone;
+
+    // Verify leader has full moves (cannot move before embarking)
+    double leaderFullMoves = 2.0;  // Generals and Caesars have 2 moves
+    if (leader->getMovesRemaining() < leaderFullMoves) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("Leaders cannot move before embarking on a galley.\n"
+                       "This leader has already moved this turn.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
+
+    // Verify the galley is available and beached in the same territory
+    if (galley->hasTransportedThisTurn() || galley->hasLeaderAboard() || galley->getMovesRemaining() < 1.0) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("This galley is no longer available for boarding.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
+
+    if (!galley->isBeached() || galley->getTerritoryName() != leader->getTerritoryName()) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Cannot Board");
+        msgBox.setText("The galley must be beached in the same territory as the leader.");
+        msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        msgBox.exec();
+        return;
+    }
+
+    // Get current position info
+    QString currentTerritory = leader->getTerritoryName();
+    Position currentPos = m_mapWidget->territoryNameToPosition(currentTerritory);
+    Position seaPos = m_mapWidget->territoryNameToPosition(seaZone);
+
+    // Get leader name for display
+    QString leaderName;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = QString("Caesar %1").arg(leader->getPlayer());
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+        leaderName = QString("General %1 #%2").arg(leader->getPlayer()).arg(general->getNumber());
+    }
+
+    // Get all troops at current territory
+    QList<GamePiece*> allPiecesAtTerritory = player->getPiecesAtTerritory(currentTerritory);
+    QList<GamePiece*> allTroops;
+    for (GamePiece *piece : allPiecesAtTerritory) {
+        GamePiece::Type type = piece->getType();
+        if (type == GamePiece::Type::Infantry ||
+            type == GamePiece::Type::Cavalry ||
+            type == GamePiece::Type::Catapult) {
+            allTroops.append(piece);
+        }
+    }
+
+    // Get current legion
+    QList<int> legionIds;
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+    } else if (leader->getType() == GamePiece::Type::General) {
+        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+    }
+
+    // Show troop selection dialog
+    QList<int> selectedTroopIds;
+    if (!allTroops.isEmpty()) {
+        TroopSelectionDialog dialog(leaderName + " - Select troops to board galley " + galley->getSerialNumber(), allTroops, legionIds, this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;  // User cancelled
+        }
+        selectedTroopIds = dialog.getSelectedTroopIds();
+
+        // Validate troops have FULL moves remaining (cannot move before embarking)
+        for (GamePiece *troop : allTroops) {
+            if (selectedTroopIds.contains(troop->getUniqueId())) {
+                // Check if troop has full movement (hasn't moved yet this turn)
+                double fullMoves = 1.0;  // Default for infantry/catapult
+                if (troop->getType() == GamePiece::Type::Cavalry) {
+                    fullMoves = 2.0;
+                }
+                if (troop->getMovesRemaining() < fullMoves) {
+                    QMessageBox msgBox(this);
+                    msgBox.setWindowTitle("Cannot Board");
+                    msgBox.setText("Troops cannot move before embarking on a galley.\n"
+                                   "Please deselect troops that have already moved this turn.");
+                    msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    msgBox.exec();
+                    return;
+                }
+            }
+        }
+    }
+
+    // Update legion
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        static_cast<CaesarPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<CaesarPiece*>(leader)->setLastTerritory(currentPos);
+    } else if (leader->getType() == GamePiece::Type::General) {
+        static_cast<GeneralPiece*>(leader)->setLegion(selectedTroopIds);
+        static_cast<GeneralPiece*>(leader)->setLastTerritory(currentPos);
+    }
+
+    // Move leader to sea zone (aboard galley)
+    leader->setTerritoryName(seaZone);
+    leader->setPosition(seaPos);
+
+    // Track that leader is on galley
+    leader->setOnGalley(galley->getSerialNumber());
+
+    // Deduct 0.5 move from leader for boarding
+    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+
+    // Move selected troops to sea zone
+    for (GamePiece *troop : allTroops) {
+        if (selectedTroopIds.contains(troop->getUniqueId())) {
+            troop->setTerritoryName(seaZone);
+            troop->setPosition(seaPos);
+            troop->setOnGalley(galley->getSerialNumber());
+            troop->setMovesRemaining(troop->getMovesRemaining() - 0.5);  // 0.5 move for boarding
+        }
+    }
+
+    // Launch the galley to the sea zone - this costs 1 galley move
+    galley->setTerritoryName(seaZone);
+    galley->setPosition(seaPos);
+    galley->setLastSeaZone(seaZone);  // Update last sea zone to the new location
+    galley->setMovesRemaining(galley->getMovesRemaining() - 1);  // Launch costs 1 move
+
+    // Mark galley as having leader aboard
+    // Note: Embarking troops does NOT cost galley movement - only the launch does
+    galley->setLeaderAboard(leader->getUniqueId());
+
+    qDebug() << "Leader" << leaderName << "boarded beached galley" << galley->getSerialNumber()
+             << "with" << selectedTroopIds.size() << "troops, launching to" << seaZone;
 
     // Update display
     updateAllPlayers();
@@ -2455,8 +2820,8 @@ void PlayerInfoWidget::disembarkFromGalley(GamePiece *leader, const QString &lan
     leader->setPosition(landPos);
     leader->clearGalley();
 
-    // Disembark costs 0.5 moves
-    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+    // Units cannot move after disembarking - set moves to 0
+    leader->setMovesRemaining(0);
 
     // Move troops to land
     QList<GamePiece*> piecesAtSea = player->getPiecesAtTerritory(seaTerritory);
@@ -2465,14 +2830,14 @@ void PlayerInfoWidget::disembarkFromGalley(GamePiece *leader, const QString &lan
             piece->setTerritoryName(landTerritory);
             piece->setPosition(landPos);
             piece->clearGalley();
-            piece->setMovesRemaining(piece->getMovesRemaining() - 0.5);  // 0.5 move for disembarking
+            piece->setMovesRemaining(0);  // Cannot move after disembarking
         }
     }
 
     // Mark galley as having completed transport
+    // Note: Disembarking does NOT cost galley movement - only troops pay the disembark cost
     galley->setTransportedThisTurn(true);
     galley->setLeaderAboard(0);
-    galley->setMovesRemaining(galley->getMovesRemaining() - 0.5);  // 0.5 moves for dropoff
 
     // Check if there are enemies at the destination (combat will be triggered separately)
     bool hasEnemies = false;
@@ -4064,16 +4429,18 @@ void PlayerInfoWidget::onEndTurnClicked()
             qDebug() << "Player" << currentPlayer->getId() << "created" << result.catapults << "catapults at" << homeProvince;
         }
 
-        // Create galleys in the sea zone (galleys live in sea zones, not land)
+        // Create galleys beached at home province, associated with selected sea zone
+        // Galleys start on land (beached) and track which sea zone they face
         for (const PurchaseResult::GalleyPurchase &galleyPurchase : result.galleys) {
             for (int i = 0; i < galleyPurchase.count; ++i) {
                 GalleyPiece *galley = new GalleyPiece(currentPlayer->getId(), Position{-1, -1}, currentPlayer);
-                galley->setTerritoryName(galleyPurchase.seaTerritoryName);
+                galley->setTerritoryName(homeProvince);  // Galley is on land (beached)
+                galley->setLastSeaZone(galleyPurchase.seaTerritoryName);  // Track which beach/sea it faces
                 currentPlayer->addGalley(galley);
             }
 
             qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
-                     << "galleys in sea zone" << galleyPurchase.seaTerritoryName;
+                     << "galleys at" << homeProvince << "facing" << galleyPurchase.seaTerritoryName;
         }
     }
 

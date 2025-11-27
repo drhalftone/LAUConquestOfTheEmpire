@@ -22,6 +22,7 @@
 #include <QJsonArray>
 #include <QSet>
 #include <QInputDialog>
+#include <QSurfaceFormat>
 
 // Home provinces by player count (from Conquest of the Empire Classic Rules)
 // Order follows clockwise around Mediterranean: Macedonia, Galatia, Mesopotamia, Egyptus, Numidia, Hispania, Italia
@@ -54,6 +55,14 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
 
 int main(int argc, char *argv[])
 {
+    // Set OpenGL version to 3.3 Core Profile (required for GLSL 330 shaders)
+#ifdef USE_OPENGL_MAP
+    QSurfaceFormat format;
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(format);
+#endif
+
     QApplication a(argc, argv);
 
     // Set application icon
@@ -176,6 +185,8 @@ int main(int argc, char *argv[])
     // Give the map a reference to the players so it can query them
     mapWidget->setPlayers(players);
     mapWidget->show();
+    mapWidget->raise();
+    mapWidget->activateWindow();
 
     // NOTE: We delay startTurn() until after AI setup so the signal connection exists
     // Just set up the current player index for now
@@ -386,11 +397,309 @@ int main(int argc, char *argv[])
 // OpenGL map doesn't support loading grid-based save files yet
 bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
 {
-    Q_UNUSED(fileName);
-    Q_UNUSED(mapWidget);
-    Q_UNUSED(players);
-    Q_UNUSED(currentPlayerIndex);
-    return false;  // Not implemented for OpenGL map
+    // Open and parse JSON file
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qDebug() << "Failed to open file:" << fileName;
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        qDebug() << "Failed to parse JSON:" << parseError.errorString();
+        return false;
+    }
+
+    if (!doc.isObject()) {
+        qDebug() << "JSON is not an object";
+        return false;
+    }
+
+    QJsonObject gameState = doc.object();
+
+    // Get current player index
+    currentPlayerIndex = gameState["currentPlayerIndex"].toInt(0);
+
+    // Create map widget
+    mapWidget = new GameMapWidget();
+
+    // Load players
+    QJsonArray playersArray = gameState["players"].toArray();
+    qDebug() << "Loading" << playersArray.size() << "players from save file";
+
+    for (const QJsonValue &playerValue : playersArray) {
+        QJsonObject playerObj = playerValue.toObject();
+
+        QChar playerId = playerObj["id"].toString().at(0);
+        QString homeName = playerObj["homeName"].toString();
+        int wallet = playerObj["wallet"].toInt(100);
+
+        qDebug() << "Creating player" << playerId << "with home" << homeName;
+
+        // Create player with minimal setup (we'll recreate pieces from save)
+        Player *player = new Player(playerId, homeName, nullptr, true);  // minimalSetup=true
+
+        // Remove the auto-created Caesar (constructor always creates one)
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            player->removeCaesar(caesar);
+            delete caesar;
+        }
+
+        // Set wallet
+        player->setWallet(wallet);
+
+        // Load owned territories
+        QJsonArray territoriesArray = playerObj["ownedTerritories"].toArray();
+        for (const QJsonValue &territoryValue : territoriesArray) {
+            player->claimTerritory(territoryValue.toString());
+        }
+
+        // Load Caesars
+        QJsonArray caesarsArray = playerObj["caesars"].toArray();
+        for (const QJsonValue &caesarValue : caesarsArray) {
+            QJsonObject caesarObj = caesarValue.toObject();
+            QString territory = caesarObj["territory"].toString();
+
+            CaesarPiece *caesar = new CaesarPiece(playerId, {0, 0}, player);
+            caesar->setTerritoryName(territory);
+            caesar->setMovesRemaining(caesarObj["movesRemaining"].toDouble(2));
+            caesar->setOnGalley(caesarObj["onGalley"].toString());
+
+            player->addCaesar(caesar);
+            qDebug() << "  Added Caesar at" << territory;
+        }
+
+        // Load Generals
+        QJsonArray generalsArray = playerObj["generals"].toArray();
+        for (const QJsonValue &generalValue : generalsArray) {
+            QJsonObject generalObj = generalValue.toObject();
+            QString territory = generalObj["territory"].toString();
+            int number = generalObj["number"].toInt(1);
+
+            GeneralPiece *general = new GeneralPiece(playerId, {0, 0}, number, player);
+            general->setTerritoryName(territory);
+            general->setMovesRemaining(generalObj["movesRemaining"].toDouble(2));
+            general->setOnGalley(generalObj["onGalley"].toString());
+
+            player->addGeneral(general);
+        }
+        qDebug() << "  Added" << player->getGeneralCount() << "generals";
+
+        // Load Infantry
+        QJsonArray infantryArray = playerObj["infantry"].toArray();
+        for (const QJsonValue &infantryValue : infantryArray) {
+            QJsonObject infantryObj = infantryValue.toObject();
+            QString territory = infantryObj["territory"].toString();
+
+            InfantryPiece *infantry = new InfantryPiece(playerId, {0, 0}, player);
+            infantry->setTerritoryName(territory);
+            infantry->setMovesRemaining(infantryObj["movesRemaining"].toDouble(1));
+            infantry->setOnGalley(infantryObj["onGalley"].toString());
+
+            player->addInfantry(infantry);
+        }
+        qDebug() << "  Added" << player->getInfantryCount() << "infantry";
+
+        // Load Cavalry
+        QJsonArray cavalryArray = playerObj["cavalry"].toArray();
+        for (const QJsonValue &cavalryValue : cavalryArray) {
+            QJsonObject cavalryObj = cavalryValue.toObject();
+            QString territory = cavalryObj["territory"].toString();
+
+            CavalryPiece *cavalry = new CavalryPiece(playerId, {0, 0}, player);
+            cavalry->setTerritoryName(territory);
+            cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toDouble(2));
+            cavalry->setOnGalley(cavalryObj["onGalley"].toString());
+
+            player->addCavalry(cavalry);
+        }
+
+        // Load Catapults
+        QJsonArray catapultsArray = playerObj["catapults"].toArray();
+        for (const QJsonValue &catapultValue : catapultsArray) {
+            QJsonObject catapultObj = catapultValue.toObject();
+            QString territory = catapultObj["territory"].toString();
+
+            CatapultPiece *catapult = new CatapultPiece(playerId, {0, 0}, player);
+            catapult->setTerritoryName(territory);
+            catapult->setMovesRemaining(catapultObj["movesRemaining"].toDouble(1));
+            catapult->setOnGalley(catapultObj["onGalley"].toString());
+
+            player->addCatapult(catapult);
+        }
+
+        // Load Galleys
+        QJsonArray galleysArray = playerObj["galleys"].toArray();
+        for (const QJsonValue &galleyValue : galleysArray) {
+            QJsonObject galleyObj = galleyValue.toObject();
+            QString territory = galleyObj["territory"].toString();
+
+            GalleyPiece *galley = new GalleyPiece(playerId, {0, 0}, player);
+            galley->setTerritoryName(territory);
+            galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
+            if (galleyObj["transportedThisTurn"].toBool()) {
+                galley->setTransportedThisTurn(true);
+            }
+            if (galleyObj.contains("lastSeaZone")) {
+                galley->setLastSeaZone(galleyObj["lastSeaZone"].toString());
+            }
+
+            player->addGalley(galley);
+        }
+
+        // Load Cities
+        QJsonArray citiesArray = playerObj["cities"].toArray();
+        for (const QJsonValue &cityValue : citiesArray) {
+            QJsonObject cityObj = cityValue.toObject();
+            QString territory = cityObj["territory"].toString();
+            bool isFortified = cityObj["isFortified"].toBool();
+
+            City *city = new City(playerId, {0, 0}, territory, isFortified, player);
+            player->addCity(city);
+        }
+        qDebug() << "  Added" << player->getCityCount() << "cities";
+
+        // Load Captured Generals
+        QJsonArray capturedGeneralsArray = playerObj["capturedGenerals"].toArray();
+        for (const QJsonValue &generalValue : capturedGeneralsArray) {
+            QJsonObject generalObj = generalValue.toObject();
+            QString territory = generalObj["territory"].toString();
+            QChar originalPlayer = generalObj["originalPlayer"].toString().at(0);
+            int number = generalObj["number"].toInt(1);
+
+            GeneralPiece *general = new GeneralPiece(originalPlayer, {0, 0}, number, player);
+            general->setTerritoryName(territory);
+            general->setCapturedBy(playerId);
+
+            player->addCapturedGeneral(general);
+        }
+
+        players.append(player);
+    }
+
+    // Clear invalid onGalley references (old serial numbers that don't exist anymore)
+    qDebug() << "Clearing invalid galley references...";
+    for (Player *player : players) {
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            caesar->clearGalley();
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            general->clearGalley();
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            infantry->clearGalley();
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            cavalry->clearGalley();
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            catapult->clearGalley();
+        }
+        for (GalleyPiece *galley : player->getGalleys()) {
+            galley->setLeaderAboard(0);  // Clear invalid leader reference
+        }
+    }
+
+    // Rebuild galley-leader relationships and legion membership
+    // Leaders in sea territories should be on galleys in the same territory
+    // Troops in sea territories should be in the legion of a leader in the same territory
+    qDebug() << "Rebuilding galley-leader relationships and legions...";
+    for (Player *player : players) {
+        qDebug() << "  Player" << player->getId() << "has" << player->getGalleys().size() << "galleys";
+
+        // Check caesars
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            QString territory = caesar->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        caesar->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(caesar->getUniqueId());
+                        qDebug() << "  Linked Caesar to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the caesar's legion
+                caesar->clearLegion();
+                for (InfantryPiece *infantry : player->getInfantry()) {
+                    if (infantry->getTerritoryName() == territory) {
+                        caesar->addToLegion(infantry->getUniqueId());
+                        infantry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CavalryPiece *cavalry : player->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territory) {
+                        caesar->addToLegion(cavalry->getUniqueId());
+                        cavalry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CatapultPiece *catapult : player->getCatapults()) {
+                    if (catapult->getTerritoryName() == territory) {
+                        caesar->addToLegion(catapult->getUniqueId());
+                        catapult->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                qDebug() << "    Caesar's legion now has" << caesar->getLegion().size() << "troops";
+            }
+        }
+
+        // Check generals
+        for (GeneralPiece *general : player->getGenerals()) {
+            QString territory = general->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        general->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(general->getUniqueId());
+                        qDebug() << "  Linked General" << general->getNumber() << "to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the general's legion
+                // But only if this general is on a galley (to avoid assigning troops to multiple leaders)
+                if (general->isOnGalley()) {
+                    general->clearLegion();
+                    qDebug() << "    Looking for troops in" << territory;
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        qDebug() << "      Infantry at" << infantry->getTerritoryName() << "onGalley:" << infantry->isOnGalley();
+                        if (infantry->getTerritoryName() == territory) {
+                            general->addToLegion(infantry->getUniqueId());
+                            infantry->setOnGalley(general->getOnGalley());
+                            qDebug() << "        Added infantry to legion";
+                        }
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territory) {
+                            general->addToLegion(cavalry->getUniqueId());
+                            cavalry->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territory) {
+                            general->addToLegion(catapult->getUniqueId());
+                            catapult->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    qDebug() << "    General" << general->getNumber() << "'s legion now has" << general->getLegion().size() << "troops";
+                }
+            }
+        }
+    }
+
+    qDebug() << "Game loaded successfully with" << players.size() << "players";
+    return true;
 }
 #else
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
@@ -645,6 +954,11 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
                 lastPos.row = galleyObj["lastTerritoryRow"].toInt(0);
                 lastPos.col = galleyObj["lastTerritoryCol"].toInt(0);
                 galley->setLastTerritory(lastPos);
+            }
+
+            // Load last sea zone (for beach positioning)
+            if (galleyObj.contains("lastSeaZone")) {
+                galley->setLastSeaZone(galleyObj["lastSeaZone"].toString());
             }
 
             galleyMap[galleyObj["serialNumber"].toString()] = galley;

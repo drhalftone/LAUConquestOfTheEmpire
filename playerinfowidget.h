@@ -124,6 +124,12 @@ public:
     // This is the user-initiated movement method
     void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
 
+    // Board a beached galley from the same territory, launching it to sea
+    void boardGalleyFromBeach(GamePiece *leader, GalleyPiece *galley, const QString &seaZone);
+
+    // Disembark from a galley to land
+    void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);
+
 signals:
     void pieceMoved(int fromRow, int fromCol, int toRow, int toCol);
 
@@ -163,7 +169,6 @@ private:
     // Galley transport functions
     void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley (auto-select)
     void boardGalleySpecific(GamePiece *leader, const QString &seaTerritory, Player *player, GalleyPiece *galley);  // Leader boards specific galley
-    void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);  // Leader disembarks
     void showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player);  // Show dialog to choose disembark location
 
     // Leader movement via road (only costs 1 movement point)

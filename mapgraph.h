@@ -21,20 +21,23 @@ struct Territory {
     QList<QString> neighbors;       // List of adjacent territory names
     TerritoryType type;             // Land or Sea
     int value;                      // Tax value (0 for sea, 5/10/20 for land)
+    int area;                       // Area in pixels (from CSV)
 
     // Constructor with defaults
     Territory()
         : id(0)
         , type(TerritoryType::Land)
         , value(0)
+        , area(0)
     {}
 
-    Territory(int i, const QString &n, const QPointF &c, TerritoryType t, int v)
+    Territory(int i, const QString &n, const QPointF &c, TerritoryType t, int v, int a = 0)
         : id(i)
         , name(n)
         , centroid(c)
         , type(t)
         , value(v)
+        , area(a)
     {}
 };
 
@@ -108,6 +111,20 @@ public:
     // Returns empty list if territory doesn't exist or has no adjacent seas
     QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
 
+    // === Beach Position Queries (for galley movement) ===
+
+    // Get beach position for galley moving between land and sea territory
+    // Returns the position where a galley should be displayed when beached
+    // Returns QPointF(0,0) if no beach position exists for this pair
+    QPointF getBeachPosition(const QString &landTerritory, const QString &seaTerritory) const;
+
+    // Check if a beach position exists for a land/sea pair
+    bool hasBeachPosition(const QString &landTerritory, const QString &seaTerritory) const;
+
+    // Get all sea zones accessible from a specific beach position on a land territory
+    // This is useful for determining which seas a beached galley can launch into
+    QList<QString> getSeaZonesAtBeach(const QString &landTerritory, const QPointF &beachPos) const;
+
     // === Pathfinding ===
 
     // Find shortest path between two territories (BFS)
@@ -150,11 +167,18 @@ private:
     // Load territories from CSV resource file
     void loadFromCSV();
 
+    // Load beach positions from CSV resource file
+    void loadBeachPositions();
+
     // Internal storage: map from territory name to Territory data
     QMap<QString, Territory> m_territories;
 
     // Map from territory ID to name (for neighbor resolution)
     QMap<int, QString> m_idToName;
+
+    // Beach positions: (landName, seaName) -> beach position
+    // Key is "landName|seaName" for efficient lookup
+    QMap<QString, QPointF> m_beachPositions;
 
     // Helper function for BFS pathfinding
     QList<QString> breadthFirstSearch(const QString &from, const QString &to) const;

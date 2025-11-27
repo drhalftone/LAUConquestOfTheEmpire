@@ -339,3 +339,12 @@ bool GalleyPiece::canMoveTo(const Position &from, const Position &to) const
     // Galleys can only move on water tiles (implement later)
     return GamePiece::canMoveTo(from, to);
 }
+
+bool GalleyPiece::isBeached() const
+{
+    // Galley is beached if it's on a land territory (not a sea zone)
+    // Sea zones start with "Mare" or "Oceanus"
+    return !m_territoryName.isEmpty() &&
+           !m_territoryName.startsWith("Mare") &&
+           !m_territoryName.startsWith("Oceanus");
+}

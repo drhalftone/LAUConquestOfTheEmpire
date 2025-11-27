@@ -231,6 +231,7 @@ public:
     // Movement tracking for 2-movement system
     QString getLastSeaZone() const { return m_lastSeaZone; }
     void setLastSeaZone(const QString &seaZone) { m_lastSeaZone = seaZone; }
+    bool hasLastSeaZone() const { return !m_lastSeaZone.isEmpty(); }
     void clearLastSeaZone() { m_lastSeaZone.clear(); }
 
     bool hasDockedThisTurn() const { return m_hasDockedThisTurn; }
@@ -241,14 +242,16 @@ public:
     void clearDockedCoast() { m_dockedCoast.clear(); }
     bool isDockedOnCoast() const { return !m_dockedCoast.isEmpty(); }
 
+    // Check if galley is currently beached (on land territory)
+    bool isBeached() const;
+
 private:
     QList<int> m_legion;  // List of piece IDs that belong to this Galley's legion
     Position m_lastTerritory = {-1, -1};  // Previous territory (for retreat purposes)
     bool m_hasTransportedThisTurn = false;  // True if galley has transported a legion this turn
     int m_leaderAboard = 0;  // Unique ID of leader currently aboard (0 = none)
-
     // Movement tracking fields
-    QString m_lastSeaZone;  // Sea zone galley came from (for same-turn docking rule)
+    QString m_lastSeaZone;  // Sea zone galley came from (for same-turn docking rule and beach positioning)
     bool m_hasDockedThisTurn = false;  // Whether galley landed on coast this turn
     QString m_dockedCoast;  // Which coast/province galley is docked at (empty if at sea)
 };

@@ -150,6 +150,9 @@ public:
     // Clear all owned territories (for conquest/defeat scenarios)
     void clearAllTerritories();
 
+    // Clear all pieces and buildings (for loading saved games)
+    void clearAllPiecesAndBuildings();
+
     // Turn management
     void startTurn();  // Called at the beginning of player's turn - resets movement for all pieces
     void endTurn();    // Called at the end of player's turn
