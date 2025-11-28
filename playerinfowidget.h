@@ -125,6 +125,9 @@ public:
     // Returns true if move was successful
     bool aiMoveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
 
+    // Check if there are enemy pieces at a territory (for combat detection)
+    bool hasEnemyPiecesAt(const QString &territory, Player *excludePlayer) const;
+
     // Move a leader to a territory (shows legion composition dialog)
     // This is the user-initiated movement method
     void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
@@ -143,6 +146,8 @@ protected:
 
 private slots:
     void onEndTurnClicked();
+    void onReachabilityClicked();
+    void onRiskClicked();
 
 private:
     // Create a tab for a single player
@@ -177,13 +182,14 @@ private:
     void showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player);  // Show dialog to choose disembark location
 
     // Leader movement via road (only costs 1 movement point)
-    void moveLeaderViaRoad(GamePiece *leader, const Position &destination);
+    void moveLeaderViaRoad(GamePiece *leader, const QString &destinationTerritory);
 
     // Helper to get territory name at position
     QString getTerritoryNameAt(int row, int col) const;
 
-    // Helper to get troop information at a position
+    // Helper to get troop information at a position or territory
     QString getTroopInfoAt(int row, int col) const;
+    QString getTroopInfoAtTerritory(const QString &territoryName) const;
 
     // Handle territory conquest: unclaim from previous owner, transfer/destroy buildings, claim for new owner
     void conquestTerritory(const QString &territoryName, Player *newOwner);

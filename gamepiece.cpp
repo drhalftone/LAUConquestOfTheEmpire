@@ -46,11 +46,10 @@ static void drawPieceWithIcon(QPainter &painter, int centerX, int centerY, int r
 // Initialize static counter
 int GamePiece::s_instanceCounter = 0;
 
-GamePiece::GamePiece(QChar player, const Position &position, QObject *parent)
+GamePiece::GamePiece(QChar player, const QString &territoryName, QObject *parent)
     : QObject(parent)
     , m_player(player)
-    , m_position(position)
-    , m_territoryName("")
+    , m_territoryName(territoryName)
     , m_movesRemaining(2)
     , m_uniqueId(0)  // Will be set by subclass
     , m_onGalleySerialNumber("")  // Not on a galley initially
@@ -83,20 +82,10 @@ void GamePiece::resetCounter()
     s_instanceCounter = 0;
 }
 
-bool GamePiece::canMoveTo(const Position &from, const Position &to) const
-{
-    // Default: pieces can move up to 2 squares orthogonally
-    int rowDiff = qAbs(to.row - from.row);
-    int colDiff = qAbs(to.col - from.col);
-    int totalDistance = rowDiff + colDiff;
-
-    return totalDistance <= m_movesRemaining;
-}
-
 // ========== CaesarPiece ==========
 
-CaesarPiece::CaesarPiece(QChar player, const Position &position, QObject *parent)
-    : GamePiece(player, position, parent)
+CaesarPiece::CaesarPiece(QChar player, const QString &territoryName, QObject *parent)
+    : GamePiece(player, territoryName, parent)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_CAESAR);
     m_movesRemaining = 2;  // Caesars can move 2 provinces
@@ -114,8 +103,8 @@ void CaesarPiece::paint(QPainter &painter, int x, int y, int width, int height) 
 
 // ========== GeneralPiece ==========
 
-GeneralPiece::GeneralPiece(QChar player, const Position &position, int number, QObject *parent)
-    : GamePiece(player, position, parent)
+GeneralPiece::GeneralPiece(QChar player, const QString &territoryName, int number, QObject *parent)
+    : GamePiece(player, territoryName, parent)
     , m_number(number)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_GENERAL);
@@ -134,8 +123,8 @@ void GeneralPiece::paint(QPainter &painter, int x, int y, int width, int height)
 
 // ========== InfantryPiece ==========
 
-InfantryPiece::InfantryPiece(QChar player, const Position &position, QObject *parent)
-    : GamePiece(player, position, parent)
+InfantryPiece::InfantryPiece(QChar player, const QString &territoryName, QObject *parent)
+    : GamePiece(player, territoryName, parent)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_INFANTRY);
     m_movesRemaining = 1;  // Infantry can move 1 province (needs general/caesar to move)
@@ -178,16 +167,10 @@ void InfantryPiece::paint(QPainter &painter, int x, int y, int width, int height
     painter.drawText(textRect, Qt::AlignCenter, QString::number(count));
 }
 
-bool InfantryPiece::canMoveTo(const Position &from, const Position &to) const
-{
-    // Infantry needs a commander to move (for now, use default)
-    return GamePiece::canMoveTo(from, to);
-}
-
 // ========== CavalryPiece ==========
 
-CavalryPiece::CavalryPiece(QChar player, const Position &position, QObject *parent)
-    : GamePiece(player, position, parent)
+CavalryPiece::CavalryPiece(QChar player, const QString &territoryName, QObject *parent)
+    : GamePiece(player, territoryName, parent)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_CAVALRY);
     m_movesRemaining = 2;  // Cavalry can move 2 provinces (or more, needs general/caesar)
@@ -230,16 +213,10 @@ void CavalryPiece::paint(QPainter &painter, int x, int y, int width, int height,
     painter.drawText(textRect, Qt::AlignCenter, QString::number(count));
 }
 
-bool CavalryPiece::canMoveTo(const Position &from, const Position &to) const
-{
-    // Cavalry might have special movement rules (for now, use default)
-    return GamePiece::canMoveTo(from, to);
-}
-
 // ========== CatapultPiece ==========
 
-CatapultPiece::CatapultPiece(QChar player, const Position &position, QObject *parent)
-    : GamePiece(player, position, parent)
+CatapultPiece::CatapultPiece(QChar player, const QString &territoryName, QObject *parent)
+    : GamePiece(player, territoryName, parent)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_CATAPULT);
     m_movesRemaining = 1;  // Catapults can move 1 province (needs general/caesar to move)
@@ -282,16 +259,10 @@ void CatapultPiece::paint(QPainter &painter, int x, int y, int width, int height
     painter.drawText(textRect, Qt::AlignCenter, QString::number(count));
 }
 
-bool CatapultPiece::canMoveTo(const Position &from, const Position &to) const
-{
-    // Catapults might move slower (for now, use default)
-    return GamePiece::canMoveTo(from, to);
-}
-
 // ========== GalleyPiece ==========
 
-GalleyPiece::GalleyPiece(QChar player, const Position &position, QObject *parent)
-    : GamePiece(player, position, parent)
+GalleyPiece::GalleyPiece(QChar player, const QString &territoryName, QObject *parent)
+    : GamePiece(player, territoryName, parent)
 {
     m_uniqueId = generateUniqueId(TYPE_PREFIX_GALLEY);
     m_movesRemaining = 2;  // Galleys can move 2 sea provinces independently
@@ -332,12 +303,6 @@ void GalleyPiece::paint(QPainter &painter, int x, int y, int width, int height, 
     painter.drawText(textRect.adjusted(1, 1, 1, 1), Qt::AlignCenter, QString::number(count));
     painter.setPen(textColor);
     painter.drawText(textRect, Qt::AlignCenter, QString::number(count));
-}
-
-bool GalleyPiece::canMoveTo(const Position &from, const Position &to) const
-{
-    // Galleys can only move on water tiles (implement later)
-    return GamePiece::canMoveTo(from, to);
 }
 
 bool GalleyPiece::isBeached() const

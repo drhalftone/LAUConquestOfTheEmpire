@@ -47,30 +47,16 @@ public:
     MapGraph* getGraph() { return m_graph; }
     const MapGraph* getGraph() const { return m_graph; }
 
-    // Grid compatibility methods (return dummy values - OpenGL map is not grid-based)
-    int rows() const { return 0; }
-    int cols() const { return 0; }
-
-    // Territory queries (by name)
+    // Territory queries (by name) - use these instead of row/col versions
     QString getHoveredTerritory() const;
     bool isSeaTerritory(const QString &name) const;
     int getTerritoryValue(const QString &name) const;
 
-    // Territory queries (by grid position - for MapWidget compatibility)
-    QString getTerritoryNameAt(int row, int col) const;
-    int getTerritoryValueAt(int row, int col) const;
-    QChar getTerritoryOwnerAt(int row, int col) const;
-    bool isSeaTerritory(int row, int col) const;
-    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;  // DEPRECATED: Returns empty list for OpenGL map
-    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
-    Position territoryNameToPosition(const QString &territoryName) const;
-
     // Get adjacent sea territories by territory name (graph-based, works with OpenGL map)
     QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
 
-    // Building management (for MapWidget compatibility)
-    void removeCityAt(int row, int col);
-    void removeFortificationAt(int row, int col);
+    // Convert territory name to grid position (returns -1,-1 for OpenGL map since it's not grid-based)
+    Position territoryNameToPosition(const QString &territoryName) const;
 
     // Get player color
     QColor getPlayerColor(QChar player) const;
@@ -100,6 +86,20 @@ public:
     void setHoveredTerritoryById(int territoryId);
     void setHighlightedTerritory(const QString &territoryName);
     void clearHighlightedTerritory();
+
+    // === Grid-based functions (DEPRECATED - compatibility stubs only) ===
+    // These return dummy values for OpenGL map. Use MapGraph methods instead.
+    // Kept public for legacy code compatibility - will be removed in future.
+    int rows() const { return 0; }
+    int cols() const { return 0; }
+    QString getTerritoryNameAt(int row, int col) const;
+    int getTerritoryValueAt(int row, int col) const;
+    QChar getTerritoryOwnerAt(int row, int col) const;
+    bool isSeaTerritory(int row, int col) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
+    void removeCityAt(int row, int col);
+    void removeFortificationAt(int row, int col);
 
 public slots:
     void saveGame();

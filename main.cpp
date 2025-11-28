@@ -82,6 +82,7 @@ int main(int argc, char *argv[])
 
     QPushButton *newGameButton = startupDialog.addButton("New Game", QMessageBox::AcceptRole);
     QPushButton *singlePlayerButton = startupDialog.addButton("Single Player", QMessageBox::AcceptRole);
+    QPushButton *aiTestButton = startupDialog.addButton("AI Test", QMessageBox::AcceptRole);
     QPushButton *loadGameButton = startupDialog.addButton("Load Game", QMessageBox::ActionRole);
     QPushButton *exitButton = startupDialog.addButton("Exit", QMessageBox::RejectRole);
 
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
     QString loadFileName;
     bool loadGame = false;
     bool singlePlayerMode = false;
+    bool aiTestMode = false;  // All AI players, no human
     int humanPlayerIndex = 0;  // Index of the human player (0 = Macedonia in single player)
 
     int numPlayers = 2;  // Default
@@ -107,6 +109,35 @@ int main(int argc, char *argv[])
             "Use this to test movement, road drawing, and AI behavior.");
 
         qDebug() << "Starting single player TEST mode with 3 players (combat disabled)";
+    } else if (startupDialog.clickedButton() == aiTestButton) {
+        // AI Test mode - all AI players, human just watches
+        aiTestMode = true;
+
+        // Ask for number of AI players
+        QStringList playerOptions = {"1 AI Player", "2 AI Players", "3 AI Players"};
+        bool ok;
+        QString selection = QInputDialog::getItem(nullptr,
+                                                  "AI Test Mode",
+                                                  "Select number of AI players:",
+                                                  playerOptions,
+                                                  0,  // Default to 1 AI
+                                                  false,  // Not editable
+                                                  &ok);
+        if (!ok) {
+            return 0;  // User cancelled
+        }
+
+        numPlayers = selection.left(1).toInt();
+
+        QMessageBox::information(nullptr, "AI Test Mode",
+            QString("Starting AI TEST MODE:\n\n"
+            "- %1 AI player(s) will play automatically\n"
+            "- You can watch the AI make decisions\n"
+            "- Combat is ENABLED\n"
+            "- Use End Turn in player widget to advance turns\n\n"
+            "Watch the AI expand and interact!").arg(numPlayers));
+
+        qDebug() << "Starting AI TEST mode with" << numPlayers << "AI players";
     } else if (startupDialog.clickedButton() == loadGameButton) {
         // Get last used directory from settings, default to Documents folder
         QSettings settings("ConquestOfTheEmpire", "MapWidget");
@@ -365,7 +396,7 @@ int main(int argc, char *argv[])
 
         // Create AI player controller
         AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
-        ai->setStrategy(AIPlayer::Strategy::Economic);  // Prioritize highest value territories
+        ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
         ai->setDelayMs(1000);   // 1 second delay so you can see dialogs
         ai->setStepMode(true);  // Step mode - click "Step" button to advance
         aiPlayers.append(ai);
@@ -431,7 +462,7 @@ int main(int argc, char *argv[])
 
             // Create AI player controller
             AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
-            ai->setStrategy(AIPlayer::Strategy::Economic);  // Prioritize expansion and economy
+            ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
             ai->setDelayMs(800);   // Delay so player can see AI actions
             ai->setStepMode(false);  // Auto-run, no stepping
             aiPlayers.append(ai);
@@ -452,6 +483,38 @@ int main(int argc, char *argv[])
             debugWidget->show();
             debugWidgets.append(debugWidget);
             */
+        }
+    } else if (aiTestMode) {
+        qDebug() << "Setting up AI players for AI test mode...";
+
+        // Create AI controller for ALL players (no human)
+        for (int i = 0; i < players.size(); ++i) {
+            Player *player = players[i];
+
+            // Create AI player controller
+            AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+            ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
+            ai->setDelayMs(1000);   // Slower delay so user can watch AI decisions
+            ai->setStepMode(false);  // Auto-run, no stepping
+            aiPlayers.append(ai);
+
+            // Register AI player with PlayerInfoWidget for combat handling
+            infoWidget->registerAIPlayer(player->getId(), ai);
+
+            // Connect player's turn signal to AI execution
+            QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+            qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is AI-controlled";
+
+            // Create debug widget for AI in test mode (so we can see decision-making)
+            AIDebugWidget *debugWidget = new AIDebugWidget();
+            debugWidget->setAIPlayer(ai);
+            debugWidget->setWindowTitle(QString("AI Debug - Player %1 (%2)")
+                .arg(player->getId())
+                .arg(player->getHomeProvinceName()));
+            debugWidget->move(900 + i * 50, 100 + i * 50);
+            debugWidget->show();
+            debugWidgets.append(debugWidget);
         }
     }
 
@@ -546,8 +609,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QJsonObject caesarObj = caesarValue.toObject();
             QString territory = caesarObj["territory"].toString();
 
-            CaesarPiece *caesar = new CaesarPiece(playerId, {0, 0}, player);
-            caesar->setTerritoryName(territory);
+            CaesarPiece *caesar = new CaesarPiece(playerId, territory, player);
             caesar->setMovesRemaining(caesarObj["movesRemaining"].toDouble(2));
             caesar->setOnGalley(caesarObj["onGalley"].toString());
 
@@ -562,8 +624,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QString territory = generalObj["territory"].toString();
             int number = generalObj["number"].toInt(1);
 
-            GeneralPiece *general = new GeneralPiece(playerId, {0, 0}, number, player);
-            general->setTerritoryName(territory);
+            GeneralPiece *general = new GeneralPiece(playerId, territory, number, player);
             general->setMovesRemaining(generalObj["movesRemaining"].toDouble(2));
             general->setOnGalley(generalObj["onGalley"].toString());
 
@@ -577,8 +638,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QJsonObject infantryObj = infantryValue.toObject();
             QString territory = infantryObj["territory"].toString();
 
-            InfantryPiece *infantry = new InfantryPiece(playerId, {0, 0}, player);
-            infantry->setTerritoryName(territory);
+            InfantryPiece *infantry = new InfantryPiece(playerId, territory, player);
             infantry->setMovesRemaining(infantryObj["movesRemaining"].toDouble(1));
             infantry->setOnGalley(infantryObj["onGalley"].toString());
 
@@ -592,8 +652,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QJsonObject cavalryObj = cavalryValue.toObject();
             QString territory = cavalryObj["territory"].toString();
 
-            CavalryPiece *cavalry = new CavalryPiece(playerId, {0, 0}, player);
-            cavalry->setTerritoryName(territory);
+            CavalryPiece *cavalry = new CavalryPiece(playerId, territory, player);
             cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toDouble(2));
             cavalry->setOnGalley(cavalryObj["onGalley"].toString());
 
@@ -606,8 +665,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QJsonObject catapultObj = catapultValue.toObject();
             QString territory = catapultObj["territory"].toString();
 
-            CatapultPiece *catapult = new CatapultPiece(playerId, {0, 0}, player);
-            catapult->setTerritoryName(territory);
+            CatapultPiece *catapult = new CatapultPiece(playerId, territory, player);
             catapult->setMovesRemaining(catapultObj["movesRemaining"].toDouble(1));
             catapult->setOnGalley(catapultObj["onGalley"].toString());
 
@@ -620,8 +678,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QJsonObject galleyObj = galleyValue.toObject();
             QString territory = galleyObj["territory"].toString();
 
-            GalleyPiece *galley = new GalleyPiece(playerId, {0, 0}, player);
-            galley->setTerritoryName(territory);
+            GalleyPiece *galley = new GalleyPiece(playerId, territory, player);
             galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
             if (galleyObj["transportedThisTurn"].toBool()) {
                 galley->setTransportedThisTurn(true);
@@ -653,8 +710,7 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QChar originalPlayer = generalObj["originalPlayer"].toString().at(0);
             int number = generalObj["number"].toInt(1);
 
-            GeneralPiece *general = new GeneralPiece(originalPlayer, {0, 0}, number, player);
-            general->setTerritoryName(territory);
+            GeneralPiece *general = new GeneralPiece(originalPlayer, territory, number, player);
             general->setCapturedBy(playerId);
 
             player->addCapturedGeneral(general);
@@ -892,21 +948,14 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CaesarPiece*> caesarMap;  // Track by old serial for legion restoration
         for (const QJsonValue &caesarValue : caesarsArray) {
             QJsonObject caesarObj = caesarValue.toObject();
+            QString territory = caesarObj["territory"].toString();
 
-            Position pos;
-            pos.row = caesarObj["row"].toInt(0);
-            pos.col = caesarObj["col"].toInt(0);
-
-            CaesarPiece *caesar = new CaesarPiece(playerId, pos, player);
-            caesar->setTerritoryName(caesarObj["territory"].toString());
+            CaesarPiece *caesar = new CaesarPiece(playerId, territory, player);
             caesar->setMovesRemaining(caesarObj["movesRemaining"].toInt(0));
             caesar->setOnGalley(caesarObj["onGalley"].toString());
 
-            if (caesarObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = caesarObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = caesarObj["lastTerritoryCol"].toInt(0);
-                caesar->setLastTerritory(lastPos);
+            if (caesarObj.contains("lastTerritoryName")) {
+                caesar->setLastTerritoryName(caesarObj["lastTerritoryName"].toString());
             }
 
             caesarMap[caesarObj["serialNumber"].toString()] = caesar;
@@ -918,22 +967,15 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, GeneralPiece*> generalMap;
         for (const QJsonValue &generalValue : generalsArray) {
             QJsonObject generalObj = generalValue.toObject();
-
-            Position pos;
-            pos.row = generalObj["row"].toInt(0);
-            pos.col = generalObj["col"].toInt(0);
+            QString territory = generalObj["territory"].toString();
             int number = generalObj["number"].toInt(1);
 
-            GeneralPiece *general = new GeneralPiece(playerId, pos, number, player);
-            general->setTerritoryName(generalObj["territory"].toString());
+            GeneralPiece *general = new GeneralPiece(playerId, territory, number, player);
             general->setMovesRemaining(generalObj["movesRemaining"].toInt(0));
             general->setOnGalley(generalObj["onGalley"].toString());
 
-            if (generalObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = generalObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = generalObj["lastTerritoryCol"].toInt(0);
-                general->setLastTerritory(lastPos);
+            if (generalObj.contains("lastTerritoryName")) {
+                general->setLastTerritoryName(generalObj["lastTerritoryName"].toString());
             }
 
             generalMap[generalObj["serialNumber"].toString()] = general;
@@ -944,15 +986,11 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QJsonArray capturedGeneralsArray = playerObj["capturedGenerals"].toArray();
         for (const QJsonValue &generalValue : capturedGeneralsArray) {
             QJsonObject generalObj = generalValue.toObject();
-
-            Position pos;
-            pos.row = generalObj["row"].toInt(0);
-            pos.col = generalObj["col"].toInt(0);
+            QString territory = generalObj["territory"].toString();
             int number = generalObj["number"].toInt(1);
             QChar originalPlayer = generalObj["originalPlayer"].toString().at(0);
 
-            GeneralPiece *general = new GeneralPiece(originalPlayer, pos, number, player);
-            general->setTerritoryName(generalObj["territory"].toString());
+            GeneralPiece *general = new GeneralPiece(originalPlayer, territory, number, player);
             general->setMovesRemaining(generalObj["movesRemaining"].toInt(0));
             general->setOnGalley(generalObj["onGalley"].toString());
             general->setCapturedBy(playerId);
@@ -965,13 +1003,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, InfantryPiece*> infantryMap;
         for (const QJsonValue &infantryValue : infantryArray) {
             QJsonObject infantryObj = infantryValue.toObject();
+            QString territory = infantryObj["territory"].toString();
 
-            Position pos;
-            pos.row = infantryObj["row"].toInt(0);
-            pos.col = infantryObj["col"].toInt(0);
-
-            InfantryPiece *infantry = new InfantryPiece(playerId, pos, player);
-            infantry->setTerritoryName(infantryObj["territory"].toString());
+            InfantryPiece *infantry = new InfantryPiece(playerId, territory, player);
             infantry->setMovesRemaining(infantryObj["movesRemaining"].toInt(0));
             infantry->setOnGalley(infantryObj["onGalley"].toString());
 
@@ -984,13 +1018,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CavalryPiece*> cavalryMap;
         for (const QJsonValue &cavalryValue : cavalryArray) {
             QJsonObject cavalryObj = cavalryValue.toObject();
+            QString territory = cavalryObj["territory"].toString();
 
-            Position pos;
-            pos.row = cavalryObj["row"].toInt(0);
-            pos.col = cavalryObj["col"].toInt(0);
-
-            CavalryPiece *cavalry = new CavalryPiece(playerId, pos, player);
-            cavalry->setTerritoryName(cavalryObj["territory"].toString());
+            CavalryPiece *cavalry = new CavalryPiece(playerId, territory, player);
             cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toInt(0));
             cavalry->setOnGalley(cavalryObj["onGalley"].toString());
 
@@ -1003,13 +1033,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CatapultPiece*> catapultMap;
         for (const QJsonValue &catapultValue : catapultsArray) {
             QJsonObject catapultObj = catapultValue.toObject();
+            QString territory = catapultObj["territory"].toString();
 
-            Position pos;
-            pos.row = catapultObj["row"].toInt(0);
-            pos.col = catapultObj["col"].toInt(0);
-
-            CatapultPiece *catapult = new CatapultPiece(playerId, pos, player);
-            catapult->setTerritoryName(catapultObj["territory"].toString());
+            CatapultPiece *catapult = new CatapultPiece(playerId, territory, player);
             catapult->setMovesRemaining(catapultObj["movesRemaining"].toInt(0));
             catapult->setOnGalley(catapultObj["onGalley"].toString());
 
@@ -1022,20 +1048,13 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, GalleyPiece*> galleyMap;
         for (const QJsonValue &galleyValue : galleysArray) {
             QJsonObject galleyObj = galleyValue.toObject();
+            QString territory = galleyObj["territory"].toString();
 
-            Position pos;
-            pos.row = galleyObj["row"].toInt(0);
-            pos.col = galleyObj["col"].toInt(0);
-
-            GalleyPiece *galley = new GalleyPiece(playerId, pos, player);
-            galley->setTerritoryName(galleyObj["territory"].toString());
+            GalleyPiece *galley = new GalleyPiece(playerId, territory, player);
             galley->setMovesRemaining(galleyObj["movesRemaining"].toInt(0));
 
-            if (galleyObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = galleyObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = galleyObj["lastTerritoryCol"].toInt(0);
-                galley->setLastTerritory(lastPos);
+            if (galleyObj.contains("lastTerritoryName")) {
+                galley->setLastTerritoryName(galleyObj["lastTerritoryName"].toString());
             }
 
             // Load last sea zone (for beach positioning)

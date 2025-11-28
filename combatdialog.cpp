@@ -511,30 +511,25 @@ QGroupBox* CombatDialog::createLegionGroupBox(GamePiece *leader, const QList<int
     // Add territory info - retreat option for attackers, defending location for defenders
     if (isAttacker) {
         // Attackers can retreat to their last territory
-        Position lastTerritory = {-1, -1};
-        bool hasLastTerritory = false;
+        QString lastTerritoryName;
         if (leader->getType() == GamePiece::Type::Caesar) {
             CaesarPiece *caesar = static_cast<CaesarPiece*>(leader);
-            hasLastTerritory = caesar->hasLastTerritory();
-            if (hasLastTerritory) {
-                lastTerritory = caesar->getLastTerritory();
+            if (caesar->hasLastTerritory()) {
+                lastTerritoryName = caesar->getLastTerritoryName();
             }
         } else if (leader->getType() == GamePiece::Type::General) {
             GeneralPiece *general = static_cast<GeneralPiece*>(leader);
-            hasLastTerritory = general->hasLastTerritory();
-            if (hasLastTerritory) {
-                lastTerritory = general->getLastTerritory();
+            if (general->hasLastTerritory()) {
+                lastTerritoryName = general->getLastTerritoryName();
             }
         } else if (leader->getType() == GamePiece::Type::Galley) {
             GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
-            hasLastTerritory = galley->hasLastTerritory();
-            if (hasLastTerritory) {
-                lastTerritory = galley->getLastTerritory();
+            if (galley->hasLastTerritory()) {
+                lastTerritoryName = galley->getLastTerritoryName();
             }
         }
 
-        if (hasLastTerritory && m_mapWidget) {
-            QString lastTerritoryName = m_mapWidget->getTerritoryNameAt(lastTerritory.row, lastTerritory.col);
+        if (!lastTerritoryName.isEmpty()) {
             QLabel *retreatLabel = new QLabel(QString("Retreat to: %1").arg(lastTerritoryName));
             retreatLabel->setStyleSheet("font-size: 9pt; color: #666; font-style: italic; padding: 2px;");
             retreatLabel->setAlignment(Qt::AlignCenter);
@@ -1113,11 +1108,9 @@ void CombatDialog::onRetreatClicked()
     for (GeneralPiece *general : m_attackingPlayer->getGenerals()) {
         qDebug() << "Checking general #" << general->getNumber() << "at territory:" << general->getTerritoryName() << "hasLastTerritory:" << general->hasLastTerritory();
         if (general && general->getTerritoryName() == m_combatTerritoryName && general->hasLastTerritory()) {
-            Position retreatPosition = general->getLastTerritory();
-            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+            QString retreatTerritoryName = general->getLastTerritoryName();
 
-            qDebug() << "Retreating general to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
-            general->setPosition(retreatPosition);
+            qDebug() << "Retreating general to" << retreatTerritoryName;
             general->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this general's legion
@@ -1126,7 +1119,6 @@ void CombatDialog::onRetreatClicked()
             for (GamePiece *piece : allAttackingPieces) {
                 if (piece && legion.contains(piece->getUniqueId())) {
                     qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
-                    piece->setPosition(retreatPosition);
                     piece->setTerritoryName(retreatTerritoryName);
                 }
             }
@@ -1136,11 +1128,9 @@ void CombatDialog::onRetreatClicked()
     // Process caesars
     for (CaesarPiece *caesar : m_attackingPlayer->getCaesars()) {
         if (caesar && caesar->getTerritoryName() == m_combatTerritoryName && caesar->hasLastTerritory()) {
-            Position retreatPosition = caesar->getLastTerritory();
-            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+            QString retreatTerritoryName = caesar->getLastTerritoryName();
 
-            qDebug() << "Retreating caesar to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
-            caesar->setPosition(retreatPosition);
+            qDebug() << "Retreating caesar to" << retreatTerritoryName;
             caesar->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this caesar's legion
@@ -1149,7 +1139,6 @@ void CombatDialog::onRetreatClicked()
             for (GamePiece *piece : allAttackingPieces) {
                 if (piece && legion.contains(piece->getUniqueId())) {
                     qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
-                    piece->setPosition(retreatPosition);
                     piece->setTerritoryName(retreatTerritoryName);
                 }
             }
@@ -1159,11 +1148,9 @@ void CombatDialog::onRetreatClicked()
     // Process galleys
     for (GalleyPiece *galley : m_attackingPlayer->getGalleys()) {
         if (galley && galley->getTerritoryName() == m_combatTerritoryName && galley->hasLastTerritory()) {
-            Position retreatPosition = galley->getLastTerritory();
-            QString retreatTerritoryName = m_mapWidget->getTerritoryNameAt(retreatPosition.row, retreatPosition.col);
+            QString retreatTerritoryName = galley->getLastTerritoryName();
 
-            qDebug() << "Retreating galley to" << retreatTerritoryName << "at" << retreatPosition.row << retreatPosition.col;
-            galley->setPosition(retreatPosition);
+            qDebug() << "Retreating galley to" << retreatTerritoryName;
             galley->setTerritoryName(retreatTerritoryName);
 
             // Move all troops in this galley's legion
@@ -1172,7 +1159,6 @@ void CombatDialog::onRetreatClicked()
             for (GamePiece *piece : allAttackingPieces) {
                 if (piece && legion.contains(piece->getUniqueId())) {
                     qDebug() << "    Retreating troop ID:" << piece->getUniqueId();
-                    piece->setPosition(retreatPosition);
                     piece->setTerritoryName(retreatTerritoryName);
                 }
             }
@@ -1585,8 +1571,7 @@ bool CombatDialog::checkCombatEnd()
                 m_defendingPlayer->removeGeneral(general);
                 // Mark as captured
                 general->setCapturedBy(m_attackingPlayer->getId());
-                // Move to attacker's position
-                general->setPosition(combatPosition);
+                // Territory name already set correctly
                 // Add to attacker's captured list
                 m_attackingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
@@ -1601,8 +1586,7 @@ bool CombatDialog::checkCombatEnd()
 
         // Transfer territory ownership (but not for sea territories)
         QString territoryName = m_combatTerritoryName;
-        Position combatPos = m_mapWidget->territoryNameToPosition(territoryName);
-        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
+        bool isSea = m_mapWidget->getGraph() && m_mapWidget->getGraph()->isSeaTerritory(territoryName);
 
         if (!isSea) {
             // Remove territory from defender
@@ -1624,30 +1608,9 @@ bool CombatDialog::checkCombatEnd()
             m_attackingPlayer->addCity(city);
         }
 
-        // Move all surviving attacking troops to the conquered territory position
-        for (GamePiece *piece : m_attackingTroopButtons.values()) {
-            if (piece) {
-                piece->setPosition(combatPosition);
-            }
-        }
+        // Surviving attacking troops already have their territory name set correctly
 
-        // Also move any attacking leaders (generals, caesars, galleys) to the conquered position
-        // Use fresh lists from the player to avoid dangling pointers
-        for (GeneralPiece *general : m_attackingPlayer->getGenerals()) {
-            if (general && general->getTerritoryName() == m_combatTerritoryName) {
-                general->setPosition(combatPosition);  // Already there, but ensure it's set
-            }
-        }
-        for (CaesarPiece *caesar : m_attackingPlayer->getCaesars()) {
-            if (caesar && caesar->getTerritoryName() == m_combatTerritoryName) {
-                caesar->setPosition(combatPosition);
-            }
-        }
-        for (GalleyPiece *galley : m_attackingPlayer->getGalleys()) {
-            if (galley && galley->getTerritoryName() == m_combatTerritoryName) {
-                galley->setPosition(combatPosition);
-            }
-        }
+        // Attacking leaders (generals, caesars, galleys) already have their territory names set correctly
 
         QString conquestMessage = QString("Attacker Wins!\n\nTerritory %1 has been conquered by Player %2!")
                 .arg(territoryName)
@@ -1938,8 +1901,7 @@ bool CombatDialog::checkCombatEnd()
                 m_attackingPlayer->removeGeneral(general);
                 // Mark as captured
                 general->setCapturedBy(m_defendingPlayer->getId());
-                // Keep at current position (defender's territory)
-                general->setPosition(combatPosition);
+                // Territory name already set correctly
                 // Add to defender's captured list
                 m_defendingPlayer->addCapturedGeneral(general);
                 qDebug() << "General captured successfully";
@@ -1959,8 +1921,7 @@ bool CombatDialog::checkCombatEnd()
         }
 
         // In land combat, destroy all docked galleys belonging to the losing side (attacker)
-        Position combatPos = m_mapWidget->territoryNameToPosition(m_combatTerritoryName);
-        bool isSea = m_mapWidget->isSeaTerritory(combatPos.row, combatPos.col);
+        bool isSea = m_mapWidget->getGraph() && m_mapWidget->getGraph()->isSeaTerritory(m_combatTerritoryName);
         if (!isSea) {
             // This is land combat - destroy all attacking galleys at this location
             QList<GalleyPiece*> defeatedGalleys;

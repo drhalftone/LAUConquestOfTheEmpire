@@ -8,6 +8,7 @@
 #include <functional>
 #include "gamepiece.h"
 #include "common.h"  // For MapWidget type alias
+#include "ai/aidecisionmaker.h"
 
 class Player;
 class PlayerInfoWidget;
@@ -46,7 +47,8 @@ public:
         Random,      // Random valid moves
         Aggressive,  // Prioritize attacking enemies
         Defensive,   // Prioritize defending territories
-        Economic     // Prioritize building cities and income
+        Economic,    // Prioritize building cities and income
+        RiskBased    // Use risk assessment and reachability analysis
     };
     Q_ENUM(Strategy)
 
@@ -115,6 +117,10 @@ public slots:
     // Check if a general can move (all troops in their legion must have moves remaining)
     bool canGeneralMove(GamePiece *general) const;
 
+    // Transfer troops from one general to another at the same territory
+    // Returns true if any troops were transferred
+    bool transferTroopsToOtherGeneral(GeneralPiece *fromGeneral);
+
 signals:
     // Notify when turn is complete
     void turnComplete();
@@ -163,6 +169,7 @@ private:
     void setPhase(Phase phase);
     void executeReadingStatePhase();
     void executeMovementPhase();
+    void executeMovementPhaseRiskBased();  // Risk-based movement using AIDecisionMaker
     void executeCombatPhase();
     void executePurchasePhase();
 
@@ -201,8 +208,11 @@ private:
     PlayerInfoWidget *m_infoWidget;
     MapWidget *m_mapWidget;
 
+    // AI Decision Making
+    AIDecisionMaker m_decisionMaker;
+
     // Configuration
-    Strategy m_strategy = Strategy::Random;
+    Strategy m_strategy = Strategy::RiskBased;  // Default to risk-based strategy
     int m_delayMs = 500;
     bool m_stepMode = false;
     bool m_enabled = true;

@@ -1980,10 +1980,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : caesarsArray) {
             QJsonObject caesarObj = val.toObject();
             QString territory = caesarObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            CaesarPiece *caesar = new CaesarPiece(player->getId(), pos, player);
-            caesar->setTerritoryName(territory);
+            CaesarPiece *caesar = new CaesarPiece(player->getId(), territory, player);
             caesar->setMovesRemaining(caesarObj["movesRemaining"].toDouble(2));
             caesar->setOnGalley(caesarObj["onGalley"].toString());
 
@@ -1998,10 +1996,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : generalsArray) {
             QJsonObject generalObj = val.toObject();
             QString territory = generalObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            GeneralPiece *general = new GeneralPiece(player->getId(), pos, generalObj["number"].toInt(), player);
-            general->setTerritoryName(territory);
+            GeneralPiece *general = new GeneralPiece(player->getId(), territory, generalObj["number"].toInt(), player);
             general->setMovesRemaining(generalObj["movesRemaining"].toDouble(2));
             general->setOnGalley(generalObj["onGalley"].toString());
 
@@ -2016,10 +2012,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : infantryArray) {
             QJsonObject infantryObj = val.toObject();
             QString territory = infantryObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            InfantryPiece *infantry = new InfantryPiece(player->getId(), pos, player);
-            infantry->setTerritoryName(territory);
+            InfantryPiece *infantry = new InfantryPiece(player->getId(), territory, player);
             infantry->setMovesRemaining(infantryObj["movesRemaining"].toDouble(1));
             infantry->setOnGalley(infantryObj["onGalley"].toString());
 
@@ -2032,10 +2026,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : cavalryArray) {
             QJsonObject cavalryObj = val.toObject();
             QString territory = cavalryObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            CavalryPiece *cavalry = new CavalryPiece(player->getId(), pos, player);
-            cavalry->setTerritoryName(territory);
+            CavalryPiece *cavalry = new CavalryPiece(player->getId(), territory, player);
             cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toDouble(2));
             cavalry->setOnGalley(cavalryObj["onGalley"].toString());
 
@@ -2047,10 +2039,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : catapultsArray) {
             QJsonObject catapultObj = val.toObject();
             QString territory = catapultObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            CatapultPiece *catapult = new CatapultPiece(player->getId(), pos, player);
-            catapult->setTerritoryName(territory);
+            CatapultPiece *catapult = new CatapultPiece(player->getId(), territory, player);
             catapult->setMovesRemaining(catapultObj["movesRemaining"].toDouble(1));
             catapult->setOnGalley(catapultObj["onGalley"].toString());
 
@@ -2062,10 +2052,8 @@ void GameMapWidget::loadGame()
         for (const QJsonValue &val : galleysArray) {
             QJsonObject galleyObj = val.toObject();
             QString territory = galleyObj["territory"].toString();
-            Position pos = territoryNameToPosition(territory);
 
-            GalleyPiece *galley = new GalleyPiece(player->getId(), pos, player);
-            galley->setTerritoryName(territory);
+            GalleyPiece *galley = new GalleyPiece(player->getId(), territory, player);
             galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
             // Note: leaderAboard is not restored since leader IDs change on load
             if (galleyObj["transportedThisTurn"].toBool()) {

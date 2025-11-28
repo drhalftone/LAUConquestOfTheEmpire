@@ -1632,8 +1632,6 @@ void MapWidget::saveGame()
         for (CaesarPiece *caesar : player->getCaesars()) {
             QJsonObject caesarObj;
             caesarObj["serialNumber"] = caesar->getSerialNumber();
-            caesarObj["row"] = caesar->getPosition().row;
-            caesarObj["col"] = caesar->getPosition().col;
             caesarObj["territory"] = caesar->getTerritoryName();
             caesarObj["movesRemaining"] = caesar->getMovesRemaining();
             caesarObj["onGalley"] = caesar->getOnGalley();
@@ -1647,8 +1645,7 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (caesar->hasLastTerritory()) {
-                caesarObj["lastTerritoryRow"] = caesar->getLastTerritory().row;
-                caesarObj["lastTerritoryCol"] = caesar->getLastTerritory().col;
+                caesarObj["lastTerritoryName"] = caesar->getLastTerritoryName();
             }
 
             caesarsArray.append(caesarObj);
@@ -1661,8 +1658,6 @@ void MapWidget::saveGame()
             QJsonObject generalObj;
             generalObj["serialNumber"] = general->getSerialNumber();
             generalObj["number"] = general->getNumber();
-            generalObj["row"] = general->getPosition().row;
-            generalObj["col"] = general->getPosition().col;
             generalObj["territory"] = general->getTerritoryName();
             generalObj["movesRemaining"] = general->getMovesRemaining();
             generalObj["onGalley"] = general->getOnGalley();
@@ -1676,8 +1671,7 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (general->hasLastTerritory()) {
-                generalObj["lastTerritoryRow"] = general->getLastTerritory().row;
-                generalObj["lastTerritoryCol"] = general->getLastTerritory().col;
+                generalObj["lastTerritoryName"] = general->getLastTerritoryName();
             }
 
             generalsArray.append(generalObj);
@@ -1691,8 +1685,6 @@ void MapWidget::saveGame()
             generalObj["serialNumber"] = general->getSerialNumber();
             generalObj["originalPlayer"] = QString(general->getPlayer());
             generalObj["number"] = general->getNumber();
-            generalObj["row"] = general->getPosition().row;
-            generalObj["col"] = general->getPosition().col;
             generalObj["territory"] = general->getTerritoryName();
             generalObj["movesRemaining"] = general->getMovesRemaining();
             generalObj["onGalley"] = general->getOnGalley();
@@ -1705,8 +1697,6 @@ void MapWidget::saveGame()
         for (InfantryPiece *infantry : player->getInfantry()) {
             QJsonObject infantryObj;
             infantryObj["serialNumber"] = infantry->getSerialNumber();
-            infantryObj["row"] = infantry->getPosition().row;
-            infantryObj["col"] = infantry->getPosition().col;
             infantryObj["territory"] = infantry->getTerritoryName();
             infantryObj["movesRemaining"] = infantry->getMovesRemaining();
             infantryObj["onGalley"] = infantry->getOnGalley();
@@ -1719,8 +1709,6 @@ void MapWidget::saveGame()
         for (CavalryPiece *cavalry : player->getCavalry()) {
             QJsonObject cavalryObj;
             cavalryObj["serialNumber"] = cavalry->getSerialNumber();
-            cavalryObj["row"] = cavalry->getPosition().row;
-            cavalryObj["col"] = cavalry->getPosition().col;
             cavalryObj["territory"] = cavalry->getTerritoryName();
             cavalryObj["movesRemaining"] = cavalry->getMovesRemaining();
             cavalryObj["onGalley"] = cavalry->getOnGalley();
@@ -1733,8 +1721,6 @@ void MapWidget::saveGame()
         for (CatapultPiece *catapult : player->getCatapults()) {
             QJsonObject catapultObj;
             catapultObj["serialNumber"] = catapult->getSerialNumber();
-            catapultObj["row"] = catapult->getPosition().row;
-            catapultObj["col"] = catapult->getPosition().col;
             catapultObj["territory"] = catapult->getTerritoryName();
             catapultObj["movesRemaining"] = catapult->getMovesRemaining();
             catapultObj["onGalley"] = catapult->getOnGalley();
@@ -1747,8 +1733,6 @@ void MapWidget::saveGame()
         for (GalleyPiece *galley : player->getGalleys()) {
             QJsonObject galleyObj;
             galleyObj["serialNumber"] = galley->getSerialNumber();
-            galleyObj["row"] = galley->getPosition().row;
-            galleyObj["col"] = galley->getPosition().col;
             galleyObj["territory"] = galley->getTerritoryName();
             galleyObj["movesRemaining"] = galley->getMovesRemaining();
 
@@ -1761,8 +1745,7 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (galley->hasLastTerritory()) {
-                galleyObj["lastTerritoryRow"] = galley->getLastTerritory().row;
-                galleyObj["lastTerritoryCol"] = galley->getLastTerritory().col;
+                galleyObj["lastTerritoryName"] = galley->getLastTerritoryName();
             }
 
             // Save last sea zone (for beach positioning)

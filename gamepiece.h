@@ -30,14 +30,11 @@ public:
     static constexpr int TYPE_PREFIX_CATAPULT = 50;
     static constexpr int TYPE_PREFIX_GALLEY = 60;
 
-    explicit GamePiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit GamePiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
     virtual ~GamePiece() = default;
 
     // Pure virtual function - each piece draws itself
     virtual void paint(QPainter &painter, int x, int y, int width, int height) const = 0;
-
-    // Virtual function for movement rules (can be overridden)
-    virtual bool canMoveTo(const Position &from, const Position &to) const;
 
     // Virtual function for getting piece type
     virtual Type getType() const = 0;
@@ -49,8 +46,6 @@ public:
     // Getters and setters
     QChar getPlayer() const { return m_player; }
     void setPlayer(QChar player) { m_player = player; }
-    Position getPosition() const { return m_position; }
-    void setPosition(const Position &pos) { m_position = pos; }
 
     QString getTerritoryName() const { return m_territoryName; }
     void setTerritoryName(const QString &name) { m_territoryName = name; }
@@ -72,7 +67,6 @@ protected:
     int generateUniqueId(int typePrefix);
 
     QChar m_player;
-    Position m_position;
     QString m_territoryName;           // Name of the territory this piece is in
     double m_movesRemaining;
     int m_uniqueId;                    // Unique 5-digit ID (type prefix + instance number)
@@ -88,7 +82,7 @@ class CaesarPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit CaesarPiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit CaesarPiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     Type getType() const override { return Type::Caesar; }
@@ -101,14 +95,14 @@ public:
     void clearLegion() { m_legion.clear(); }
 
     // Last territory tracking (for retreat)
-    Position getLastTerritory() const { return m_lastTerritory; }
-    void setLastTerritory(const Position &pos) { m_lastTerritory = pos; }
-    bool hasLastTerritory() const { return m_lastTerritory.row != -1; }
-    void clearLastTerritory() { m_lastTerritory = {-1, -1}; }
+    QString getLastTerritoryName() const { return m_lastTerritoryName; }
+    void setLastTerritoryName(const QString &name) { m_lastTerritoryName = name; }
+    bool hasLastTerritory() const { return !m_lastTerritoryName.isEmpty(); }
+    void clearLastTerritory() { m_lastTerritoryName.clear(); }
 
 private:
     QList<int> m_legion;  // List of piece IDs that belong to this Caesar's legion
-    Position m_lastTerritory = {-1, -1};  // Previous territory (for retreat purposes)
+    QString m_lastTerritoryName;  // Previous territory name (for retreat)
 };
 
 // General piece - commander (numbered 1-5)
@@ -117,7 +111,7 @@ class GeneralPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit GeneralPiece(QChar player, const Position &position, int number, QObject *parent = nullptr);
+    explicit GeneralPiece(QChar player, const QString &territoryName, int number, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     Type getType() const override { return Type::General; }
@@ -132,10 +126,10 @@ public:
     void clearLegion() { m_legion.clear(); }
 
     // Last territory tracking (for retreat)
-    Position getLastTerritory() const { return m_lastTerritory; }
-    void setLastTerritory(const Position &pos) { m_lastTerritory = pos; }
-    bool hasLastTerritory() const { return m_lastTerritory.row != -1; }
-    void clearLastTerritory() { m_lastTerritory = {-1, -1}; }
+    QString getLastTerritoryName() const { return m_lastTerritoryName; }
+    void setLastTerritoryName(const QString &name) { m_lastTerritoryName = name; }
+    bool hasLastTerritory() const { return !m_lastTerritoryName.isEmpty(); }
+    void clearLastTerritory() { m_lastTerritoryName.clear(); }
 
     // Capture status
     bool isCaptured() const { return m_capturedBy != '\0'; }
@@ -146,7 +140,7 @@ public:
 private:
     int m_number;  // 1-5
     QList<int> m_legion;  // List of piece IDs that belong to this General's legion
-    Position m_lastTerritory = {-1, -1};  // Previous territory (for retreat purposes)
+    QString m_lastTerritoryName;  // Previous territory name (for retreat)
     QChar m_capturedBy = '\0';  // Player who captured this general ('\0' = not captured)
 };
 
@@ -156,12 +150,11 @@ class InfantryPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit InfantryPiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit InfantryPiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     void paint(QPainter &painter, int x, int y, int width, int height, int count) const;
     Type getType() const override { return Type::Infantry; }
-    bool canMoveTo(const Position &from, const Position &to) const override;
 };
 
 // Cavalry piece - fast combat unit
@@ -170,12 +163,11 @@ class CavalryPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit CavalryPiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit CavalryPiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     void paint(QPainter &painter, int x, int y, int width, int height, int count) const;
     Type getType() const override { return Type::Cavalry; }
-    bool canMoveTo(const Position &from, const Position &to) const override;
 };
 
 // Catapult piece - siege weapon
@@ -184,12 +176,11 @@ class CatapultPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit CatapultPiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit CatapultPiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     void paint(QPainter &painter, int x, int y, int width, int height, int count) const;
     Type getType() const override { return Type::Catapult; }
-    bool canMoveTo(const Position &from, const Position &to) const override;
 };
 
 // Galley piece - naval unit
@@ -198,12 +189,11 @@ class GalleyPiece : public GamePiece
     Q_OBJECT
 
 public:
-    explicit GalleyPiece(QChar player, const Position &position, QObject *parent = nullptr);
+    explicit GalleyPiece(QChar player, const QString &territoryName, QObject *parent = nullptr);
 
     void paint(QPainter &painter, int x, int y, int width, int height) const override;
     void paint(QPainter &painter, int x, int y, int width, int height, int count) const;
     Type getType() const override { return Type::Galley; }
-    bool canMoveTo(const Position &from, const Position &to) const override;
 
     // Legion management
     QList<int> getLegion() const { return m_legion; }
@@ -213,10 +203,10 @@ public:
     void clearLegion() { m_legion.clear(); }
 
     // Last territory tracking (for retreat)
-    Position getLastTerritory() const { return m_lastTerritory; }
-    void setLastTerritory(const Position &pos) { m_lastTerritory = pos; }
-    bool hasLastTerritory() const { return m_lastTerritory.row != -1; }
-    void clearLastTerritory() { m_lastTerritory = {-1, -1}; }
+    QString getLastTerritoryName() const { return m_lastTerritoryName; }
+    void setLastTerritoryName(const QString &name) { m_lastTerritoryName = name; }
+    bool hasLastTerritory() const { return !m_lastTerritoryName.isEmpty(); }
+    void clearLastTerritory() { m_lastTerritoryName.clear(); }
 
     // Transport tracking (one legion per galley per turn)
     bool hasTransportedThisTurn() const { return m_hasTransportedThisTurn; }
@@ -247,7 +237,7 @@ public:
 
 private:
     QList<int> m_legion;  // List of piece IDs that belong to this Galley's legion
-    Position m_lastTerritory = {-1, -1};  // Previous territory (for retreat purposes)
+    QString m_lastTerritoryName;  // Previous territory name (for retreat)
     bool m_hasTransportedThisTurn = false;  // True if galley has transported a legion this turn
     int m_leaderAboard = 0;  // Unique ID of leader currently aboard (0 = none)
     // Movement tracking fields

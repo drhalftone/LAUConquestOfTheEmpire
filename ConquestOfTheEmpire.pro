@@ -19,7 +19,9 @@ SOURCES += \
     mapgraph.cpp \
     gamepiece.cpp \
     player.cpp \
-    building.cpp
+    building.cpp \
+    ai/reachabilitycalculator.cpp \
+    ai/aidecisionmaker.cpp
 
 # Common headers (always included)
 HEADERS += \
@@ -27,7 +29,9 @@ HEADERS += \
     gamepiece.h \
     player.h \
     building.h \
-    common.h
+    common.h \
+    ai/reachabilitycalculator.h \
+    ai/aidecisionmaker.h
 
 # Conditional compilation based on map type
 contains(DEFINES, USE_OPENGL_MAP) {
@@ -40,7 +44,8 @@ contains(DEFINES, USE_OPENGL_MAP) {
         purchasedialog.cpp \
         citydestructiondialog.cpp \
         laurollingdiewidget.cpp \
-        aiplayer.cpp
+        aiplayer.cpp \
+        aidebugwidget.cpp
     HEADERS += \
         gamemapwidget.h \
         playerinfowidget.h \
@@ -49,7 +54,8 @@ contains(DEFINES, USE_OPENGL_MAP) {
         purchasedialog.h \
         citydestructiondialog.h \
         laurollingdiewidget.h \
-        aiplayer.h
+        aiplayer.h \
+        aidebugwidget.h
 } else {
     message("Using grid-based map widget")
     SOURCES += \

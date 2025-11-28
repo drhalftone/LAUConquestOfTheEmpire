@@ -17,13 +17,12 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
 {
     qDebug() << "Creating Player" << m_id << "with home province:" << m_homeProvinceName;
 
-    // TEMPORARY: Create dummy position for piece/building constructors
-    // This will be removed when GamePiece/Building are updated to not need Position
+    // TEMPORARY: Create dummy position for Building constructor
+    // This will be removed when Building is updated to not need Position
     Position tempPos = {0, 0};
 
     // Create Caesar at home province
-    CaesarPiece *caesar = new CaesarPiece(m_id, tempPos, this);
-    caesar->setTerritoryName(m_homeProvinceName);
+    CaesarPiece *caesar = new CaesarPiece(m_id, m_homeProvinceName, this);
     qDebug() << "  Caesar created, territory name:" << caesar->getTerritoryName();
     m_caesars.append(caesar);
 
@@ -34,15 +33,13 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
 
     // Create 6 Generals at home province (per 1984 rules)
     for (int i = 1; i <= 6; ++i) {
-        GeneralPiece *general = new GeneralPiece(m_id, tempPos, i, this);
-        general->setTerritoryName(m_homeProvinceName);
+        GeneralPiece *general = new GeneralPiece(m_id, m_homeProvinceName, i, this);
         m_generals.append(general);
     }
 
     // Create 4 Infantry at home province (per 1984 rules)
     for (int i = 1; i <= 4; ++i) {
-        InfantryPiece *infantry = new InfantryPiece(m_id, tempPos, this);
-        infantry->setTerritoryName(m_homeProvinceName);
+        InfantryPiece *infantry = new InfantryPiece(m_id, m_homeProvinceName, this);
         m_infantry.append(infantry);
     }
 
@@ -627,7 +624,42 @@ void Player::startTurn()
 void Player::endTurn()
 {
     m_isMyTurn = false;
-    // Future: Could add end-of-turn logic here (cleanup, etc.)
+
+    // Reset movement for all pieces to their default values at end of turn
+    // This ensures pieces always show full moves when it's not their turn,
+    // which makes threat assessment calculations work correctly
+    // (startTurn will also reset, but this keeps state clean between turns)
+
+    // Caesars: 2 moves
+    for (CaesarPiece *piece : m_caesars) {
+        piece->setMovesRemaining(2);
+    }
+
+    // Generals: 2 moves
+    for (GeneralPiece *piece : m_generals) {
+        piece->setMovesRemaining(2);
+    }
+
+    // Infantry: 1 move
+    for (InfantryPiece *piece : m_infantry) {
+        piece->setMovesRemaining(1);
+    }
+
+    // Cavalry: 2 moves
+    for (CavalryPiece *piece : m_cavalry) {
+        piece->setMovesRemaining(2);
+    }
+
+    // Catapults: 1 move
+    for (CatapultPiece *piece : m_catapults) {
+        piece->setMovesRemaining(1);
+    }
+
+    // Galleys: 2 moves
+    for (GalleyPiece *piece : m_galleys) {
+        piece->setMovesRemaining(2);
+    }
+
     emit turnEnded();
 }
 

@@ -991,6 +991,15 @@ void PurchaseDialog::setupAIAutoMode(int delayMs, const QMap<QString, int> &purc
     QTimer::singleShot(delayMs, this, [this, purchases, delayMs]() {
         qDebug() << "AI Auto-Mode: Interacting with purchase dialog";
 
+        // Check city DESTRUCTION checkboxes first (strategic - deny enemy prizes)
+        for (auto it = m_cityDestructionCheckboxes.begin(); it != m_cityDestructionCheckboxes.end(); ++it) {
+            QString key = QString("DestroyCity:%1").arg(it.value()->getTerritoryName());
+            if (purchases.contains(key) && purchases[key] > 0) {
+                it.key()->setChecked(true);
+                qDebug() << "AI Auto-Mode: Marking city for DESTRUCTION at" << it.value()->getTerritoryName();
+            }
+        }
+
         // Set troop quantities
         if (purchases.contains("Infantry") && m_infantrySpinBox) {
             int qty = purchases["Infantry"];
