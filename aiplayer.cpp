@@ -462,16 +462,49 @@ void AIPlayer::executeMovementPhaseRiskBased()
     ScoredMove bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, graph);
 
     if (!bestMove.isValid()) {
-        log("No valid moves available from decision maker - all generals may have used their moves");
-        // Log remaining moves for each general
+        // Check if any generals still have moves remaining
+        bool anyMovesLeft = false;
         for (GeneralPiece *gen : m_player->getGenerals()) {
-            log(QString("  General #%1 at %2: %3 moves remaining")
-                .arg(gen->getNumber())
-                .arg(gen->getTerritoryName())
-                .arg(gen->getMovesRemaining()));
+            if (gen->getMovesRemaining() >= 1.0) {
+                anyMovesLeft = true;
+                break;
+            }
         }
-        executeEndTurn();
-        return;
+
+        if (anyMovesLeft) {
+            // Plan exhausted but generals have moves - CREATE A NEW PLAN for remaining moves
+            log("--- CREATING SECOND-ROUND PLAN (generals still have moves) ---");
+
+            m_currentPlan = m_decisionMaker.planMovement(m_player, allPlayers, graph);
+
+            log(QString("Second-round plan: %1").arg(m_currentPlan.summary));
+            for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+                if (assignment.general && assignment.general->getType() == GamePiece::Type::General) {
+                    GeneralPiece *gen = static_cast<GeneralPiece*>(assignment.general);
+                    log(QString("  General #%1: %2 -> %3 (%4) with %5 troops")
+                        .arg(gen->getNumber())
+                        .arg(gen->getTerritoryName())
+                        .arg(assignment.targetTerritory)
+                        .arg(assignment.missionType)
+                        .arg(assignment.troopsToTake));
+                }
+            }
+
+            // Try to get a move from the new plan
+            bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, graph);
+        }
+
+        if (!bestMove.isValid()) {
+            log("No valid moves available - ending turn");
+            for (GeneralPiece *gen : m_player->getGenerals()) {
+                log(QString("  General #%1 at %2: %3 moves remaining")
+                    .arg(gen->getNumber())
+                    .arg(gen->getTerritoryName())
+                    .arg(gen->getMovesRemaining()));
+            }
+            executeEndTurn();
+            return;
+        }
     }
 
     // Check if the move has a positive score
