@@ -1779,75 +1779,56 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     int maxAttackMissions = (troopsForAttack >= 4) ? 2 : (troopsForAttack >= 2) ? 1 : 0;
 
     qDebug() << "Planning:" << maxAttackMissions << "attack missions with" << troopsForAttack << "troops";
+    qDebug() << "  Troops at home (" << homeProvince << "):" << countAvailableTroopsAt(homeProvince, player);
 
     int attackMissionsAssigned = 0;
     int expandMissionsAssigned = 0;
 
+    // PHASE 1: Assign attack/defense missions to generals AT HOME with troops
+    // Only generals at home can bring troops efficiently
     for (const TargetTerritory &target : targets) {
-        if (assignedGenerals.size() >= availableGenerals.size()) break;
+        if (!target.requiresTroops) continue;  // Skip expansion targets in this phase
+        if (attackMissionsAssigned >= maxAttackMissions) continue;
 
-        // Skip if we've assigned enough missions
-        if (target.requiresTroops && attackMissionsAssigned >= maxAttackMissions) continue;
-        if (!target.requiresTroops && expandMissionsAssigned >= 4) continue;  // Limit expansion too
+        int troopsAtHome = countAvailableTroopsAt(homeProvince, player);
+        if (troopsAtHome < target.troopsNeeded) {
+            qDebug() << "Skipping" << target.name << "- need" << target.troopsNeeded
+                     << "troops but only have" << troopsAtHome << "at home";
+            continue;
+        }
 
-        // Find a general who can reach this target
+        // Find a general AT HOME who can reach this target
         GeneralPiece *bestGeneral = nullptr;
-        int bestTroopsAvailable = -1;
 
         for (GeneralPiece *gen : availableGenerals) {
             if (assignedGenerals.contains(gen)) continue;
+            if (gen->getTerritoryName() != homeProvince) continue;  // Must be at home!
 
             // Check if general can reach this target
             if (!generalReachability[gen].contains(target.name)) continue;
 
-            // For attack missions, prefer generals with MORE troops nearby
-            // For expansion, any general will do
-            int troopsHere = countAvailableTroopsAt(gen->getTerritoryName(), player);
-
-            if (target.requiresTroops) {
-                // Need troops - pick general with most available
-                if (troopsHere > bestTroopsAvailable) {
-                    bestGeneral = gen;
-                    bestTroopsAvailable = troopsHere;
-                }
-            } else {
-                // Expansion - prefer generals WITHOUT troops (save troops for attacks)
-                if (bestGeneral == nullptr || troopsHere < bestTroopsAvailable) {
-                    bestGeneral = gen;
-                    bestTroopsAvailable = troopsHere;
-                }
-            }
+            bestGeneral = gen;
+            break;  // Take first available general at home
         }
 
-        if (!bestGeneral) continue;
-
-        // Check if we have enough troops for attack missions
-        if (target.requiresTroops && bestTroopsAvailable < target.troopsNeeded) {
-            qDebug() << "Skipping" << target.name << "- need" << target.troopsNeeded
-                     << "troops but only have" << bestTroopsAvailable;
+        if (!bestGeneral) {
+            qDebug() << "No general at home can reach" << target.name;
             continue;
         }
 
-        // Create assignment
+        // Create assignment with troops
         GeneralAssignment assignment;
         assignment.general = bestGeneral;
         assignment.targetTerritory = target.name;
         assignment.missionType = target.type;
         assignment.priority = target.score;
 
-        if (target.requiresTroops) {
-            // Assign troops - take as many as possible (up to 6)
-            int troopsToTake = qMin(6, bestTroopsAvailable);
-            assignTroopsToGeneral(assignment, player, troopsToTake);
-            assignment.reason = QString("%1 %2 with %3 troops (enemy: %4)")
-                .arg(target.type).arg(target.name).arg(assignment.troopsToTake).arg(target.enemyTroops);
-            attackMissionsAssigned++;
-        } else {
-            // Expansion - go alone (save troops)
-            assignment.troopsToTake = 0;
-            assignment.reason = QString("Expand to undefended %1").arg(target.name);
-            expandMissionsAssigned++;
-        }
+        // Assign troops - take as many as possible (up to 6)
+        int troopsToTake = qMin(6, troopsAtHome);
+        assignTroopsToGeneral(assignment, player, troopsToTake);
+        assignment.reason = QString("%1 %2 with %3 troops (enemy: %4)")
+            .arg(target.type).arg(target.name).arg(assignment.troopsToTake).arg(target.enemyTroops);
+        attackMissionsAssigned++;
 
         plan.assignments.append(assignment);
         assignedGenerals.insert(bestGeneral);
@@ -1859,6 +1840,54 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         qDebug() << "Assigned General #" << bestGeneral->getNumber()
                  << "to" << target.name << "(" << target.type << ")"
                  << "with" << assignment.troopsToTake << "troops";
+    }
+
+    // PHASE 2: Assign expansion missions to generals NOT at home (they're already out)
+    // These generals should expand without troops to maximize territory gain
+    for (const TargetTerritory &target : targets) {
+        if (target.requiresTroops) continue;  // Skip attack targets
+        if (expandMissionsAssigned >= 4) continue;
+        if (assignedGenerals.size() >= availableGenerals.size()) break;
+
+        // Find a general who can reach this target, prefer those NOT at home
+        GeneralPiece *bestGeneral = nullptr;
+
+        for (GeneralPiece *gen : availableGenerals) {
+            if (assignedGenerals.contains(gen)) continue;
+            if (!generalReachability[gen].contains(target.name)) continue;
+
+            bool atHome = (gen->getTerritoryName() == homeProvince);
+
+            // Prefer generals not at home (save home generals for troop missions)
+            if (!atHome) {
+                bestGeneral = gen;
+                break;
+            } else if (!bestGeneral) {
+                bestGeneral = gen;  // Fallback to home general if no others available
+            }
+        }
+
+        if (!bestGeneral) continue;
+
+        // Create expansion assignment (no troops)
+        GeneralAssignment assignment;
+        assignment.general = bestGeneral;
+        assignment.targetTerritory = target.name;
+        assignment.missionType = target.type;
+        assignment.priority = target.score;
+        assignment.troopsToTake = 0;
+        assignment.reason = QString("Expand to undefended %1").arg(target.name);
+        expandMissionsAssigned++;
+
+        plan.assignments.append(assignment);
+        assignedGenerals.insert(bestGeneral);
+        assignedTargets.insert(target.name);
+        plan.generalsUsed++;
+        plan.territoriesTargeted++;
+
+        qDebug() << "Assigned General #" << bestGeneral->getNumber()
+                 << "to" << target.name << "(" << target.type << ")"
+                 << "with 0 troops (expansion)";
     }
 
     // Step 7: Handle remaining generals
