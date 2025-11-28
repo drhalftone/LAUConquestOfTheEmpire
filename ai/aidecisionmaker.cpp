@@ -94,7 +94,7 @@ QList<ScoredMove> AIDecisionMaker::getAllScoredMoves(Player *player, const QList
                     risk.risk = RiskLevel::Safe;  // Not in risk map = probably safe
                 }
 
-                ScoredMove move = scoreMove(caesar, it.key(), it.value(), risk, player, allPlayers, graph);
+                ScoredMove move = scoreMove(caesar, it.key(), it.value(), risk, player, allPlayers, graph, riskMap);
                 if (move.isValid() && move.score > -9000) {
                     allMoves.append(move);
                 }
@@ -124,7 +124,7 @@ QList<ScoredMove> AIDecisionMaker::getAllScoredMoves(Player *player, const QList
                 risk.risk = RiskLevel::Safe;
             }
 
-            ScoredMove move = scoreMove(general, it.key(), it.value(), risk, player, allPlayers, graph);
+            ScoredMove move = scoreMove(general, it.key(), it.value(), risk, player, allPlayers, graph, riskMap);
             if (move.isValid() && move.score > -9000) {
                 allMoves.append(move);
             }
@@ -146,7 +146,8 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
                                        const TerritoryRisk &risk,
                                        Player *player,
                                        const QList<Player*> &allPlayers,
-                                       MapGraph *graph)
+                                       MapGraph *graph,
+                                       const QMap<QString, TerritoryRisk> &riskMap)
 {
     ScoredMove move;
     move.leader = leader;

@@ -158,7 +158,8 @@ private:
                          const TerritoryRisk &risk,
                          Player *player,
                          const QList<Player*> &allPlayers,
-                         MapGraph *graph);
+                         MapGraph *graph,
+                         const QMap<QString, TerritoryRisk> &riskMap);
 
     /**
      * @brief Count enemy troops currently stationed at a territory (not including reinforcements)
