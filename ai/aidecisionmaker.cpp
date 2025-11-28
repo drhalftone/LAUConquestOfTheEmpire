@@ -244,7 +244,10 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
 
     // Count CURRENT enemy troops at the territory (not future reinforcements)
     int currentEnemyTroops = countEnemyTroopsAt(destination, player, allPlayers);
-    bool isUndefended = (currentEnemyTroops == 0);
+    // Check for ANY enemy presence (including lone generals) - requires troops to attack
+    bool hasEnemyPresence = hasEnemyPresenceAt(destination, player, allPlayers);
+    // Territory is only "undefended" if there are no enemy pieces at all (not even generals)
+    bool isUndefended = !hasEnemyPresence;
 
     // Base value of territory - BUT only if we don't already own it!
     // Moving within our own territory doesn't gain us anything
@@ -521,9 +524,9 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
         move.reason += " | High-value target: +20";
     }
 
-    // INVALID if we can't bring any troops AND there are current defenders (combat requires troops)
-    // But undefended territories can be claimed without troops!
-    if (move.troopsCanBring == 0 && !isUndefended && currentEnemyTroops > 0) {
+    // INVALID if we can't bring any troops AND there are enemy pieces (combat requires troops)
+    // Even lone enemy generals require troops to capture - you can't attack without an army!
+    if (move.troopsCanBring == 0 && hasEnemyPresence) {
         move.score = -9999;
         move.reason = "INVALID: Cannot enter combat without troops";
         return move;
