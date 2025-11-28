@@ -155,6 +155,10 @@ void AIPlayer::executeTurn()
         return;
     }
 
+    // Reset planning state for new turn
+    m_planCreated = false;
+    m_currentPlan = MovementPlan();
+
     // Enable AI auto-mode to skip dialogs during this turn
     if (m_infoWidget) {
         m_infoWidget->setAIAutoMode(true, m_delayMs);
@@ -293,7 +297,7 @@ void AIPlayer::executeMovementPhaseRiskBased()
 {
     static int moveIterationCount = 0;
     moveIterationCount++;
-    log(QString("Executing RISK-BASED movement phase (iteration %1)...").arg(moveIterationCount));
+    log(QString("Executing PLANNED movement phase (iteration %1)...").arg(moveIterationCount));
 
     // Reset counter at start of new turn
     if (moveIterationCount > 100) {
@@ -319,8 +323,10 @@ void AIPlayer::executeMovementPhaseRiskBased()
         }
     }
 
-    // On first move of turn, print comprehensive situation report
+    // On first move of turn, CREATE THE PLAN and print comprehensive situation report
     if (isFirstMoveOfTurn) {
+        // Reset plan state for new turn
+        m_planCreated = false;
         log("========== AI TURN START - SITUATION REPORT ==========");
 
         // Print our territories and their risk levels
@@ -432,12 +438,28 @@ void AIPlayer::executeMovementPhaseRiskBased()
             }
         }
 
-        log("--- TOP MOVE OPTIONS ---");
-        // This will be printed by getBestMove, but we note it here
+        log("--- CREATING MOVEMENT PLAN ---");
+
+        // CREATE THE PLAN at the start of the turn
+        m_currentPlan = m_decisionMaker.planMovement(m_player, allPlayers, graph);
+        m_planCreated = true;
+
+        log(QString("Plan created: %1").arg(m_currentPlan.summary));
+        for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+            if (assignment.general && assignment.general->getType() == GamePiece::Type::General) {
+                GeneralPiece *gen = static_cast<GeneralPiece*>(assignment.general);
+                log(QString("  General #%1: %2 -> %3 (%4) with %5 troops")
+                    .arg(gen->getNumber())
+                    .arg(gen->getTerritoryName())
+                    .arg(assignment.targetTerritory)
+                    .arg(assignment.missionType)
+                    .arg(assignment.troopsToTake));
+            }
+        }
     }
 
-    // Get the best move from the decision maker
-    ScoredMove bestMove = m_decisionMaker.getBestMove(m_player, allPlayers, graph);
+    // Get the next move from the plan (not greedy per-move scoring)
+    ScoredMove bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, graph);
 
     if (!bestMove.isValid()) {
         log("No valid moves available from decision maker - all generals may have used their moves");
@@ -493,7 +515,7 @@ void AIPlayer::executeMovementPhaseRiskBased()
     }
 
     if (!destinationIsValid) {
-        log(QString("RISK-BASED: %1 wants %2 -> %3 but destination not reachable in one move!")
+        log(QString("PLANNED: %1 wants %2 -> %3 but destination not reachable in one move!")
             .arg(leaderName)
             .arg(bestMove.leader->getTerritoryName())
             .arg(bestMove.destination));
@@ -529,7 +551,7 @@ void AIPlayer::executeMovementPhaseRiskBased()
         }
     }
 
-    log(QString("RISK-BASED: %1 at %2 -> %3 (score=%4, troops=%5)")
+    log(QString("PLANNED: %1 at %2 -> %3 (score=%4, troops=%5)")
         .arg(leaderName)
         .arg(bestMove.leader->getTerritoryName())
         .arg(bestMove.destination)
@@ -543,7 +565,7 @@ void AIPlayer::executeMovementPhaseRiskBased()
     evalMove.fromTerritory = bestMove.leader->getTerritoryName();
     evalMove.targetTerritory = bestMove.destination;
     evalMove.score = bestMove.score;
-    evalMove.moveType = "RiskBased";
+    evalMove.moveType = "Planned";
     evalMove.reason = bestMove.reason;
     evalMove.isSelected = true;
     emit moveSelected(evalMove);
@@ -1392,6 +1414,7 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     // Get the leader's current legion - handle both Caesar and General
     QList<int> currentLegion;
     bool isCaesar = false;
+    int leaderNumber = 0;
 
     if (leader->getType() == GamePiece::Type::Caesar) {
         CaesarPiece *caesar = static_cast<CaesarPiece*>(leader);
@@ -1401,46 +1424,106 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     } else if (leader->getType() == GamePiece::Type::General) {
         GeneralPiece *gen = static_cast<GeneralPiece*>(leader);
         currentLegion = gen->getLegion();
+        leaderNumber = gen->getNumber();
     } else {
         log("decideLegionComposition: Unknown leader type, returning empty list");
         return troopsToSelect;
     }
 
     int currentLegionSize = currentLegion.size();
+    QString leaderName = isCaesar ? "Caesar" : QString("General %1").arg(leaderNumber);
+
+    // === NEW PLANNING-BASED APPROACH ===
+    // Check if we have a plan and this general has an assignment
+    int plannedTroops = 0;
+    QList<int> plannedTroopIds;
+    bool hasPlannedAssignment = false;
+
+    if (m_planCreated && !m_currentPlan.isEmpty()) {
+        for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+            if (assignment.general == leader) {
+                hasPlannedAssignment = true;
+                plannedTroops = assignment.troopsToTake;
+                plannedTroopIds = assignment.troopIds;
+                log(QString("Legion Building: %1 has PLANNED assignment: %2 troops for %3")
+                    .arg(leaderName).arg(plannedTroops).arg(assignment.missionType));
+                break;
+            }
+        }
+    }
+
+    // If we have a planned assignment with specific troops, use those
+    if (hasPlannedAssignment && !plannedTroopIds.isEmpty()) {
+        // First, add troops already in this leader's legion
+        for (int troopId : currentLegion) {
+            // Check if this troop is in availableTroops and has moves
+            bool available = false;
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    available = true;
+                    break;
+                }
+            }
+            if (available) {
+                troopsToSelect.append(troopId);
+            }
+        }
+
+        // Then add the specifically planned troops (if not already added)
+        for (int troopId : plannedTroopIds) {
+            if (troopsToSelect.contains(troopId)) continue;
+
+            // Verify this troop is available
+            bool available = false;
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    available = true;
+                    break;
+                }
+            }
+            if (available) {
+                troopsToSelect.append(troopId);
+            }
+        }
+
+        log(QString("Legion Building: %1 using PLANNED composition: %2 troops selected")
+            .arg(leaderName).arg(troopsToSelect.size()));
+        return troopsToSelect;
+    }
+
+    // If no plan or expansion mission (0 troops), use minimal troops
+    if (hasPlannedAssignment && plannedTroops == 0) {
+        // Expansion mission - don't take any troops (save for attack missions)
+        log(QString("Legion Building: %1 is on EXPANSION mission - taking NO troops").arg(leaderName));
+        return troopsToSelect;  // Empty list
+    }
+
+    // === FALLBACK: Old quota-based approach if no plan ===
+    // (This path is taken if plan creation failed or for Caesar)
 
     // CRITICAL: Caesar is EXTREMELY valuable - losing Caesar loses the game!
-    // Enemy gets 100 gold bonus for capturing Caesar, so they WILL attack at equal strength.
-    // If Caesar must move (desperate situation), he needs a FULL legion for protection.
-    int minTroops = isCaesar ? 6 : 0;  // Caesar gets full legion or doesn't move
+    int minTroops = isCaesar ? 6 : 0;
 
     // Calculate quota: total troops / (6 generals + 1 for Caesar)
     int totalTroops = m_player->getInfantryCount() +
                       m_player->getCavalryCount() +
                       m_player->getCatapultCount();
     int numGenerals = m_player->getGenerals().size();
-    int numLeaders = numGenerals + 1;  // +1 for Caesar
-    if (numLeaders == 0) numLeaders = 1;  // Avoid division by zero
+    int numLeaders = numGenerals + 1;
+    if (numLeaders == 0) numLeaders = 1;
 
     int quota = totalTroops / numLeaders;
-    // Handle remainder: Caesar gets priority (leaderNumber 0), then generals by number
     int remainder = totalTroops % numLeaders;
-    int leaderNumber = isCaesar ? 0 : static_cast<GeneralPiece*>(leader)->getNumber();
     if (leaderNumber <= remainder) {
-        quota += 1;  // This leader gets one extra from the remainder
+        quota += 1;
     }
 
-    // Caesar always gets at least minTroops quota
     if (isCaesar && quota < minTroops) {
         quota = minTroops;
     }
 
-    QString leaderName = isCaesar ? "Caesar" : QString("General %1").arg(leaderNumber);
-    log(QString("Legion Building: %1 - Current legion: %2, Quota: %3, MinTroops: %4, Total troops: %5, NumLeaders: %6")
-        .arg(leaderName).arg(currentLegionSize).arg(quota).arg(minTroops).arg(totalTroops).arg(numLeaders));
-    log(QString("  Infantry: %1, Cavalry: %2, Catapults: %3")
-        .arg(m_player->getInfantryCount())
-        .arg(m_player->getCavalryCount())
-        .arg(m_player->getCatapultCount()));
+    log(QString("Legion Building: %1 - FALLBACK quota mode: Current=%2, Quota=%3")
+        .arg(leaderName).arg(currentLegionSize).arg(quota));
 
     // Build set of all troop IDs in ANY leader's legion (to identify assigned troops)
     QSet<int> assignedTroopIds;

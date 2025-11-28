@@ -223,6 +223,10 @@ private:
     bool m_autoRun = false;
     bool m_waitingForStep = false;
 
+    // Movement planning state
+    MovementPlan m_currentPlan;  // The plan for this turn
+    bool m_planCreated = false;  // True if we've created a plan for this turn
+
     // Timer for delayed execution
     QTimer *m_actionTimer;
 

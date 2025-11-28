@@ -9,6 +9,7 @@
 
 // Forward declarations
 class GamePiece;
+class GeneralPiece;
 class Player;
 class MapGraph;
 class City;
@@ -24,6 +25,35 @@ struct ScoredMove {
     QString reason;  // Human-readable explanation for debugging
 
     bool isValid() const { return leader != nullptr && !destination.isEmpty(); }
+};
+
+/**
+ * @brief Represents a planned assignment for a single general
+ */
+struct GeneralAssignment {
+    GamePiece *general = nullptr;
+    QString targetTerritory;
+    int troopsToTake = 0;       // How many troops this general should bring
+    QList<int> troopIds;        // Specific troop IDs to assign
+    int priority = 0;           // Higher = more important mission
+    QString missionType;        // "Expand", "Attack", "Defend", "StayHome"
+    QString reason;
+
+    bool isValid() const { return general != nullptr && !targetTerritory.isEmpty(); }
+};
+
+/**
+ * @brief Represents a complete movement plan for the turn
+ * This plans the END STATE - where each general should be at end of turn
+ */
+struct MovementPlan {
+    QList<GeneralAssignment> assignments;
+    QString summary;
+    int totalTroopsDeployed = 0;
+    int generalsUsed = 0;
+    int territoriesTargeted = 0;
+
+    bool isEmpty() const { return assignments.isEmpty(); }
 };
 
 /**
@@ -97,6 +127,33 @@ public:
      * @return Human-readable analysis report
      */
     QString generateDecisionReport(Player *player, const QList<Player*> &allPlayers, MapGraph *graph);
+
+    // === Movement Planning Methods ===
+
+    /**
+     * @brief Plan the entire turn's movement at once
+     *
+     * This is the NEW planning-based approach that:
+     * 1. Identifies target territories (unowned, enemy, at-risk own)
+     * 2. Assigns generals to targets based on priority and reachability
+     * 3. Allocates troops efficiently (concentrate force, don't scatter)
+     * 4. Returns a complete plan for execution
+     *
+     * @param player The AI player
+     * @param allPlayers All players (for threat assessment)
+     * @param graph The map graph
+     * @return Complete movement plan for the turn
+     */
+    MovementPlan planMovement(Player *player, const QList<Player*> &allPlayers, MapGraph *graph);
+
+    /**
+     * @brief Get the next move to execute from a plan
+     * Call this repeatedly until it returns invalid move
+     * @param plan The movement plan
+     * @param player The player (to check current general positions)
+     * @return Next ScoredMove to execute, or invalid if plan complete
+     */
+    ScoredMove getNextMoveFromPlan(const MovementPlan &plan, Player *player, MapGraph *graph);
 
     // === Purchase Decision Methods ===
 
@@ -182,6 +239,39 @@ private:
      * This checks for ANY enemy presence which would trigger combat or block entry
      */
     bool hasEnemyPresenceAt(const QString &territory, Player *us, const QList<Player*> &allPlayers);
+
+    // === Movement Planning Helpers ===
+
+    /**
+     * @brief Identify all target territories worth moving to
+     * Returns a list of territories with scores, categorized by type
+     */
+    struct TargetTerritory {
+        QString name;
+        int score = 0;
+        QString type;  // "Expand", "Attack", "Defend"
+        int enemyTroops = 0;
+        int troopsNeeded = 0;  // Minimum troops to take this territory
+        bool requiresTroops = false;  // True if enemy presence (can't capture with lone general)
+    };
+    QList<TargetTerritory> identifyTargets(Player *player, const QList<Player*> &allPlayers,
+                                            MapGraph *graph, const QMap<QString, TerritoryRisk> &riskMap);
+
+    /**
+     * @brief Find which generals can reach a territory this turn
+     */
+    QList<GamePiece*> getGeneralsWhoCanReach(const QString &territory, Player *player,
+                                              MapGraph *graph, const QMap<QString, ReachInfo> &allReach);
+
+    /**
+     * @brief Count available troops at a territory (unassigned + in legion of generals there)
+     */
+    int countAvailableTroopsAt(const QString &territory, Player *player);
+
+    /**
+     * @brief Assign specific troop IDs to a general's assignment
+     */
+    void assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops);
 
     // Scoring weights (can be tuned)
     int m_territoryValueWeight = 10;   // Points per territory value (5 or 10)
