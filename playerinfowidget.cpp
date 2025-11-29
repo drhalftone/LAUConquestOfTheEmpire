@@ -5168,6 +5168,31 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
         return false;
     }
 
+    // Check if leader has troops when moving to unowned/enemy territory
+    // Generals CANNOT capture territory without troops
+    bool isGeneral = (leader->getType() == GamePiece::Type::General);
+    if (isGeneral) {
+        // Check if destination is owned by us
+        Player *owningPlayer = nullptr;
+        for (Player *p : m_players) {
+            if (p->getId() == leader->getPlayer()) {
+                owningPlayer = p;
+                break;
+            }
+        }
+
+        bool weOwnDestination = owningPlayer && owningPlayer->ownsTerritory(destinationTerritory);
+        if (!weOwnDestination) {
+            // Need troops to capture - check if general has troops in legion
+            GeneralPiece *general = static_cast<GeneralPiece*>(leader);
+            if (general->getLegion().isEmpty()) {
+                qDebug() << "AI Move: General" << general->getNumber() << "cannot move to unowned territory"
+                         << destinationTerritory << "without troops - aborting move";
+                return false;
+            }
+        }
+    }
+
     QString fromTerritory = leader->getTerritoryName();
     int movesBefore = leader->getMovesRemaining();
 
