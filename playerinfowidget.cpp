@@ -5343,130 +5343,164 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
     // Check for available galleys that can transport this leader
     bool isCaesar = (leader->getType() == GamePiece::Type::Caesar);
     if (isGeneral || isCaesar) {
-        // Find galleys adjacent to leader's position
+        // Find all adjacent sea zones (for checking galleys at sea or beached)
+        QStringList adjacentSeaZones;
         for (const QString &neighbor : neighbors) {
-            if (!m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
-                continue;  // Not a sea zone
+            if (m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
+                adjacentSeaZones.append(neighbor);
+            }
+        }
+
+        // Check all player galleys
+        for (GalleyPiece *galley : player->getGalleys()) {
+            if (galley->hasTransportedThisTurn()) {
+                continue;  // Galley already transported this turn
+            }
+            if (galley->hasLeaderAboard()) {
+                continue;  // Galley already has a leader
+            }
+            if (galley->getMovesRemaining() < 1.0) {
+                continue;  // Galley has no moves
             }
 
-            // Check if player has a galley in this sea zone
-            for (GalleyPiece *galley : player->getGalleys()) {
-                if (galley->getTerritoryName() != neighbor) {
-                    continue;  // Galley not in this sea zone
+            QString galleySeaZone;
+            bool isBeached = galley->isBeached();
+
+            if (isBeached) {
+                // Beached galley - must be at same territory as leader
+                if (galley->getTerritoryName() != territoryName) {
+                    continue;  // Beached galley not here
                 }
-                if (galley->hasTransportedThisTurn()) {
-                    continue;  // Galley already transported this turn
+                // Beached galley can launch to any adjacent sea zone
+                // Use the last sea zone if available, otherwise pick first adjacent sea
+                if (galley->hasLastSeaZone()) {
+                    galleySeaZone = galley->getLastSeaZone();
+                } else if (!adjacentSeaZones.isEmpty()) {
+                    galleySeaZone = adjacentSeaZones.first();
+                } else {
+                    continue;  // No sea zones to launch to
                 }
-                if (galley->hasLeaderAboard()) {
-                    continue;  // Galley already has a leader
+            } else {
+                // Galley at sea - must be in adjacent sea zone
+                galleySeaZone = galley->getTerritoryName();
+                if (!adjacentSeaZones.contains(galleySeaZone)) {
+                    continue;  // Galley not in adjacent sea zone
                 }
-                if (galley->getMovesRemaining() < 1.0) {
-                    continue;  // Galley has no moves
-                }
+            }
 
-                // Found a usable galley - find all land territories it can reach
-                QString galleySeaZone = galley->getTerritoryName();
-                QStringList galleyNeighbors = m_mapWidget->getGraph()->getNeighbors(galleySeaZone);
+            // Found a usable galley - find all land territories it can reach
+            qDebug() << "  Found usable galley" << galley->getSerialNumber()
+                     << (isBeached ? "beached at" : "at sea in") << galley->getTerritoryName()
+                     << "-> launching to" << galleySeaZone;
 
-                // BFS through sea zones to find all reachable land territories
-                QSet<QString> visitedSeas;
-                QList<QPair<QString, double>> toVisit;
-                toVisit.append({galleySeaZone, galley->getMovesRemaining() - 0.5});  // Boarding costs 0.5
-                visitedSeas.insert(galleySeaZone);
+            // BFS through sea zones to find all reachable land territories
+            QSet<QString> visitedSeas;
+            QList<QPair<QString, double>> toVisit;
+            toVisit.append({galleySeaZone, galley->getMovesRemaining() - 0.5});  // Boarding costs 0.5
+            visitedSeas.insert(galleySeaZone);
 
-                while (!toVisit.isEmpty()) {
-                    auto current = toVisit.takeFirst();
-                    QString currentSea = current.first;
-                    double remainingMoves = current.second;
+            while (!toVisit.isEmpty()) {
+                auto current = toVisit.takeFirst();
+                QString currentSea = current.first;
+                double remainingMoves = current.second;
 
-                    // Check land neighbors for disembark options
-                    QStringList seaNeighbors = m_mapWidget->getGraph()->getNeighbors(currentSea);
-                    for (const QString &landNeighbor : seaNeighbors) {
-                        if (m_mapWidget->getGraph()->isSeaTerritory(landNeighbor)) {
-                            // Another sea zone - can sail there if moves remain
-                            if (remainingMoves >= 1.0 && !visitedSeas.contains(landNeighbor)) {
-                                visitedSeas.insert(landNeighbor);
-                                toVisit.append({landNeighbor, remainingMoves - 1.0});
-                            }
-                        } else {
-                            // Land territory - can disembark here
-                            // Skip if we're already at this territory
-                            if (landNeighbor == territoryName) {
-                                continue;
-                            }
-                            // Skip if already in normal moves
-                            bool alreadyReachable = false;
-                            for (const MoveOption &existingMove : moves) {
-                                if (existingMove.destinationTerritory == landNeighbor) {
-                                    alreadyReachable = true;
-                                    break;
-                                }
-                            }
-                            if (alreadyReachable) {
-                                continue;
-                            }
-
-                            // Add this as a galley transport option
-                            MoveOption option;
-                            option.destinationTerritory = landNeighbor;
-                            option.isViaGalley = true;
-                            option.galley = galley;
-                            option.seaZone = galleySeaZone;
-                            option.isViaRoad = false;
-
-                            // Get territory info
-                            Territory destTerritory = m_mapWidget->getGraph()->getTerritory(landNeighbor);
-                            option.territoryValue = destTerritory.value;
-                            option.isSea = false;
-
-                            // Find owner
-                            option.owner = '\0';
-                            for (Player *p : m_players) {
-                                if (p && p->ownsTerritory(landNeighbor)) {
-                                    option.owner = p->getId();
-                                    break;
-                                }
-                            }
-                            option.isOwnTerritory = (option.owner == leader->getPlayer());
-
-                            // Get troop info
-                            option.troopInfo = getTroopInfoAtTerritory(landNeighbor);
-
-                            // Check for combat
-                            option.hasCombat = false;
-                            for (Player *p : m_players) {
-                                if (p->getId() != player->getId()) {
-                                    QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(landNeighbor);
-                                    if (!enemyPieces.isEmpty()) {
-                                        option.hasCombat = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!option.hasCombat && option.owner != '\0' && option.owner != player->getId()) {
-                                option.hasCombat = true;
-                            }
-
-                            // Check for city
-                            option.hasCity = false;
-                            if (!option.hasCombat) {
-                                for (Player *p : m_players) {
-                                    if (p->getCityAtTerritory(landNeighbor)) {
-                                        option.hasCity = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            moves.append(option);
+                // Check land neighbors for disembark options
+                QStringList seaNeighbors = m_mapWidget->getGraph()->getNeighbors(currentSea);
+                for (const QString &landNeighbor : seaNeighbors) {
+                    if (m_mapWidget->getGraph()->isSeaTerritory(landNeighbor)) {
+                        // Another sea zone - can sail there if moves remain
+                        if (remainingMoves >= 1.0 && !visitedSeas.contains(landNeighbor)) {
+                            visitedSeas.insert(landNeighbor);
+                            toVisit.append({landNeighbor, remainingMoves - 1.0});
                         }
+                    } else {
+                        // Land territory - can disembark here
+                        // Skip if we're already at this territory
+                        if (landNeighbor == territoryName) {
+                            continue;
+                        }
+                        // Skip if already in normal moves
+                        bool alreadyReachable = false;
+                        for (const MoveOption &existingMove : moves) {
+                            if (existingMove.destinationTerritory == landNeighbor) {
+                                alreadyReachable = true;
+                                break;
+                            }
+                        }
+                        if (alreadyReachable) {
+                            continue;
+                        }
+
+                        // Add this as a galley transport option
+                        MoveOption option;
+                        option.destinationTerritory = landNeighbor;
+                        option.isViaGalley = true;
+                        option.galley = galley;
+                        option.seaZone = galleySeaZone;
+                        option.isViaRoad = false;
+
+                        // Get territory info
+                        Territory destTerritory = m_mapWidget->getGraph()->getTerritory(landNeighbor);
+                        option.territoryValue = destTerritory.value;
+                        option.isSea = false;
+
+                        // Find owner
+                        option.owner = '\0';
+                        for (Player *p : m_players) {
+                            if (p && p->ownsTerritory(landNeighbor)) {
+                                option.owner = p->getId();
+                                break;
+                            }
+                        }
+                        option.isOwnTerritory = (option.owner == leader->getPlayer());
+
+                        // Get troop info
+                        option.troopInfo = getTroopInfoAtTerritory(landNeighbor);
+
+                        // Check for combat
+                        option.hasCombat = false;
+                        for (Player *p : m_players) {
+                            if (p->getId() != player->getId()) {
+                                QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(landNeighbor);
+                                if (!enemyPieces.isEmpty()) {
+                                    option.hasCombat = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!option.hasCombat && option.owner != '\0' && option.owner != player->getId()) {
+                            option.hasCombat = true;
+                        }
+
+                        // Check for city
+                        option.hasCity = false;
+                        if (!option.hasCombat) {
+                            for (Player *p : m_players) {
+                                if (p->getCityAtTerritory(landNeighbor)) {
+                                    option.hasCity = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        moves.append(option);
                     }
                 }
             }
         }
     }
 
-    qDebug() << "getMovesForLeader:" << leader->getSerialNumber() << "has" << moves.size() << "possible moves";
+    // Count galley routes for debug output
+    int galleyRouteCount = 0;
+    QStringList galleyDestinations;
+    for (const MoveOption &m : moves) {
+        if (m.isViaGalley) {
+            galleyRouteCount++;
+            galleyDestinations.append(m.destinationTerritory);
+        }
+    }
+    qDebug() << "getMovesForLeader:" << leader->getSerialNumber() << "has" << moves.size() << "possible moves"
+             << "(" << galleyRouteCount << "via galley:" << galleyDestinations.join(", ") << ")";
     return moves;
 }
 

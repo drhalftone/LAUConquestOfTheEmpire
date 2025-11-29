@@ -2314,7 +2314,78 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                  << "to take" << assignment.troopsToTake << "troops from" << group.from << "to" << group.to;
     }
 
-    // Step 7: Generals without troops stay in place
+    // Step 7: Identify territories with stranded troops (assigned destination but no general there)
+    // Then send idle generals to pick them up
+    QMap<QString, int> strandedTroopCounts;  // territory -> count of stranded troops
+    QMap<QString, int> strandedTroopScores;  // territory -> total score of stranded troops
+
+    for (int i = 0; i < availableTroops.size(); i++) {
+        const TroopInfo &troop = availableTroops[i];
+        if (troop.assignedDestination.isEmpty()) continue;  // Not assigned
+        if (assignedTroopIds.contains(troop.piece->getUniqueId())) continue;  // Already assigned to a general
+
+        // This troop has a destination but wasn't picked up by any general
+        strandedTroopCounts[troop.territory]++;
+        strandedTroopScores[troop.territory] += troop.effectiveScore;
+    }
+
+    if (!strandedTroopCounts.isEmpty()) {
+        qDebug() << "=== STRANDED TROOPS (need general pickup) ===";
+        for (auto it = strandedTroopCounts.begin(); it != strandedTroopCounts.end(); ++it) {
+            qDebug() << "  " << it.key() << ":" << it.value() << "troops (score=" << strandedTroopScores[it.key()] << ")";
+        }
+    }
+
+    // Sort stranded territories by score (highest first)
+    QList<QPair<QString, int>> strandedList;
+    for (auto it = strandedTroopCounts.begin(); it != strandedTroopCounts.end(); ++it) {
+        strandedList.append({it.key(), strandedTroopScores[it.key()]});
+    }
+    std::sort(strandedList.begin(), strandedList.end(),
+              [](const QPair<QString, int> &a, const QPair<QString, int> &b) {
+                  return a.second > b.second;
+              });
+
+    // Send idle generals to pick up stranded troops
+    for (const auto &stranded : strandedList) {
+        QString strandedTerritory = stranded.first;
+        int strandedScore = stranded.second;
+
+        // Find the closest idle general
+        GeneralPiece *closestGeneral = nullptr;
+        int closestDistance = 999;
+
+        for (GeneralPiece *gen : availableGenerals) {
+            if (assignedGenerals.contains(gen)) continue;
+
+            // Calculate distance from this general to the stranded territory
+            int dist = getDistance(gen->getTerritoryName(), strandedTerritory);
+            if (dist < closestDistance) {
+                closestDistance = dist;
+                closestGeneral = gen;
+            }
+        }
+
+        if (closestGeneral && closestDistance < 999) {
+            // Assign this general to go pick up the stranded troops
+            GeneralAssignment assignment;
+            assignment.general = closestGeneral;
+            assignment.targetTerritory = strandedTerritory;
+            assignment.missionType = "PickupTroops";
+            assignment.priority = strandedScore / 2;  // Lower priority than direct missions
+            assignment.troopsToTake = 0;  // Will pick up when they arrive
+            assignment.reason = QString("Go to %1 to pick up %2 stranded troops")
+                .arg(strandedTerritory).arg(strandedTroopCounts[strandedTerritory]);
+
+            plan.assignments.append(assignment);
+            assignedGenerals.insert(closestGeneral);
+
+            qDebug() << "  General #" << closestGeneral->getNumber() << "at" << closestGeneral->getTerritoryName()
+                     << "assigned to pick up troops at" << strandedTerritory << "(distance=" << closestDistance << ")";
+        }
+    }
+
+    // Remaining generals without assignments stay in place
     for (GeneralPiece *gen : availableGenerals) {
         if (assignedGenerals.contains(gen)) continue;
 
@@ -2327,7 +2398,7 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         assignment.reason = "No troops to move";
 
         plan.assignments.append(assignment);
-        qDebug() << "  General #" << gen->getNumber() << "staying at" << gen->getTerritoryName() << "(no troops)";
+        qDebug() << "  General #" << gen->getNumber() << "staying at" << gen->getTerritoryName() << "(no stranded troops to pick up)";
     }
 
     // Sort by priority for execution
