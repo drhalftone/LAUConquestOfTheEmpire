@@ -2874,10 +2874,36 @@ void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *gall
         legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
     }
 
-    // Show troop selection dialog
+    // Show troop selection dialog for boarding beached galley
     QList<int> selectedTroopIds;
     if (!allTroops.isEmpty()) {
         TroopSelectionDialog dialog(leaderName + " - Select troops to board galley " + galley->getSerialNumber(), allTroops, legionIds, this);
+
+        // AI auto-mode: setup timer to interact with dialog and accept
+        if (m_aiAutoMode && m_aiPlayer) {
+            // Use AIPlayer's decideLegionComposition() for intelligent troop selection
+            QList<int> troopsToSelect = m_aiPlayer->decideLegionComposition(leader, allTroops);
+            qDebug() << "AI Auto-Mode (galley board from beach): Legion composition decided -" << troopsToSelect.size() << "troop(s) selected";
+            dialog.setupAIAutoMode(m_aiAutoModeDelayMs, troopsToSelect);
+        } else if (m_aiAutoMode) {
+            // Fallback: select all troops in the general's current legion that have full moves
+            QList<int> troopsToSelect;
+            for (GamePiece *troop : allTroops) {
+                if (legionIds.contains(troop->getUniqueId())) {
+                    // Check if troop has full movement (hasn't moved yet this turn)
+                    double fullMoves = 1.0;  // Default for infantry/catapult
+                    if (troop->getType() == GamePiece::Type::Cavalry) {
+                        fullMoves = 2.0;
+                    }
+                    if (troop->getMovesRemaining() >= fullMoves) {
+                        troopsToSelect.append(troop->getUniqueId());
+                    }
+                }
+            }
+            qDebug() << "AI Auto-Mode (galley board from beach fallback): Selecting" << troopsToSelect.size() << "legion troop(s)";
+            dialog.setupAIAutoMode(m_aiAutoModeDelayMs, troopsToSelect);
+        }
+
         if (dialog.exec() != QDialog::Accepted) {
             return;  // User cancelled
         }
@@ -2892,6 +2918,12 @@ void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *gall
                     fullMoves = 2.0;
                 }
                 if (troop->getMovesRemaining() < fullMoves) {
+                    // AI auto-mode: just skip this troop instead of showing error dialog
+                    if (m_aiAutoMode) {
+                        qDebug() << "AI Auto-Mode: Troop" << troop->getUniqueId() << "cannot board galley (already moved)";
+                        selectedTroopIds.removeOne(troop->getUniqueId());
+                        continue;
+                    }
                     QMessageBox msgBox(this);
                     msgBox.setWindowTitle("Cannot Board");
                     msgBox.setText("Troops cannot move before embarking on a galley.\n"
@@ -2904,7 +2936,7 @@ void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *gall
         }
     }
 
-    // Update legion
+    // Update legion for beached galley boarding
     if (leader->getType() == GamePiece::Type::Caesar) {
         static_cast<CaesarPiece*>(leader)->setLegion(selectedTroopIds);
         static_cast<CaesarPiece*>(leader)->setLastTerritoryName(currentTerritory);
