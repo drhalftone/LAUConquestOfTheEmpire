@@ -2883,6 +2883,25 @@ void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *gall
         if (m_aiAutoMode && m_aiPlayer) {
             // Use AIPlayer's decideLegionComposition() for intelligent troop selection
             QList<int> troopsToSelect = m_aiPlayer->decideLegionComposition(leader, allTroops);
+
+            // CRITICAL: If decideLegionComposition returned 0 troops but there are troops available,
+            // we MUST pick up at least one troop for galley transport to unowned territories.
+            // Galley boarding requires troops with FULL moves remaining.
+            if (troopsToSelect.isEmpty() && !allTroops.isEmpty()) {
+                qDebug() << "AI Auto-Mode (galley board): No troops from decideLegionComposition, falling back to available troops with full moves";
+                for (GamePiece *troop : allTroops) {
+                    // Check if troop has full movement (hasn't moved yet this turn)
+                    double fullMoves = 1.0;  // Default for infantry/catapult
+                    if (troop->getType() == GamePiece::Type::Cavalry) {
+                        fullMoves = 2.0;
+                    }
+                    if (troop->getMovesRemaining() >= fullMoves) {
+                        troopsToSelect.append(troop->getUniqueId());
+                        if (troopsToSelect.size() >= 5) break;  // Max 5 troops per legion (leaving room for leader)
+                    }
+                }
+            }
+
             qDebug() << "AI Auto-Mode (galley board from beach): Legion composition decided -" << troopsToSelect.size() << "troop(s) selected";
             dialog.setupAIAutoMode(m_aiAutoModeDelayMs, troopsToSelect);
         } else if (m_aiAutoMode) {

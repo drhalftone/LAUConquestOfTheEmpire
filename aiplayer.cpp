@@ -1629,10 +1629,10 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
             }
         }
 
-        // If planned troops weren't available but we need troops (Defend/Attack missions),
+        // If planned troops weren't available but we need troops (Defend/Attack/ExpandWithTroops missions),
         // pick up ANY available troops with moves remaining
         if (troopsToSelect.size() < plannedTroops &&
-            (missionType == "Defend" || missionType == "Attack")) {
+            (missionType == "Defend" || missionType == "Attack" || missionType == "ExpandWithTroops")) {
             for (GamePiece *troop : availableTroops) {
                 if (troopsToSelect.size() >= plannedTroops) break;
                 if (troopsToSelect.contains(troop->getUniqueId())) continue;
