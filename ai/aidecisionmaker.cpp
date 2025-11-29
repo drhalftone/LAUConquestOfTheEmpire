@@ -1382,14 +1382,55 @@ AIPurchaseDecision AIDecisionMaker::decidePurchases(
         }
     }
 
-    // === PRIORITY 6: Galleys if needed for expansion ===
+    // === PRIORITY 6: Galleys for sea expansion ===
+    // Galleys are essential for reaching territories across water
+    // Buy galleys if:
+    // 1. We have fewer than 2 galleys
+    // 2. There are sea territories we can place galleys on
+    // 3. We have at least some basic troops (don't buy galley before army)
     if (currentGalleyCount < 2 && !seaTerritoriesForGalleys.isEmpty() && remaining >= galleyPrice) {
-        if (currentGalleyCount == 0) {
-            QString seaTerritory = seaTerritoriesForGalleys.first();
-            decision.galleys[seaTerritory] = 1;
-            remaining -= galleyPrice;
-            decision.totalCost += galleyPrice;
-            decision.reason += QString(" | Galley at %1").arg(seaTerritory);
+        // Check if there are valuable territories reachable only by sea
+        bool needsSeaExpansion = false;
+
+        // Simple heuristic: if we control coastal territories but haven't expanded across seas,
+        // we probably need galleys. Check if there are unclaimed or enemy territories
+        // reachable from our sea borders.
+        for (const QString &seaOption : seaTerritoriesForGalleys) {
+            // Extract sea territory name (remove " (direction)" suffix)
+            QString seaTerritory = seaOption.contains(" (")
+                ? seaOption.left(seaOption.indexOf(" ("))
+                : seaOption;
+
+            // Get territories connected to this sea
+            QStringList seaNeighbors = graph->getNeighbors(seaTerritory);
+            for (const QString &neighbor : seaNeighbors) {
+                // Check if this is a land territory we don't own
+                if (!graph->isSeaTerritory(neighbor) && !ownedTerritories.contains(neighbor)) {
+                    needsSeaExpansion = true;
+                    break;
+                }
+            }
+            if (needsSeaExpansion) break;
+        }
+
+        // Buy galleys if sea expansion is needed
+        // With currentGalleyCount < 2, we'll buy up to 2 total
+        if (needsSeaExpansion && currentTroops >= 4) {  // Have at least some troops first
+            int galleysWanted = qMin(2 - currentGalleyCount,
+                                     static_cast<int>(seaTerritoriesForGalleys.size()));
+
+            for (int i = 0; i < galleysWanted && remaining >= galleyPrice; i++) {
+                // Pick a sea territory - use first available
+                QString seaOption = seaTerritoriesForGalleys[i % seaTerritoriesForGalleys.size()];
+                QString seaTerritory = seaOption.contains(" (")
+                    ? seaOption.left(seaOption.indexOf(" ("))
+                    : seaOption;
+
+                decision.galleys[seaTerritory] = decision.galleys.value(seaTerritory, 0) + 1;
+                remaining -= galleyPrice;
+                decision.totalCost += galleyPrice;
+                decision.reason += QString(" | Galley at %1 (sea expansion)").arg(seaTerritory);
+            }
         }
     }
 
