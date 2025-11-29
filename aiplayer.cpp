@@ -1651,11 +1651,30 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
 
     // NOTE: Generals CANNOT capture territory without troops - removed old "expansion with 0 troops" logic
     // If a planned assignment has 0 troops, the general should return home to get troops instead
-    if (hasPlannedAssignment && plannedTroops == 0 && missionType != "ReturnHome" && missionType != "Defend") {
+    // Exception: PickupTroops mission is specifically for traveling to pick up stranded troops,
+    // so generals should KEEP their current legion (if any) while traveling
+    if (hasPlannedAssignment && plannedTroops == 0 &&
+        missionType != "ReturnHome" && missionType != "Defend" && missionType != "PickupTroops") {
         // This shouldn't happen anymore since SafeExpand was removed, but handle it gracefully
         log(QString("Legion Building: WARNING - %1 has 0 planned troops for %2 mission - generals cannot capture without troops!")
             .arg(leaderName).arg(missionType));
         // Return empty - the move should fail and general will need to return for troops
+        return troopsToSelect;
+    }
+
+    // For PickupTroops missions, keep the current legion (troops already with the general)
+    if (hasPlannedAssignment && missionType == "PickupTroops") {
+        // Keep all troops currently in the leader's legion that have moves remaining
+        for (int troopId : currentLegion) {
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    troopsToSelect.append(troopId);
+                    break;
+                }
+            }
+        }
+        log(QString("Legion Building: %1 on PickupTroops mission - keeping %2 current legion troops")
+            .arg(leaderName).arg(troopsToSelect.size()));
         return troopsToSelect;
     }
 
