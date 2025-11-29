@@ -1968,10 +1968,11 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     }
 
     // Helper: BFS to find the first step toward a distant territory
+    // Returns the target directly if only reachable via galley (no land path)
     auto findFirstStepToward = [&graph](const QString &from, const QString &target) -> QString {
         if (from == target) return QString();
 
-        // BFS to find shortest path
+        // BFS to find shortest path by land
         QMap<QString, QString> cameFrom;  // territory -> previous territory
         QList<QString> queue;
         queue.append(from);
@@ -1997,10 +1998,15 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                 queue.append(neighbor);
             }
         }
-        return QString();  // No path found
+
+        // No land path found - target might be reachable via galley
+        // Return the target directly; the execution layer will check
+        // if galley transport is available via getMovesForLeader
+        return target;
     };
 
     // Helper: Calculate distance (in hops) between two territories
+    // Returns 2 for galley-reachable territories (approximate distance via sea)
     auto getDistance = [&graph](const QString &from, const QString &target) -> int {
         if (from == target) return 0;
 
@@ -2027,7 +2033,29 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                 if (dist[neighbor] > 5) continue;
             }
         }
-        return 999;  // Unreachable
+
+        // No land path found - check if might be galley-reachable
+        // If from has adjacent sea and target has adjacent sea, assume galley route
+        bool fromHasSea = false;
+        bool targetHasSea = false;
+        for (const QString &neighbor : graph->getNeighbors(from)) {
+            if (graph->isSeaTerritory(neighbor)) {
+                fromHasSea = true;
+                break;
+            }
+        }
+        for (const QString &neighbor : graph->getNeighbors(target)) {
+            if (graph->isSeaTerritory(neighbor)) {
+                targetHasSea = true;
+                break;
+            }
+        }
+
+        if (fromHasSea && targetHasSea) {
+            return 2;  // Approximate galley distance (board + sail + land)
+        }
+
+        return 999;  // Truly unreachable
     };
 
     QMap<QString, int> troopsGoingTo;  // first-step destination -> count
@@ -2393,8 +2421,13 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
                 nextStep = step;
                 qDebug() << "Multi-hop path: General needs to go through" << nextStep << "to reach" << targetTerritory;
             } else {
-                qDebug() << "WARNING: No path found from" << currentTerritory << "to" << targetTerritory;
-                continue;  // Skip this assignment, try next
+                // No land path found - check if target is reachable via galley
+                // The destination might be across the sea. If so, just set the target
+                // directly and let the execution layer figure out the galley route.
+                // The validation in aiMoveLeaderToTerritory will check getMovesForLeader
+                // which includes galley transport options.
+                qDebug() << "No land path from" << currentTerritory << "to" << targetTerritory << "- checking galley routes";
+                nextStep = targetTerritory;  // Try direct - galley might make it reachable
             }
         }
 

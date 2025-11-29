@@ -5113,14 +5113,20 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
         return false;
     }
 
-    // Validate the move using getMovesForLeader and check if it's via road
+    // Validate the move using getMovesForLeader and check movement type
     QList<MoveOption> validMoves = getMovesForLeader(leader);
     bool isValidMove = false;
     bool isViaRoad = false;
+    bool isViaGalley = false;
+    GalleyPiece *galley = nullptr;
+    QString seaZone;
     for (const MoveOption &move : validMoves) {
         if (move.destinationTerritory == destinationTerritory) {
             isValidMove = true;
             isViaRoad = move.isViaRoad;
+            isViaGalley = move.isViaGalley;
+            galley = move.galley;
+            seaZone = move.seaZone;
             break;
         }
     }
@@ -5133,11 +5139,60 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
     QString fromTerritory = leader->getTerritoryName();
     int movesBefore = leader->getMovesRemaining();
 
+    QString moveType = isViaGalley ? "[via galley]" : (isViaRoad ? "[via road]" : "");
     qDebug() << "AI Move:" << leader->getSerialNumber() << "from" << fromTerritory << "to" << destinationTerritory
-             << (isViaRoad ? "[via road]" : "");
+             << moveType;
 
-    // Use appropriate movement method based on whether it's via road
-    if (isViaRoad) {
+    // Use appropriate movement method
+    if (isViaGalley && galley) {
+        // Galley transport - board galley, sail, and disembark
+        qDebug() << "AI Move: Using galley transport through" << seaZone;
+
+        // Find the player who owns this leader
+        Player *player = nullptr;
+        for (Player *p : m_players) {
+            if (p->getId() == leader->getPlayer()) {
+                player = p;
+                break;
+            }
+        }
+
+        if (!player) {
+            qDebug() << "AI Move: Could not find player for leader";
+            return false;
+        }
+
+        // Board the galley (leader moves to sea zone with galley)
+        boardGalleyFromBeach(leader, galley, seaZone);
+
+        // Move galley to destination's adjacent sea zone if needed
+        // For simplicity, we sail directly and disembark
+        // The galley may need to move to reach the destination
+
+        // Find the sea zone adjacent to destination
+        QStringList destNeighbors = m_mapWidget->getGraph()->getNeighbors(destinationTerritory);
+        QString destSeaZone;
+        for (const QString &neighbor : destNeighbors) {
+            if (m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
+                // Check if this sea zone is reachable from current galley position
+                // For now, we assume the galley BFS already validated this
+                destSeaZone = neighbor;
+                break;
+            }
+        }
+
+        // Move galley if needed (if not already adjacent to destination)
+        if (!destSeaZone.isEmpty() && galley->getTerritoryName() != destSeaZone) {
+            // Move galley to destination sea zone
+            galley->setLastTerritoryName(galley->getTerritoryName());
+            galley->setTerritoryName(destSeaZone);
+            galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+        }
+
+        // Disembark to destination
+        disembarkFromGalley(leader, destinationTerritory, galley, player);
+
+    } else if (isViaRoad) {
         // Road movement - use territory name-based overload (works with graph-based maps)
         moveLeaderViaRoad(leader, destinationTerritory);
     } else {
@@ -5276,7 +5331,139 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
             continue;
         }
 
+        // Initialize galley fields
+        option.isViaGalley = false;
+        option.galley = nullptr;
+        option.seaZone = QString();
+
         moves.append(option);
+    }
+
+    // === Add galley transport options ===
+    // Check for available galleys that can transport this leader
+    bool isCaesar = (leader->getType() == GamePiece::Type::Caesar);
+    if (isGeneral || isCaesar) {
+        // Find galleys adjacent to leader's position
+        for (const QString &neighbor : neighbors) {
+            if (!m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
+                continue;  // Not a sea zone
+            }
+
+            // Check if player has a galley in this sea zone
+            for (GalleyPiece *galley : player->getGalleys()) {
+                if (galley->getTerritoryName() != neighbor) {
+                    continue;  // Galley not in this sea zone
+                }
+                if (galley->hasTransportedThisTurn()) {
+                    continue;  // Galley already transported this turn
+                }
+                if (galley->hasLeaderAboard()) {
+                    continue;  // Galley already has a leader
+                }
+                if (galley->getMovesRemaining() < 1.0) {
+                    continue;  // Galley has no moves
+                }
+
+                // Found a usable galley - find all land territories it can reach
+                QString galleySeaZone = galley->getTerritoryName();
+                QStringList galleyNeighbors = m_mapWidget->getGraph()->getNeighbors(galleySeaZone);
+
+                // BFS through sea zones to find all reachable land territories
+                QSet<QString> visitedSeas;
+                QList<QPair<QString, double>> toVisit;
+                toVisit.append({galleySeaZone, galley->getMovesRemaining() - 0.5});  // Boarding costs 0.5
+                visitedSeas.insert(galleySeaZone);
+
+                while (!toVisit.isEmpty()) {
+                    auto current = toVisit.takeFirst();
+                    QString currentSea = current.first;
+                    double remainingMoves = current.second;
+
+                    // Check land neighbors for disembark options
+                    QStringList seaNeighbors = m_mapWidget->getGraph()->getNeighbors(currentSea);
+                    for (const QString &landNeighbor : seaNeighbors) {
+                        if (m_mapWidget->getGraph()->isSeaTerritory(landNeighbor)) {
+                            // Another sea zone - can sail there if moves remain
+                            if (remainingMoves >= 1.0 && !visitedSeas.contains(landNeighbor)) {
+                                visitedSeas.insert(landNeighbor);
+                                toVisit.append({landNeighbor, remainingMoves - 1.0});
+                            }
+                        } else {
+                            // Land territory - can disembark here
+                            // Skip if we're already at this territory
+                            if (landNeighbor == territoryName) {
+                                continue;
+                            }
+                            // Skip if already in normal moves
+                            bool alreadyReachable = false;
+                            for (const MoveOption &existingMove : moves) {
+                                if (existingMove.destinationTerritory == landNeighbor) {
+                                    alreadyReachable = true;
+                                    break;
+                                }
+                            }
+                            if (alreadyReachable) {
+                                continue;
+                            }
+
+                            // Add this as a galley transport option
+                            MoveOption option;
+                            option.destinationTerritory = landNeighbor;
+                            option.isViaGalley = true;
+                            option.galley = galley;
+                            option.seaZone = galleySeaZone;
+                            option.isViaRoad = false;
+
+                            // Get territory info
+                            Territory destTerritory = m_mapWidget->getGraph()->getTerritory(landNeighbor);
+                            option.territoryValue = destTerritory.value;
+                            option.isSea = false;
+
+                            // Find owner
+                            option.owner = '\0';
+                            for (Player *p : m_players) {
+                                if (p && p->ownsTerritory(landNeighbor)) {
+                                    option.owner = p->getId();
+                                    break;
+                                }
+                            }
+                            option.isOwnTerritory = (option.owner == leader->getPlayer());
+
+                            // Get troop info
+                            option.troopInfo = getTroopInfoAtTerritory(landNeighbor);
+
+                            // Check for combat
+                            option.hasCombat = false;
+                            for (Player *p : m_players) {
+                                if (p->getId() != player->getId()) {
+                                    QList<GamePiece*> enemyPieces = p->getPiecesAtTerritory(landNeighbor);
+                                    if (!enemyPieces.isEmpty()) {
+                                        option.hasCombat = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!option.hasCombat && option.owner != '\0' && option.owner != player->getId()) {
+                                option.hasCombat = true;
+                            }
+
+                            // Check for city
+                            option.hasCity = false;
+                            if (!option.hasCombat) {
+                                for (Player *p : m_players) {
+                                    if (p->getCityAtTerritory(landNeighbor)) {
+                                        option.hasCity = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            moves.append(option);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     qDebug() << "getMovesForLeader:" << leader->getSerialNumber() << "has" << moves.size() << "possible moves";

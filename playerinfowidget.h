@@ -114,6 +114,9 @@ public:
         bool hasCombat;             // True if enemy pieces present or enemy-owned
         bool hasCity;               // True if there's a city there
         bool isViaRoad;             // True if reachable via road (costs 1 move for whole trip)
+        bool isViaGalley;           // True if reachable via galley transport
+        GalleyPiece *galley;        // Galley to use for transport (if isViaGalley)
+        QString seaZone;            // Sea zone to sail through (if isViaGalley)
         bool isSea;                 // True if sea territory (generals can't go here)
         QString troopInfo;          // Description of troops there (e.g., "2 Inf, 1 Cav")
     };
