@@ -632,7 +632,7 @@ int main(int argc, char *argv[])
 ### Aggressive Strategy
 Scoring priorities:
 1. Attack enemy territories (+100 base, +20 per enemy piece)
-2. Capture undefended territories (+60)
+2. Capture undefended territories (+60) - **requires at least 1 troop**
 3. Reinforce frontline (+40)
 4. Build troops over cities
 
@@ -645,7 +645,7 @@ Scoring priorities:
 
 ### Economic Strategy
 Scoring priorities:
-1. Capture high-value territories (+value * 10)
+1. Capture high-value territories (+value * 10) - **requires at least 1 troop**
 2. Build cities in owned territories (+70)
 3. Build roads between cities (+50)
 4. Minimal troop purchases

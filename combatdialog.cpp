@@ -1211,7 +1211,7 @@ int CombatDialog::calculateDefenderAdvantage() const
     }
 
     // Check for walled city (fortified city) in defending territory
-    if (m_mapWidget) {
+    if (m_mapWidget && m_defendingPlayer) {
         City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
         qDebug() << "Checking for city at territory" << m_combatTerritoryName;
         qDebug() << "City found:" << (city != nullptr);

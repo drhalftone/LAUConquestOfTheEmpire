@@ -47,6 +47,7 @@ Each player's turn consists of **6 phases** in order:
 - **With Roads:** Unlimited movement along connected road networks
 - **Generals/Caesars:** Can move up to 2 provinces independently through controlled territory
   - Cannot fight alone (no combat strength)
+  - **Cannot capture territory alone** - must have at least 1 troop (Infantry, Cavalry, or Catapult) to claim a province
   - Can be captured if province is invaded
 
 ### Legions

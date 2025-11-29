@@ -1059,7 +1059,10 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
                 .arg(option.troopInfo);
         } else if (option.hasCombat && !hasEnemyTroops) {
             // Enemy-owned territory but NO defenders - free capture!
-            // Generals CAN capture undefended enemy territories without troops
+            // Generals CANNOT capture territories without troops - they need at least 1 troop
+            if (effectiveTroopCount == 0) {
+                continue;  // Skip this move - can't capture without troops
+            }
             move.score = scoreExpandMove(option.destinationTerritory, state) + 50;  // Bonus for enemy territory
             move.moveType = "Capture";
             move.reason = QString("Capture UNDEFENDED enemy territory (owner: %1, value: %2)")
@@ -1097,7 +1100,10 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
             }
         } else if (option.owner == '\0') {
             // Unclaimed territory - expand
-            // Generals CAN claim unclaimed territories without troops (no combat needed)
+            // Generals CANNOT claim territories without troops - they need at least 1 troop
+            if (effectiveTroopCount == 0) {
+                continue;  // Skip this move - can't capture without troops
+            }
             move.score = scoreExpandMove(option.destinationTerritory, state);
             move.moveType = "Expand";
             move.reason = QString("Claim unclaimed territory (value: %1)%2")
@@ -1488,7 +1494,19 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     }
 
     // ReturnHome mission: general should bring ALL their current troops with them!
+    // BUT if general has ARRIVED home (current position == home), pick up troops!
     // Defend mission: general should bring their current troops PLUS any planned troops
+    QString homeProvince = m_player->getHomeProvinceName();
+    QString currentTerritory = leader->getTerritoryName();
+
+    // Special case: General has ReturnHome mission and is NOW AT HOME
+    // This means they've arrived - pick up troops using quota system!
+    if (hasPlannedAssignment && missionType == "ReturnHome" && currentTerritory == homeProvince) {
+        log(QString("Legion Building: %1 has ARRIVED home - switching to quota-based troop pickup!")
+            .arg(leaderName));
+        hasPlannedAssignment = false;  // Fall through to quota system below
+    }
+
     if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend")) {
         // DEBUG: Log what's in currentLegion vs availableTroops
         log(QString("Legion Building: %1 has currentLegion with %2 troops: %3")
@@ -1574,7 +1592,9 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     }
 
     // If we have a planned assignment with specific troops, use those
+    // This includes "ExpandWithTroops" missions from the new troop-centric planner
     if (hasPlannedAssignment && !plannedTroopIds.isEmpty()) {
+        log(QString("Legion Building: %1 using planned troops: %2").arg(leaderName).arg(plannedTroopIds.size()));
         // First, add troops already in this leader's legion that still have moves
         // Troops with 0 moves must be left behind
         for (int troopId : currentLegion) {
@@ -1629,11 +1649,14 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
         return troopsToSelect;
     }
 
-    // If no plan or expansion mission (0 troops), use minimal troops
-    if (hasPlannedAssignment && plannedTroops == 0) {
-        // Expansion mission - don't take any troops (save for attack missions)
-        log(QString("Legion Building: %1 is on EXPANSION mission - taking NO troops").arg(leaderName));
-        return troopsToSelect;  // Empty list
+    // NOTE: Generals CANNOT capture territory without troops - removed old "expansion with 0 troops" logic
+    // If a planned assignment has 0 troops, the general should return home to get troops instead
+    if (hasPlannedAssignment && plannedTroops == 0 && missionType != "ReturnHome" && missionType != "Defend") {
+        // This shouldn't happen anymore since SafeExpand was removed, but handle it gracefully
+        log(QString("Legion Building: WARNING - %1 has 0 planned troops for %2 mission - generals cannot capture without troops!")
+            .arg(leaderName).arg(missionType));
+        // Return empty - the move should fail and general will need to return for troops
+        return troopsToSelect;
     }
 
     // === FALLBACK: Old quota-based approach if no plan ===

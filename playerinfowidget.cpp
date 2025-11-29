@@ -1858,7 +1858,30 @@ void PlayerInfoWidget::movePiece(GamePiece *piece, int rowDelta, int colDelta)
 
     // Only transfer territory if no enemies present and not a sea territory
     bool isSea = m_mapWidget && m_mapWidget->isSeaTerritory(newPos.row, newPos.col);
-    if (!hasEnemyPieces && !isSea) {
+
+    // Check if this piece can capture territory:
+    // - Generals and Caesars cannot capture territory alone; they need at least one troop
+    // - Troops (Infantry, Cavalry, Catapult) can capture territory
+    bool canCapture = true;
+    GamePiece::Type pieceType = piece->getType();
+    if (pieceType == GamePiece::Type::General || pieceType == GamePiece::Type::Caesar) {
+        // Leader moving alone - check if there are any friendly troops at destination
+        QList<GamePiece*> friendlyPieces = owningPlayer->getPiecesAtTerritory(newTerritoryName);
+        bool hasTroopsAtDestination = false;
+        for (GamePiece *p : friendlyPieces) {
+            GamePiece::Type t = p->getType();
+            if (t == GamePiece::Type::Infantry || t == GamePiece::Type::Cavalry || t == GamePiece::Type::Catapult) {
+                hasTroopsAtDestination = true;
+                break;
+            }
+        }
+        if (!hasTroopsAtDestination) {
+            canCapture = false;
+            qDebug() << "General/Caesar cannot capture territory" << newTerritoryName << "without troops";
+        }
+    }
+
+    if (!hasEnemyPieces && !isSea && canCapture) {
         // Claim the new territory (and handle conquest from other owner if needed)
         conquestTerritory(newTerritoryName, owningPlayer);
     }
@@ -1928,7 +1951,30 @@ void PlayerInfoWidget::movePieceWithoutCost(GamePiece *piece, int rowDelta, int 
 
     // Only transfer territory if no enemies present and not a sea territory
     bool isSea = m_mapWidget && m_mapWidget->isSeaTerritory(newPos.row, newPos.col);
-    if (!hasEnemyPieces && !isSea) {
+
+    // Check if this piece can capture territory:
+    // - Generals and Caesars cannot capture territory alone; they need at least one troop
+    // - Troops (Infantry, Cavalry, Catapult) can capture territory
+    bool canCapture = true;
+    GamePiece::Type pieceType = piece->getType();
+    if (pieceType == GamePiece::Type::General || pieceType == GamePiece::Type::Caesar) {
+        // Leader moving alone - check if there are any friendly troops at destination
+        QList<GamePiece*> friendlyPieces = owningPlayer->getPiecesAtTerritory(newTerritoryName);
+        bool hasTroopsAtDestination = false;
+        for (GamePiece *p : friendlyPieces) {
+            GamePiece::Type t = p->getType();
+            if (t == GamePiece::Type::Infantry || t == GamePiece::Type::Cavalry || t == GamePiece::Type::Catapult) {
+                hasTroopsAtDestination = true;
+                break;
+            }
+        }
+        if (!hasTroopsAtDestination) {
+            canCapture = false;
+            qDebug() << "General/Caesar cannot capture territory" << newTerritoryName << "without troops";
+        }
+    }
+
+    if (!hasEnemyPieces && !isSea && canCapture) {
         // Claim the new territory (and handle conquest from other owner if needed)
         conquestTerritory(newTerritoryName, owningPlayer);
     }
@@ -2200,6 +2246,9 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         if (dialog.exec() == QDialog::Accepted) {
             selectedTroopIds = dialog.getSelectedTroopIds();
 
+            // Check if we own the destination territory
+            bool weOwnDestination = owningPlayer->ownsTerritory(destTerritory);
+
             // If moving into actual combat (enemies present), validate that troops are selected
             // Note: hasEnemies means actual enemy pieces, not just enemy-owned territory
             if (hasEnemies && selectedTroopIds.isEmpty()) {
@@ -2219,6 +2268,29 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
                             "Please select at least one troop or cancel the move.")
                     .arg(leaderName)
                     .arg(enemyDescription));
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
+                // Loop will continue - show dialog again
+                continue;
+            }
+
+            // If moving into NON-OWNED territory (including unclaimed), validate that troops are selected
+            // Generals/Caesars cannot capture territory without troops!
+            if (!weOwnDestination && selectedTroopIds.isEmpty()) {
+                // AI auto-mode: just cancel the move instead of showing error dialog
+                if (m_aiAutoMode) {
+                    qDebug() << "AI Auto-Mode: Cannot capture territory without troops, cancelling";
+                    qDebug() << "  " << leaderName << "at" << leader->getTerritoryName() << "-> " << destTerritory;
+                    return;
+                }
+
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Capture Territory");
+                msgBox.setText(QString("%1 cannot capture %2 without troops!\n\n"
+                            "Generals and Caesars must have at least one troop in their legion to capture territory.\n\n"
+                            "Please select at least one troop or cancel the move.")
+                    .arg(leaderName)
+                    .arg(destTerritory));
                 msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
                 msgBox.exec();
                 // Loop will continue - show dialog again
@@ -2333,8 +2405,8 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
             m_mapWidget->update();
         }
     } else {
-        // No troops available, check if moving into actual combat (enemies present)
-        // Note: Can still enter unoccupied enemy territory without troops
+        // No troops available - generals/Caesars CANNOT capture territory without troops
+        // They can still MOVE through friendly/own territory, but cannot claim new territory
         if (hasEnemies) {
             QMessageBox msgBox(this);
             msgBox.setWindowTitle("Cannot Move");
@@ -2348,7 +2420,27 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
             return;
         }
 
-        // Just move the leader (no combat)
+        // Check if destination is owned by us or unowned - generals can't capture without troops!
+        bool weOwnDestination = owningPlayer->ownsTerritory(destinationTerritory);
+        if (!weOwnDestination) {
+            // Cannot capture territory without troops - show warning for human players
+            if (!m_aiAutoMode) {
+                QMessageBox msgBox(this);
+                msgBox.setWindowTitle("Cannot Capture Territory");
+                msgBox.setText(QString("%1 cannot capture %2 without troops!\n\n"
+                            "Generals and Caesars must have at least one troop (Infantry, Cavalry, or Catapult) "
+                            "in their legion to capture territory.")
+                    .arg(leaderName)
+                    .arg(destinationTerritory));
+                msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                msgBox.exec();
+            } else {
+                qDebug() << "AI Auto-Mode:" << leaderName << "cannot capture" << destinationTerritory << "without troops - move cancelled";
+            }
+            return;
+        }
+
+        // Moving within own territory (no capture needed) - just move the leader
 
         // Store last territory before moving (for retreat purposes)
         if (leader->getType() == GamePiece::Type::Caesar) {
@@ -2375,16 +2467,9 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
             }
         }
 
-        qDebug() << "Moved leader" << leaderName << "(no troops available)";
+        qDebug() << "Moved leader" << leaderName << "(no troops, within own territory)";
 
-        // Claim the destination territory for the owning player (but not sea territories)
-        // Use conquestTerritory to handle building transfers when conquering
-        // Check for sea territory by name (works with both grid and OpenGL map)
-        bool destIsSeaZone = destinationTerritory.startsWith("Mare") || destinationTerritory.startsWith("Oceanus");
-        if (!destIsSeaZone) {
-            conquestTerritory(destinationTerritory, owningPlayer);
-            qDebug() << "Claimed territory:" << destinationTerritory << "for player" << owningPlayer->getId();
-        }
+        // NO territory claiming here - generals without troops cannot capture!
 
         // Update display
         updateAllPlayers();
@@ -2925,10 +3010,14 @@ void PlayerInfoWidget::disembarkFromGalley(GamePiece *leader, const QString &lan
         }
     }
 
-    // Claim the land territory only if no enemies present
-    // (territory claim happens after combat resolves if enemies are present)
-    if (!hasEnemies) {
+    // Claim the land territory only if:
+    // 1. No enemies present (territory claim happens after combat resolves if enemies are present)
+    // 2. Leader has at least one troop (generals/Caesars cannot capture territory alone)
+    bool hasTroops = !legionIds.isEmpty();
+    if (!hasEnemies && hasTroops) {
         conquestTerritory(landTerritory, player);
+    } else if (!hasEnemies && !hasTroops) {
+        qDebug() << "Leader" << leaderName << "disembarked without troops - cannot capture" << landTerritory;
     }
 
     qDebug() << "Leader" << leaderName << "disembarked to" << landTerritory;
@@ -3106,12 +3195,28 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
 
         selectedTroopIds = dialog->getSelectedTroopIds();
 
+        // Check if we own the destination territory
+        bool weOwnDestination = owningPlayer->ownsTerritory(destTerritory);
+
         // If moving into combat, validate that legion is not empty
         if (hasEnemies && selectedTroopIds.isEmpty()) {
             QMessageBox msgBox(dialog);
             msgBox.setWindowTitle("Cannot Enter Combat");
             msgBox.setText("Cannot enter combat without troops.\n\n"
                 "A General/Caesar cannot fight alone. Please select at least one troop to form a legion.");
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
+            // Dialog stays open, loop continues
+            continue;
+        }
+
+        // If moving into NON-OWNED territory (including unclaimed), validate that legion is not empty
+        // Generals/Caesars cannot capture territory without troops!
+        if (!weOwnDestination && selectedTroopIds.isEmpty()) {
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Capture Territory");
+            msgBox.setText("Cannot capture territory without troops.\n\n"
+                "A General/Caesar cannot claim new territory alone. Please select at least one troop to capture the territory.");
             msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
             msgBox.exec();
             // Dialog stays open, loop continues
@@ -3263,9 +3368,12 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
 
     // Explicitly claim territory if there are no enemy PIECES (even if hasEnemies was set due to ownership)
     // This handles the case where we move into enemy-owned territory that has no defenders
-    if (enemyPiecesAtDest.isEmpty() && !m_mapWidget->isSeaTerritory(destPos.row, destPos.col)) {
+    // Note: Generals/Caesars can only capture territory if they have troops with them
+    if (enemyPiecesAtDest.isEmpty() && !m_mapWidget->isSeaTerritory(destPos.row, destPos.col) && !selectedTroopIds.isEmpty()) {
         conquestTerritory(destTerritory, owningPlayer);
         qDebug() << "Adjacent movement: Claimed territory" << destTerritory << "for player" << owningPlayer->getId();
+    } else if (enemyPiecesAtDest.isEmpty() && !m_mapWidget->isSeaTerritory(destPos.row, destPos.col) && selectedTroopIds.isEmpty()) {
+        qDebug() << "Adjacent movement: General/Caesar moved without troops - territory" << destTerritory << "NOT captured";
     }
 
     // Update display once after all moves
@@ -3391,6 +3499,9 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const QString &desti
 
         selectedTroopIds = dialog->getSelectedTroopIds();
 
+        // Check if we own the destination territory
+        bool weOwnDestination = owningPlayer->ownsTerritory(destinationTerritory);
+
         // If moving into combat, validate that legion is not empty
         if (hasEnemies && selectedTroopIds.isEmpty()) {
             // AI auto-mode: just cancel the move instead of showing error dialog
@@ -3404,6 +3515,25 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const QString &desti
             msgBox.setWindowTitle("Cannot Enter Combat");
             msgBox.setText("Cannot enter combat without troops.\n\n"
                 "A General/Caesar cannot fight alone. Please select at least one troop to form a legion.");
+            msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            msgBox.exec();
+            continue;
+        }
+
+        // If moving into NON-OWNED territory (including unclaimed), validate that legion is not empty
+        // Generals/Caesars cannot capture territory without troops!
+        if (!weOwnDestination && selectedTroopIds.isEmpty()) {
+            // AI auto-mode: just cancel the move instead of showing error dialog
+            if (m_aiAutoMode) {
+                qDebug() << "AI Auto-Mode (road by name): Cannot capture territory without troops, cancelling";
+                delete dialog;
+                return;
+            }
+
+            QMessageBox msgBox(dialog);
+            msgBox.setWindowTitle("Cannot Capture Territory");
+            msgBox.setText("Cannot capture territory without troops.\n\n"
+                "A General/Caesar cannot claim new territory alone. Please select at least one troop to capture the territory.");
             msgBox.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
             msgBox.exec();
             continue;
@@ -3549,9 +3679,12 @@ void PlayerInfoWidget::moveLeaderViaRoad(GamePiece *leader, const QString &desti
     }
 
     // Claim territory if there are no enemy PIECES
-    if (enemyPiecesAtDest.isEmpty()) {
+    // Note: Generals/Caesars can only capture territory if they have troops with them
+    if (enemyPiecesAtDest.isEmpty() && !selectedTroopIds.isEmpty()) {
         conquestTerritory(destinationTerritory, owningPlayer);
         qDebug() << "Road movement: Claimed territory" << destinationTerritory << "for player" << owningPlayer->getId();
+    } else if (enemyPiecesAtDest.isEmpty() && selectedTroopIds.isEmpty()) {
+        qDebug() << "Road movement: General/Caesar moved without troops - territory" << destinationTerritory << "NOT captured";
     }
 
     // Update display once after all moves
