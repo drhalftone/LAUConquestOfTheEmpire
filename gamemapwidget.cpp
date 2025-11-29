@@ -6,6 +6,7 @@
 
 #include <QDebug>
 #include <QMenu>
+#include <QActionGroup>
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QCloseEvent>
@@ -301,6 +302,57 @@ void GameMapWidget::createMenuBar()
         }
     );
 
+    viewMenu->addSeparator();
+
+    // Heat map visualization submenu
+    QMenu *heatMapMenu = viewMenu->addMenu("&Heat Map");
+
+    // Create action group for radio button behavior
+    m_heatMapActionGroup = new QActionGroup(this);
+    m_heatMapActionGroup->setExclusive(true);
+
+    QAction *heatMapNone = heatMapMenu->addAction("&None (Ownership Only)");
+    heatMapNone->setCheckable(true);
+    heatMapNone->setChecked(true);
+    heatMapNone->setData(static_cast<int>(HeatMapMode::None));
+    m_heatMapActionGroup->addAction(heatMapNone);
+
+    QAction *heatMapReach = heatMapMenu->addAction("Player &Reachability");
+    heatMapReach->setCheckable(true);
+    heatMapReach->setData(static_cast<int>(HeatMapMode::PlayerReachability));
+    m_heatMapActionGroup->addAction(heatMapReach);
+
+    QAction *heatMapForce = heatMapMenu->addAction("Max &Force Projection (1 Turn)");
+    heatMapForce->setCheckable(true);
+    heatMapForce->setData(static_cast<int>(HeatMapMode::MaxForceProjection));
+    m_heatMapActionGroup->addAction(heatMapForce);
+
+    QAction *heatMapForce2 = heatMapMenu->addAction("Max Force Projection (&2 Turn)");
+    heatMapForce2->setCheckable(true);
+    heatMapForce2->setData(static_cast<int>(HeatMapMode::MaxForceProjectionTwoTurn));
+    m_heatMapActionGroup->addAction(heatMapForce2);
+
+    QAction *heatMapThreat = heatMapMenu->addAction("&Enemy Threat (1 Turn)");
+    heatMapThreat->setCheckable(true);
+    heatMapThreat->setData(static_cast<int>(HeatMapMode::EnemyThreat));
+    m_heatMapActionGroup->addAction(heatMapThreat);
+
+    QAction *heatMapThreat2 = heatMapMenu->addAction("Enemy Threat (&2 Turn)");
+    heatMapThreat2->setCheckable(true);
+    heatMapThreat2->setData(static_cast<int>(HeatMapMode::EnemyThreatTwoTurn));
+    m_heatMapActionGroup->addAction(heatMapThreat2);
+
+    QAction *heatMapRisk = heatMapMenu->addAction("Risk &Level");
+    heatMapRisk->setCheckable(true);
+    heatMapRisk->setData(static_cast<int>(HeatMapMode::RiskLevel));
+    m_heatMapActionGroup->addAction(heatMapRisk);
+
+    // Connect action group to slot
+    connect(m_heatMapActionGroup, &QActionGroup::triggered, this, [this](QAction *action) {
+        HeatMapMode mode = static_cast<HeatMapMode>(action->data().toInt());
+        setHeatMapMode(mode);
+    });
+
     QMenu *helpMenu = m_menuBar->addMenu("&Help");
     QAction *aboutAction = helpMenu->addAction(
         QApplication::style()->standardIcon(QStyle::SP_MessageBoxInformation),
@@ -495,14 +547,15 @@ void GameMapWidget::createFramebuffer()
 
 void GameMapWidget::createOwnershipTexture()
 {
-    // Create 60 rows x 4 columns RGB image for ownership lookup
-    // Row = territory ID (1-60 maps to rows 0-59), Column 0 = border color
-    m_ownershipImage = QImage(4, 60, QImage::Format_RGB888);
+    // Create 60 rows x 8 columns RGB image for ownership/heat map lookup
+    // Row = territory ID (1-60 maps to rows 0-59)
+    // Column 0 = border color (ownership), Columns 1-4 = heat map modes
+    m_ownershipImage = QImage(LUT_WIDTH, LUT_HEIGHT, QImage::Format_RGB888);
     m_ownershipImage.fill(Qt::black);  // Initialize all to black (unowned)
 
     // Create the texture with NEAREST filtering (no interpolation)
     m_ownershipTexture = new QOpenGLTexture(QOpenGLTexture::Target2D);
-    m_ownershipTexture->setSize(4, 60);
+    m_ownershipTexture->setSize(LUT_WIDTH, LUT_HEIGHT);
     m_ownershipTexture->setFormat(QOpenGLTexture::RGB8_UNorm);
     m_ownershipTexture->allocateStorage();
     m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
@@ -510,7 +563,7 @@ void GameMapWidget::createOwnershipTexture()
     m_ownershipTexture->setMagnificationFilter(QOpenGLTexture::Nearest);
     m_ownershipTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
 
-    qDebug() << "Ownership texture created: 4x60 RGB";
+    qDebug() << "Ownership texture created:" << LUT_WIDTH << "x" << LUT_HEIGHT << "RGB";
 }
 
 void GameMapWidget::updateTerritoryOwnership()
@@ -558,6 +611,835 @@ void GameMapWidget::updateTerritoryOwnership()
 
     // Trigger repaint
     update();
+}
+
+void GameMapWidget::setHeatMapMode(HeatMapMode mode)
+{
+    if (m_heatMapMode == mode) {
+        return;
+    }
+
+    m_heatMapMode = mode;
+    qDebug() << "Heat map mode changed to:" << static_cast<int>(mode);
+
+    // Update the heat map data for the new mode
+    if (mode != HeatMapMode::None) {
+        updateHeatMap();
+    }
+
+    // Trigger repaint
+    update();
+}
+
+void GameMapWidget::updateHeatMap()
+{
+    if (!m_ownershipTexture || m_ownershipImage.isNull()) {
+        return;
+    }
+
+    if (m_heatMapMode == HeatMapMode::None) {
+        return;  // Nothing to update
+    }
+
+    // Call the appropriate helper based on mode
+    switch (m_heatMapMode) {
+        case HeatMapMode::PlayerReachability:
+            updateHeatMapPlayerReachability();
+            break;
+        case HeatMapMode::MaxForceProjection:
+            updateHeatMapMaxForce();
+            break;
+        case HeatMapMode::MaxForceProjectionTwoTurn:
+            updateHeatMapMaxForceTwoTurn();
+            break;
+        case HeatMapMode::EnemyThreat:
+            updateHeatMapEnemyThreat();
+            break;
+        case HeatMapMode::EnemyThreatTwoTurn:
+            updateHeatMapEnemyThreatTwoTurn();
+            break;
+        case HeatMapMode::RiskLevel:
+            updateHeatMapRiskLevel();
+            break;
+        default:
+            break;
+    }
+}
+
+void GameMapWidget::updateHeatMapPlayerReachability()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 1 (reachability) to black
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(1, row, Qt::black);
+    }
+
+    // First, mark territories where we already have troops or generals (bright cyan)
+    QSet<QString> occupiedTerritories;
+    QColor occupiedColor(0, 220, 220);  // Bright cyan for occupied
+
+    for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+        occupiedTerritories.insert(caesar->getTerritoryName());
+    }
+    for (GeneralPiece *general : currentPlayer->getGenerals()) {
+        occupiedTerritories.insert(general->getTerritoryName());
+    }
+    for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+        occupiedTerritories.insert(infantry->getTerritoryName());
+    }
+    for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+        occupiedTerritories.insert(cavalry->getTerritoryName());
+    }
+    for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+        occupiedTerritories.insert(catapult->getTerritoryName());
+    }
+
+    for (const QString &territoryName : occupiedTerritories) {
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id > 0 && territory.id <= 60) {
+            int row = territory.id - 1;
+            m_ownershipImage.setPixelColor(1, row, occupiedColor);
+        }
+    }
+
+    // Use reachability calculator to find all reachable territories
+    ReachabilityCalculator calc;
+    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph);
+
+    // Color reachable territories green (brighter = more moves remaining)
+    // Skip territories we already marked as occupied
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        const QString &territoryName = it.key();
+        const ReachInfo &info = it.value();
+
+        // Skip if already occupied (those are cyan)
+        if (occupiedTerritories.contains(territoryName)) {
+            continue;
+        }
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id > 0 && territory.id <= 60) {
+            int row = territory.id - 1;
+            // Vary intensity based on how many leaders can reach
+            int intensity = qMin(255, 100 + info.leadersWhoCanReach.size() * 50);
+            m_ownershipImage.setPixelColor(1, row, QColor(0, intensity, intensity / 2));
+        }
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated player reachability heat map:" << occupiedTerritories.size() << "occupied,"
+             << reachable.size() << "reachable";
+}
+
+void GameMapWidget::updateHeatMapMaxForce()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 2 (max force) to black
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(2, row, Qt::black);
+    }
+
+    // First, count current TROOPS at each territory (not leaders)
+    QMap<QString, int> currentForce;
+    for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+        currentForce[infantry->getTerritoryName()]++;
+    }
+    for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+        currentForce[cavalry->getTerritoryName()]++;
+    }
+    for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+        currentForce[catapult->getTerritoryName()]++;
+    }
+
+    // Use reachability calculator
+    // For force projection, we want to show maximum potential reach assuming full moves
+    // So we temporarily set all leaders to have 2 moves for calculation purposes
+    ReachabilityCalculator calc;
+
+    // Save current moves and set to full for projection
+    QMap<GamePiece*, double> savedMoves;
+    for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+        savedMoves[caesar] = caesar->getMovesRemaining();
+        caesar->setMovesRemaining(2.0);
+    }
+    for (GeneralPiece *general : currentPlayer->getGenerals()) {
+        savedMoves[general] = general->getMovesRemaining();
+        general->setMovesRemaining(2.0);
+    }
+
+    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph);
+
+    // Restore original moves
+    for (auto it = savedMoves.begin(); it != savedMoves.end(); ++it) {
+        it.key()->setMovesRemaining(it.value());
+    }
+
+    qDebug() << "Force projection: reachable territories:" << reachable.size();
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        qDebug() << "  " << it.key() << "force:" << it.value().maxTroopStrength
+                 << "leaders:" << it.value().leadersWhoCanReach.size();
+    }
+
+    // Build combined force map (max of current and reachable)
+    QMap<QString, int> maxForceMap;
+
+    // Add current positions
+    for (auto it = currentForce.begin(); it != currentForce.end(); ++it) {
+        maxForceMap[it.key()] = it.value();
+    }
+
+    // Add/update with reachable forces
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        const QString &territoryName = it.key();
+        int reachableForce = it.value().maxTroopStrength;
+        maxForceMap[territoryName] = qMax(maxForceMap.value(territoryName, 0), reachableForce);
+    }
+
+    // Track territories that are reachable by leaders (even if no troops can reach)
+    QSet<QString> reachableByLeader;
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        if (!it.value().leadersWhoCanReach.isEmpty()) {
+            reachableByLeader.insert(it.key());
+        }
+    }
+
+    qDebug() << "Force projection: maxForceMap has" << maxForceMap.size() << "territories";
+
+    // Find max force for color scaling
+    int maxForce = 1;
+    for (int force : maxForceMap) {
+        maxForce = qMax(maxForce, force);
+    }
+
+    // Color ALL territories
+    QList<QString> allTerritories = m_graph->getTerritoryNames();
+    for (const QString &territoryName : allTerritories) {
+        if (m_graph->isSeaTerritory(territoryName)) continue;
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id <= 0 || territory.id > 60) continue;
+
+        int row = territory.id - 1;
+        int force = maxForceMap.value(territoryName, 0);
+
+        // Check if we only have leaders (no troops) at this territory
+        int troopsOnly = 0;
+        for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+            if (infantry->getTerritoryName() == territoryName) troopsOnly++;
+        }
+        for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+            if (cavalry->getTerritoryName() == territoryName) troopsOnly++;
+        }
+        for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+            if (catapult->getTerritoryName() == territoryName) troopsOnly++;
+        }
+
+        // Check reachable troop strength (not counting lone generals)
+        int reachableTroops = 0;
+        if (reachable.contains(territoryName)) {
+            reachableTroops = reachable[territoryName].maxTroopStrength;
+            // maxTroopStrength includes the leader, so subtract leaders to get just troops
+            // Actually, let's check if any leader can bring troops
+            for (GamePiece *leader : reachable[territoryName].leadersWhoCanReach) {
+                int troopCount = calc.calculateTroopStrength(leader, currentPlayer, 0);
+                if (troopCount > 1) {  // More than just the leader itself
+                    reachableTroops = qMax(reachableTroops, troopCount);
+                }
+            }
+        }
+
+        int maxTroops = qMax(troopsOnly, reachableTroops);
+
+        int r, g, b;
+        if (force == 0 && !reachableByLeader.contains(territoryName)) {
+            // No force can reach and no leaders can reach - gray
+            r = 80;
+            g = 80;
+            b = 80;
+        } else if (maxTroops == 0) {
+            // Can only get a general there, no troops - red (vulnerable)
+            // This includes force == 0 but reachableByLeader == true
+            r = 255;
+            g = 50;
+            b = 50;
+        } else {
+            // Scale force to color: Blue (low) -> Yellow (medium) -> Green (high)
+            float ratio = static_cast<float>(force) / maxForce;
+
+            if (ratio < 0.5f) {
+                // Blue to Yellow
+                float t = ratio * 2.0f;
+                r = static_cast<int>(t * 255);
+                g = static_cast<int>(t * 255);
+                b = static_cast<int>((1.0f - t) * 255);
+            } else {
+                // Yellow to Green
+                float t = (ratio - 0.5f) * 2.0f;
+                r = static_cast<int>((1.0f - t) * 255);
+                g = 255;
+                b = 0;
+            }
+        }
+
+        m_ownershipImage.setPixelColor(2, row, QColor(r, g, b));
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated max force heat map, max force:" << maxForce;
+}
+
+void GameMapWidget::updateHeatMapMaxForceTwoTurn()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 6 (max force 2-turn) to black
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(6, row, Qt::black);
+    }
+
+    // First, count current TROOPS at each territory (not leaders)
+    QMap<QString, int> currentForce;
+    for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+        currentForce[infantry->getTerritoryName()]++;
+    }
+    for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+        currentForce[cavalry->getTerritoryName()]++;
+    }
+    for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+        currentForce[catapult->getTerritoryName()]++;
+    }
+
+    // Use reachability calculator with turnMultiplier=2 for 2-turn projection
+    ReachabilityCalculator calc;
+
+    // Save current moves and set to full for projection
+    QMap<GamePiece*, double> savedMoves;
+    for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+        savedMoves[caesar] = caesar->getMovesRemaining();
+        caesar->setMovesRemaining(2.0);
+    }
+    for (GeneralPiece *general : currentPlayer->getGenerals()) {
+        savedMoves[general] = general->getMovesRemaining();
+        general->setMovesRemaining(2.0);
+    }
+
+    // Use turnMultiplier=2 for 2-turn projection
+    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph, 2);
+
+    // Restore original moves
+    for (auto it = savedMoves.begin(); it != savedMoves.end(); ++it) {
+        it.key()->setMovesRemaining(it.value());
+    }
+
+    qDebug() << "Force projection (2-turn): reachable territories:" << reachable.size();
+
+    // Build combined force map (max of current and reachable)
+    QMap<QString, int> maxForceMap;
+
+    // Add current positions
+    for (auto it = currentForce.begin(); it != currentForce.end(); ++it) {
+        maxForceMap[it.key()] = it.value();
+    }
+
+    // Add/update with reachable forces
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        const QString &territoryName = it.key();
+        int reachableForce = it.value().maxTroopStrength;
+        maxForceMap[territoryName] = qMax(maxForceMap.value(territoryName, 0), reachableForce);
+    }
+
+    // Track territories that are reachable by leaders (even if no troops can reach)
+    QSet<QString> reachableByLeader;
+    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+        if (!it.value().leadersWhoCanReach.isEmpty()) {
+            reachableByLeader.insert(it.key());
+        }
+    }
+
+    // Find max force for color scaling
+    int maxForce = 1;
+    for (int force : maxForceMap) {
+        maxForce = qMax(maxForce, force);
+    }
+
+    // Color ALL territories
+    QList<QString> allTerritories = m_graph->getTerritoryNames();
+    for (const QString &territoryName : allTerritories) {
+        if (m_graph->isSeaTerritory(territoryName)) continue;
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id <= 0 || territory.id > 60) continue;
+
+        int row = territory.id - 1;
+        int force = maxForceMap.value(territoryName, 0);
+
+        // Check if we only have leaders (no troops) at this territory
+        int troopsOnly = 0;
+        for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+            if (infantry->getTerritoryName() == territoryName) troopsOnly++;
+        }
+        for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+            if (cavalry->getTerritoryName() == territoryName) troopsOnly++;
+        }
+        for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+            if (catapult->getTerritoryName() == territoryName) troopsOnly++;
+        }
+
+        // Check reachable troop strength using turnMultiplier=2
+        int reachableTroops = 0;
+        if (reachable.contains(territoryName)) {
+            reachableTroops = reachable[territoryName].maxTroopStrength;
+            for (GamePiece *leader : reachable[territoryName].leadersWhoCanReach) {
+                int troopCount = calc.calculateTroopStrength(leader, currentPlayer, 0, 2);
+                if (troopCount > 1) {
+                    reachableTroops = qMax(reachableTroops, troopCount);
+                }
+            }
+        }
+
+        int maxTroops = qMax(troopsOnly, reachableTroops);
+
+        int r, g, b;
+        if (force == 0 && !reachableByLeader.contains(territoryName)) {
+            // No force can reach and no leaders can reach - gray
+            r = 80;
+            g = 80;
+            b = 80;
+        } else if (maxTroops == 0) {
+            // Can only get a general there, no troops - red (vulnerable)
+            r = 255;
+            g = 50;
+            b = 50;
+        } else {
+            // Scale force to color: Blue (low) -> Yellow (medium) -> Green (high)
+            float ratio = static_cast<float>(force) / maxForce;
+
+            if (ratio < 0.5f) {
+                // Blue to Yellow
+                float t = ratio * 2.0f;
+                r = static_cast<int>(t * 255);
+                g = static_cast<int>(t * 255);
+                b = static_cast<int>((1.0f - t) * 255);
+            } else {
+                // Yellow to Green
+                float t = (ratio - 0.5f) * 2.0f;
+                r = static_cast<int>((1.0f - t) * 255);
+                g = 255;
+                b = 0;
+            }
+        }
+
+        m_ownershipImage.setPixelColor(6, row, QColor(r, g, b));
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated max force (2-turn) heat map, max force:" << maxForce;
+}
+
+void GameMapWidget::updateHeatMapEnemyThreat()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 3 (enemy threat) to black
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(3, row, Qt::black);
+    }
+
+    // Calculate enemy threat for each territory
+    // This includes BOTH current enemy positions AND territories they can reach
+    ReachabilityCalculator calc;
+    QMap<QString, int> enemyThreat;  // territory -> max enemy force
+    int maxThreat = 1;
+
+    for (Player *player : m_players) {
+        if (player == currentPlayer) continue;  // Skip self
+
+        // First, count current enemy troops at each territory
+        QMap<QString, int> currentTroops;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            currentTroops[caesar->getTerritoryName()]++;  // Caesar counts as 1
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            currentTroops[general->getTerritoryName()]++;  // General counts as 1
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            currentTroops[infantry->getTerritoryName()]++;
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            currentTroops[cavalry->getTerritoryName()]++;
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            currentTroops[catapult->getTerritoryName()]++;
+        }
+
+        // Add current positions to threat map
+        for (auto it = currentTroops.begin(); it != currentTroops.end(); ++it) {
+            const QString &territoryName = it.key();
+            int troops = it.value();
+            if (!enemyThreat.contains(territoryName)) {
+                enemyThreat[territoryName] = 0;
+            }
+            enemyThreat[territoryName] = qMax(enemyThreat[territoryName], troops);
+            maxThreat = qMax(maxThreat, troops);
+        }
+
+        // Then add territories they can reach
+        QMap<QString, ReachInfo> enemyReach = calc.getAllReachable(player, m_graph);
+        for (auto it = enemyReach.begin(); it != enemyReach.end(); ++it) {
+            const QString &territoryName = it.key();
+            const ReachInfo &info = it.value();
+
+            if (!enemyThreat.contains(territoryName)) {
+                enemyThreat[territoryName] = 0;
+            }
+            enemyThreat[territoryName] = qMax(enemyThreat[territoryName], info.maxTroopStrength);
+            maxThreat = qMax(maxThreat, enemyThreat[territoryName]);
+        }
+    }
+
+    // Color ALL territories by enemy threat - green (safe) -> yellow (mid) -> red (high)
+    QList<QString> allTerritories = m_graph->getTerritoryNames();
+    for (const QString &territoryName : allTerritories) {
+        if (m_graph->isSeaTerritory(territoryName)) continue;  // Skip sea territories
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id <= 0 || territory.id > 60) continue;
+
+        int row = territory.id - 1;
+        int threat = enemyThreat.value(territoryName, 0);
+
+        int r, g, b;
+        if (threat == 0) {
+            // No enemy threat - bright green (safe)
+            r = 0;
+            g = 200;
+            b = 50;
+        } else {
+            // Scale threat to color: green (low) -> yellow (mid) -> red (high)
+            float ratio = static_cast<float>(threat) / maxThreat;
+
+            if (ratio < 0.5f) {
+                // Green to Yellow
+                float t = ratio * 2.0f;
+                r = static_cast<int>(t * 255);
+                g = 255;
+                b = 0;
+            } else {
+                // Yellow to Red
+                float t = (ratio - 0.5f) * 2.0f;
+                r = 255;
+                g = static_cast<int>((1.0f - t) * 255);
+                b = 0;
+            }
+        }
+
+        m_ownershipImage.setPixelColor(3, row, QColor(r, g, b));
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated enemy threat heat map, max threat:" << maxThreat;
+}
+
+void GameMapWidget::updateHeatMapEnemyThreatTwoTurn()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 4 (two-turn enemy threat) to black - matches enum value
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(4, row, Qt::black);
+    }
+
+    // Calculate enemy threat for each territory
+    // Combined: max(1-turn threat, 0.5 * 2-turn threat)
+    ReachabilityCalculator calc;
+    QMap<QString, float> combinedThreat;  // territory -> combined threat value
+    float maxThreat = 1.0f;
+
+    for (Player *player : m_players) {
+        if (player == currentPlayer) continue;  // Skip self
+
+        // === 1-Turn Threat ===
+        // Current enemy positions
+        QMap<QString, int> currentTroops;
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            currentTroops[caesar->getTerritoryName()]++;
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            currentTroops[general->getTerritoryName()]++;
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            currentTroops[infantry->getTerritoryName()]++;
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            currentTroops[cavalry->getTerritoryName()]++;
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            currentTroops[catapult->getTerritoryName()]++;
+        }
+
+        // Add current positions as 1-turn threat
+        for (auto it = currentTroops.begin(); it != currentTroops.end(); ++it) {
+            float threat = static_cast<float>(it.value());
+            combinedThreat[it.key()] = qMax(combinedThreat.value(it.key(), 0.0f), threat);
+        }
+
+        // 1-turn reachability (current moves)
+        QMap<QString, ReachInfo> oneTurnReach = calc.getAllReachable(player, m_graph);
+        for (auto it = oneTurnReach.begin(); it != oneTurnReach.end(); ++it) {
+            float threat = static_cast<float>(it.value().maxTroopStrength);
+            combinedThreat[it.key()] = qMax(combinedThreat.value(it.key(), 0.0f), threat);
+        }
+
+        // === 2-Turn Threat ===
+        // Use turnMultiplier=2 to calculate reachability over 2 turns
+        // This multiplies both leader movement and troop movement ranges by 2
+        QMap<QString, ReachInfo> twoTurnReach = calc.getAllReachable(player, m_graph, 2);
+
+        // Add 2-turn threat at 0.5 weight
+        for (auto it = twoTurnReach.begin(); it != twoTurnReach.end(); ++it) {
+            float twoTurnThreat = static_cast<float>(it.value().maxTroopStrength) * 0.5f;
+            combinedThreat[it.key()] = qMax(combinedThreat.value(it.key(), 0.0f), twoTurnThreat);
+        }
+    }
+
+    // Find max threat for color scaling
+    for (float threat : combinedThreat) {
+        maxThreat = qMax(maxThreat, threat);
+    }
+
+    // Color ALL territories
+    QList<QString> allTerritories = m_graph->getTerritoryNames();
+    for (const QString &territoryName : allTerritories) {
+        if (m_graph->isSeaTerritory(territoryName)) continue;
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id <= 0 || territory.id > 60) continue;
+
+        int row = territory.id - 1;
+        float threat = combinedThreat.value(territoryName, 0.0f);
+
+        int r, g, b;
+        if (threat < 0.01f) {
+            // No enemy threat - bright green (safe)
+            r = 0;
+            g = 200;
+            b = 50;
+        } else {
+            // Scale threat to color: green (low) -> yellow (mid) -> red (high)
+            float ratio = threat / maxThreat;
+
+            if (ratio < 0.5f) {
+                // Green to Yellow
+                float t = ratio * 2.0f;
+                r = static_cast<int>(t * 255);
+                g = 255;
+                b = 0;
+            } else {
+                // Yellow to Red
+                float t = (ratio - 0.5f) * 2.0f;
+                r = 255;
+                g = static_cast<int>((1.0f - t) * 255);
+                b = 0;
+            }
+        }
+
+        m_ownershipImage.setPixelColor(4, row, QColor(r, g, b));
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated 2-turn enemy threat heat map, max threat:" << maxThreat;
+}
+
+void GameMapWidget::updateHeatMapRiskLevel()
+{
+    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
+        return;
+    }
+
+    Player *currentPlayer = m_players[m_currentPlayerIndex];
+    if (!currentPlayer) return;
+
+    makeCurrent();
+
+    // Clear column 5 (risk level) to black - matches enum value
+    for (int row = 0; row < LUT_HEIGHT; row++) {
+        m_ownershipImage.setPixelColor(5, row, Qt::black);
+    }
+
+    // Calculate reachability for current player and all enemies
+    ReachabilityCalculator calc;
+    QMap<QString, ReachInfo> ourReach = calc.getAllReachable(currentPlayer, m_graph);
+
+    // Also include territories where we already have pieces
+    QSet<QString> ourOccupied;
+    QMap<QString, int> ourCurrentForce;
+    for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+        ourOccupied.insert(caesar->getTerritoryName());
+        ourCurrentForce[caesar->getTerritoryName()]++;
+    }
+    for (GeneralPiece *general : currentPlayer->getGenerals()) {
+        ourOccupied.insert(general->getTerritoryName());
+        ourCurrentForce[general->getTerritoryName()]++;
+    }
+    for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+        ourOccupied.insert(infantry->getTerritoryName());
+        ourCurrentForce[infantry->getTerritoryName()]++;
+    }
+    for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+        ourOccupied.insert(cavalry->getTerritoryName());
+        ourCurrentForce[cavalry->getTerritoryName()]++;
+    }
+    for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+        ourOccupied.insert(catapult->getTerritoryName());
+        ourCurrentForce[catapult->getTerritoryName()]++;
+    }
+
+    // Calculate enemy threat for all territories
+    QMap<QString, int> enemyThreat;
+    QSet<QString> enemyOccupied;
+    for (Player *player : m_players) {
+        if (player == currentPlayer) continue;
+
+        // Current enemy positions
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            enemyOccupied.insert(caesar->getTerritoryName());
+            enemyThreat[caesar->getTerritoryName()]++;
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            enemyOccupied.insert(general->getTerritoryName());
+            enemyThreat[general->getTerritoryName()]++;
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            enemyOccupied.insert(infantry->getTerritoryName());
+            enemyThreat[infantry->getTerritoryName()]++;
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            enemyOccupied.insert(cavalry->getTerritoryName());
+            enemyThreat[cavalry->getTerritoryName()]++;
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            enemyOccupied.insert(catapult->getTerritoryName());
+            enemyThreat[catapult->getTerritoryName()]++;
+        }
+
+        // Enemy reachability
+        QMap<QString, ReachInfo> enemyReach = calc.getAllReachable(player, m_graph);
+        for (auto it = enemyReach.begin(); it != enemyReach.end(); ++it) {
+            enemyThreat[it.key()] = qMax(enemyThreat[it.key()], it.value().maxTroopStrength);
+        }
+    }
+
+    // Define colors for risk levels
+    QColor safeColor(0, 180, 0);       // Green - SAFE (we have presence, enemy cannot reach)
+    QColor lowColor(100, 200, 100);    // Light green - LOW (we have force advantage)
+    QColor mediumColor(255, 200, 0);   // Yellow - MEDIUM (forces roughly equal)
+    QColor highColor(255, 50, 50);     // Red - HIGH (enemy has advantage)
+    QColor enemyOccupiedColor(180, 0, 0);  // Dark red - enemy occupied, we can't reach
+    QColor neutralColor(128, 128, 128);    // Gray - no one can reach
+
+    // Iterate through ALL territories
+    QList<QString> allTerritories = m_graph->getTerritoryNames();
+    for (const QString &territoryName : allTerritories) {
+        if (m_graph->isSeaTerritory(territoryName)) continue;  // Skip sea territories
+
+        Territory territory = m_graph->getTerritory(territoryName);
+        if (territory.id <= 0 || territory.id > 60) continue;
+
+        int row = territory.id - 1;
+
+        // Calculate our max force (current + reachable)
+        int ourForce = ourCurrentForce.value(territoryName, 0);
+        if (ourReach.contains(territoryName)) {
+            ourForce = qMax(ourForce, ourReach[territoryName].maxTroopStrength);
+        }
+
+        // Get enemy force
+        int enemyForce = enemyThreat.value(territoryName, 0);
+
+        // Determine risk level
+        QColor color;
+        if (ourForce == 0 && enemyForce == 0) {
+            // Neither side can reach
+            color = neutralColor;
+        } else if (ourForce == 0 && enemyForce > 0) {
+            // Enemy only - high risk (dark red if occupied, red if just reachable)
+            color = enemyOccupied.contains(territoryName) ? enemyOccupiedColor : highColor;
+        } else if (ourForce > 0 && enemyForce == 0) {
+            // We only - safe
+            color = safeColor;
+        } else {
+            // Both can reach - compare forces
+            if (ourForce > enemyForce * 1.5) {
+                color = safeColor;  // Strong advantage
+            } else if (ourForce > enemyForce) {
+                color = lowColor;   // Slight advantage
+            } else if (ourForce * 1.5 >= enemyForce) {
+                color = mediumColor; // Roughly equal
+            } else {
+                color = highColor;  // Enemy advantage
+            }
+        }
+
+        m_ownershipImage.setPixelColor(5, row, color);
+    }
+
+    // Upload to texture
+    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
+    doneCurrent();
+
+    qDebug() << "Updated risk level heat map for all territories";
 }
 
 void GameMapWidget::createIconResources()
@@ -1283,6 +2165,22 @@ void GameMapWidget::paintGL()
     m_shaderProgram->setUniformValue("selectedTerritory", m_highlightedTerritoryId);
     m_shaderProgram->setUniformValue("borderRadius", m_borderRadius);
     m_shaderProgram->setUniformValue("mapSize", QVector2D(m_mapSize.width(), m_mapSize.height()));
+
+    // Heat map mode: map enum to LUT column
+    // Column 0 = ownership (reserved), 1 = reachability, 2 = max force, 3 = enemy threat,
+    // 4 = enemy threat 2-turn, 5 = risk level, 6 = max force 2-turn
+    int heatMapColumn = 0;
+    switch (m_heatMapMode) {
+        case HeatMapMode::None: heatMapColumn = 0; break;
+        case HeatMapMode::PlayerReachability: heatMapColumn = 1; break;
+        case HeatMapMode::MaxForceProjection: heatMapColumn = 2; break;
+        case HeatMapMode::MaxForceProjectionTwoTurn: heatMapColumn = 6; break;
+        case HeatMapMode::EnemyThreat: heatMapColumn = 3; break;
+        case HeatMapMode::EnemyThreatTwoTurn: heatMapColumn = 4; break;
+        case HeatMapMode::RiskLevel: heatMapColumn = 5; break;
+    }
+    m_shaderProgram->setUniformValue("heatMapColumn", heatMapColumn);
+    m_shaderProgram->setUniformValue("lutWidth", static_cast<float>(LUT_WIDTH));
 
     // Bind map texture to unit 0
     glActiveTexture(GL_TEXTURE0);
@@ -2340,6 +3238,449 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
     Territory territory = m_graph->getTerritory(territoryName);
     lines << QString("<b>%1</b> (ID: %2)").arg(territoryName).arg(territory.id);
     lines << QString("Value: %1").arg(territory.value);
+
+    // If heat map mode is active, show heat map specific information
+    if (m_heatMapMode != HeatMapMode::None && !m_players.isEmpty() &&
+        m_currentPlayerIndex >= 0 && m_currentPlayerIndex < m_players.size()) {
+
+        Player *currentPlayer = m_players[m_currentPlayerIndex];
+        ReachabilityCalculator calc;
+
+        lines << "";
+        QString heatMapName;
+        switch (m_heatMapMode) {
+            case HeatMapMode::PlayerReachability: heatMapName = "Player Reachability"; break;
+            case HeatMapMode::MaxForceProjection: heatMapName = "Max Force Projection (1 Turn)"; break;
+            case HeatMapMode::MaxForceProjectionTwoTurn: heatMapName = "Max Force Projection (2 Turn)"; break;
+            case HeatMapMode::EnemyThreat: heatMapName = "Enemy Threat (1 Turn)"; break;
+            case HeatMapMode::EnemyThreatTwoTurn: heatMapName = "Enemy Threat (2 Turn)"; break;
+            case HeatMapMode::RiskLevel: heatMapName = "Risk Level"; break;
+            default: heatMapName = "Unknown"; break;
+        }
+        lines << QString("<b><font color='#FF6600'>Heat Map: %1</font></b>").arg(heatMapName);
+
+        switch (m_heatMapMode) {
+            case HeatMapMode::PlayerReachability: {
+                // Check if we already have pieces at this territory
+                int leadersHere = 0;
+                int troopsHere = 0;
+                QStringList piecesHere;
+
+                for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+                    if (caesar->getTerritoryName() == territoryName) {
+                        leadersHere++;
+                        piecesHere << "Caesar";
+                    }
+                }
+                for (GeneralPiece *general : currentPlayer->getGenerals()) {
+                    if (general->getTerritoryName() == territoryName) {
+                        leadersHere++;
+                        piecesHere << QString("General %1").arg(general->getNumber());
+                    }
+                }
+                for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+                    if (infantry->getTerritoryName() == territoryName) troopsHere++;
+                }
+                for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territoryName) troopsHere++;
+                }
+                for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+                    if (catapult->getTerritoryName() == territoryName) troopsHere++;
+                }
+
+                if (leadersHere > 0 || troopsHere > 0) {
+                    // Already have presence here
+                    lines << QString("<font color='#00CC66'>✓ Already occupied</font>");
+                    if (leadersHere > 0) {
+                        lines << QString("  Leaders here: %1").arg(piecesHere.join(", "));
+                    }
+                    if (troopsHere > 0) {
+                        lines << QString("  Troops here: %1").arg(troopsHere);
+                    }
+                } else {
+                    // Check if we can reach it
+                    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph);
+                    if (reachable.contains(territoryName)) {
+                        const ReachInfo &info = reachable[territoryName];
+                        lines << QString("<font color='#00CC66'>✓ Reachable this turn</font>");
+                        lines << QString("  Leaders who can reach: %1").arg(info.leadersWhoCanReach.size());
+                        for (GamePiece *leader : info.leadersWhoCanReach) {
+                            QString leaderName = leader->getType() == GamePiece::Type::Caesar ? "Caesar" :
+                                                 QString("General %1").arg(static_cast<GeneralPiece*>(leader)->getNumber());
+                            lines << QString("    • %1 (%.1f moves left)").arg(leaderName).arg(info.bestMovesRemaining);
+                        }
+                        lines << QString("  Max troop strength: %1").arg(info.maxTroopStrength);
+                        if (info.viaRoad) lines << "  <font color='#996633'>Via road network</font>";
+                        if (info.viaGalley) lines << "  <font color='#3366CC'>Via galley transport</font>";
+                    } else {
+                        lines << QString("<font color='#CC0000'>✗ Not reachable this turn</font>");
+                    }
+                }
+                break;
+            }
+
+            case HeatMapMode::MaxForceProjection: {
+                // Count current forces at this territory
+                int currentForce = 0;
+                QStringList currentPieces;
+                for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+                    if (caesar->getTerritoryName() == territoryName) {
+                        currentForce++;
+                        currentPieces << "Caesar";
+                    }
+                }
+                for (GeneralPiece *general : currentPlayer->getGenerals()) {
+                    if (general->getTerritoryName() == territoryName) {
+                        currentForce++;
+                        currentPieces << QString("General %1").arg(general->getNumber());
+                    }
+                }
+                for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+                    if (infantry->getTerritoryName() == territoryName) currentForce++;
+                }
+                for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territoryName) currentForce++;
+                }
+                for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+                    if (catapult->getTerritoryName() == territoryName) currentForce++;
+                }
+
+                // Check reachable forces
+                QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph);
+                int reachableForce = 0;
+                if (reachable.contains(territoryName)) {
+                    reachableForce = reachable[territoryName].maxTroopStrength;
+                }
+
+                int maxForce = qMax(currentForce, reachableForce);
+
+                if (maxForce > 0) {
+                    lines << QString("<font color='#0066CC'>Max force: %1</font>").arg(maxForce);
+
+                    if (currentForce > 0) {
+                        lines << QString("  Currently here: %1").arg(currentForce);
+                        if (!currentPieces.isEmpty()) {
+                            lines << QString("    Leaders: %1").arg(currentPieces.join(", "));
+                        }
+                    }
+
+                    if (reachable.contains(territoryName)) {
+                        const ReachInfo &info = reachable[territoryName];
+                        if (reachableForce > currentForce) {
+                            lines << QString("  Can bring: %1 (via movement)").arg(reachableForce);
+                        }
+                        for (GamePiece *leader : info.leadersWhoCanReach) {
+                            QString leaderName = leader->getType() == GamePiece::Type::Caesar ? "Caesar" :
+                                                 QString("General %1").arg(static_cast<GeneralPiece*>(leader)->getNumber());
+                            int troopCount = calc.calculateTroopStrength(leader, currentPlayer, 2.0 - info.bestMovesRemaining);
+                            lines << QString("    • %1 can bring %2 troops").arg(leaderName).arg(troopCount);
+                        }
+                    }
+                } else {
+                    lines << QString("<font color='#666666'>No forces can reach</font>");
+                }
+                break;
+            }
+
+            case HeatMapMode::MaxForceProjectionTwoTurn: {
+                // Count current forces at this territory
+                int currentForce = 0;
+                QStringList currentPieces;
+                for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+                    if (caesar->getTerritoryName() == territoryName) {
+                        currentForce++;
+                        currentPieces << "Caesar";
+                    }
+                }
+                for (GeneralPiece *general : currentPlayer->getGenerals()) {
+                    if (general->getTerritoryName() == territoryName) {
+                        currentForce++;
+                        currentPieces << QString("General %1").arg(general->getNumber());
+                    }
+                }
+                for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+                    if (infantry->getTerritoryName() == territoryName) currentForce++;
+                }
+                for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territoryName) currentForce++;
+                }
+                for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+                    if (catapult->getTerritoryName() == territoryName) currentForce++;
+                }
+
+                // Check reachable forces with 2-turn projection
+                QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph, 2);
+                int reachableForce = 0;
+                if (reachable.contains(territoryName)) {
+                    reachableForce = reachable[territoryName].maxTroopStrength;
+                }
+
+                int maxForce = qMax(currentForce, reachableForce);
+
+                if (maxForce > 0) {
+                    lines << QString("<font color='#0066CC'>Max force (2 turns): %1</font>").arg(maxForce);
+
+                    if (currentForce > 0) {
+                        lines << QString("  Currently here: %1").arg(currentForce);
+                        if (!currentPieces.isEmpty()) {
+                            lines << QString("    Leaders: %1").arg(currentPieces.join(", "));
+                        }
+                    }
+
+                    if (reachable.contains(territoryName)) {
+                        const ReachInfo &info = reachable[territoryName];
+                        if (reachableForce > currentForce) {
+                            lines << QString("  Can bring in 2 turns: %1").arg(reachableForce);
+                        }
+                        for (GamePiece *leader : info.leadersWhoCanReach) {
+                            QString leaderName = leader->getType() == GamePiece::Type::Caesar ? "Caesar" :
+                                                 QString("General %1").arg(static_cast<GeneralPiece*>(leader)->getNumber());
+                            // Use turnMultiplier=2 for troop strength calculation
+                            double movesUsed = 4.0 - info.bestMovesRemaining;  // 4.0 is max moves with multiplier
+                            int troopCount = calc.calculateTroopStrength(leader, currentPlayer, movesUsed, 2);
+                            lines << QString("    • %1 can bring %2 troops").arg(leaderName).arg(troopCount);
+                        }
+                    }
+                } else {
+                    lines << QString("<font color='#666666'>No forces can reach in 2 turns</font>");
+                }
+                break;
+            }
+
+            case HeatMapMode::EnemyThreat: {
+                int totalThreat = 0;
+                QStringList threatDetails;
+
+                for (Player *player : m_players) {
+                    if (player == currentPlayer) continue;
+
+                    // Count current enemy troops at this territory
+                    int currentTroops = 0;
+                    bool hasLeaderHere = false;
+                    for (CaesarPiece *caesar : player->getCaesars()) {
+                        if (caesar->getTerritoryName() == territoryName) {
+                            currentTroops++;
+                            hasLeaderHere = true;
+                        }
+                    }
+                    for (GeneralPiece *general : player->getGenerals()) {
+                        if (general->getTerritoryName() == territoryName) {
+                            currentTroops++;
+                            hasLeaderHere = true;
+                        }
+                    }
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        if (infantry->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territoryName) currentTroops++;
+                    }
+
+                    if (currentTroops > 0) {
+                        totalThreat = qMax(totalThreat, currentTroops);
+                        threatDetails << QString("  <font color='#FF0000'>Player %1: %2 troops HERE</font>")
+                            .arg(player->getId())
+                            .arg(currentTroops);
+                    }
+
+                    // Also check what they can bring
+                    QMap<QString, ReachInfo> enemyReach = calc.getAllReachable(player, m_graph);
+                    if (enemyReach.contains(territoryName)) {
+                        const ReachInfo &info = enemyReach[territoryName];
+                        totalThreat = qMax(totalThreat, info.maxTroopStrength);
+                        if (currentTroops == 0) {  // Don't duplicate if already shown
+                            threatDetails << QString("  Player %1: %2 troops can reach (%3 leader%4)")
+                                .arg(player->getId())
+                                .arg(info.maxTroopStrength)
+                                .arg(info.leadersWhoCanReach.size())
+                                .arg(info.leadersWhoCanReach.size() > 1 ? "s" : "");
+                        } else if (info.maxTroopStrength > currentTroops) {
+                            // Can reinforce
+                            threatDetails << QString("    + %1 more can reinforce")
+                                .arg(info.maxTroopStrength - currentTroops);
+                        }
+                    }
+                }
+
+                if (totalThreat > 0) {
+                    QString threatColor = totalThreat > 6 ? "#CC0000" : totalThreat > 3 ? "#CC6600" : "#CCCC00";
+                    lines << QString("<font color='%1'>Max enemy threat: %2</font>").arg(threatColor).arg(totalThreat);
+                    lines << threatDetails;
+                } else {
+                    lines << QString("<font color='#00CC00'>No enemy threat this turn</font>");
+                }
+                break;
+            }
+
+            case HeatMapMode::EnemyThreatTwoTurn: {
+                // Combined threat: max(1-turn threat, 0.5 * 2-turn threat)
+                float maxOneTurn = 0;
+                float maxTwoTurn = 0;
+                QStringList threatDetails;
+
+                for (Player *player : m_players) {
+                    if (player == currentPlayer) continue;
+
+                    // Count current enemy troops at this territory
+                    int currentTroops = 0;
+                    for (CaesarPiece *caesar : player->getCaesars()) {
+                        if (caesar->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (GeneralPiece *general : player->getGenerals()) {
+                        if (general->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        if (infantry->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territoryName) currentTroops++;
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territoryName) currentTroops++;
+                    }
+
+                    if (currentTroops > 0) {
+                        maxOneTurn = qMax(maxOneTurn, static_cast<float>(currentTroops));
+                        threatDetails << QString("  <font color='#FF0000'>Player %1: %2 troops HERE</font>")
+                            .arg(player->getId())
+                            .arg(currentTroops);
+                    }
+
+                    // 1-turn reachability
+                    QMap<QString, ReachInfo> enemyReach1 = calc.getAllReachable(player, m_graph);
+                    if (enemyReach1.contains(territoryName)) {
+                        const ReachInfo &info = enemyReach1[territoryName];
+                        maxOneTurn = qMax(maxOneTurn, static_cast<float>(info.maxTroopStrength));
+                        if (currentTroops == 0) {
+                            threatDetails << QString("  Player %1: %2 troops (1 turn)")
+                                .arg(player->getId())
+                                .arg(info.maxTroopStrength);
+                        }
+                    }
+
+                    // 2-turn reachability (use turnMultiplier=2)
+                    QMap<QString, ReachInfo> enemyReach2 = calc.getAllReachable(player, m_graph, 2);
+                    if (enemyReach2.contains(territoryName)) {
+                        const ReachInfo &info = enemyReach2[territoryName];
+                        maxTwoTurn = qMax(maxTwoTurn, static_cast<float>(info.maxTroopStrength));
+                        // Only show 2-turn threat if not already shown as 1-turn
+                        if (!enemyReach1.contains(territoryName) && currentTroops == 0) {
+                            threatDetails << QString("  <font color='#CC6600'>Player %1: %2 troops (2 turns)</font>")
+                                .arg(player->getId())
+                                .arg(info.maxTroopStrength);
+                        }
+                    }
+                }
+
+                float combinedThreat = qMax(maxOneTurn, 0.5f * maxTwoTurn);
+
+                if (combinedThreat > 0) {
+                    QString threatColor = combinedThreat > 6 ? "#CC0000" : combinedThreat > 3 ? "#CC6600" : "#CCCC00";
+                    lines << QString("<font color='%1'>Combined threat: %.1f</font>").arg(threatColor).arg(combinedThreat);
+                    lines << QString("  1-turn max: %1, 2-turn max: %2")
+                        .arg(static_cast<int>(maxOneTurn))
+                        .arg(static_cast<int>(maxTwoTurn));
+                    lines << QString("  Formula: max(%1, 0.5 × %2) = %.1f")
+                        .arg(static_cast<int>(maxOneTurn))
+                        .arg(static_cast<int>(maxTwoTurn))
+                        .arg(combinedThreat);
+                    lines << threatDetails;
+                } else {
+                    lines << QString("<font color='#00CC00'>No enemy threat within 2 turns</font>");
+                }
+                break;
+            }
+
+            case HeatMapMode::RiskLevel: {
+                // Calculate our force (current + reachable)
+                int ourCurrentForce = 0;
+                for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
+                    if (caesar->getTerritoryName() == territoryName) ourCurrentForce++;
+                }
+                for (GeneralPiece *general : currentPlayer->getGenerals()) {
+                    if (general->getTerritoryName() == territoryName) ourCurrentForce++;
+                }
+                for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
+                    if (infantry->getTerritoryName() == territoryName) ourCurrentForce++;
+                }
+                for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territoryName) ourCurrentForce++;
+                }
+                for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
+                    if (catapult->getTerritoryName() == territoryName) ourCurrentForce++;
+                }
+
+                int ourMaxForce = ourCurrentForce;
+                QMap<QString, ReachInfo> ourReach = calc.getAllReachable(currentPlayer, m_graph);
+                if (ourReach.contains(territoryName)) {
+                    ourMaxForce = qMax(ourMaxForce, ourReach[territoryName].maxTroopStrength);
+                }
+
+                // Calculate enemy force (current + reachable)
+                int enemyCurrentForce = 0;
+                int enemyMaxForce = 0;
+                for (Player *player : m_players) {
+                    if (player == currentPlayer) continue;
+
+                    int thisEnemyCurrent = 0;
+                    for (CaesarPiece *caesar : player->getCaesars()) {
+                        if (caesar->getTerritoryName() == territoryName) thisEnemyCurrent++;
+                    }
+                    for (GeneralPiece *general : player->getGenerals()) {
+                        if (general->getTerritoryName() == territoryName) thisEnemyCurrent++;
+                    }
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        if (infantry->getTerritoryName() == territoryName) thisEnemyCurrent++;
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territoryName) thisEnemyCurrent++;
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territoryName) thisEnemyCurrent++;
+                    }
+                    enemyCurrentForce += thisEnemyCurrent;
+
+                    QMap<QString, ReachInfo> enemyReach = calc.getAllReachable(player, m_graph);
+                    if (enemyReach.contains(territoryName)) {
+                        enemyMaxForce = qMax(enemyMaxForce, enemyReach[territoryName].maxTroopStrength);
+                    }
+                    enemyMaxForce = qMax(enemyMaxForce, thisEnemyCurrent);
+                }
+
+                // Determine risk level
+                QString riskStr, riskColor;
+                if (ourMaxForce == 0 && enemyMaxForce == 0) {
+                    riskStr = "NEUTRAL"; riskColor = "#808080";
+                } else if (ourMaxForce == 0 && enemyMaxForce > 0) {
+                    riskStr = enemyCurrentForce > 0 ? "ENEMY OCCUPIED" : "ENEMY REACHABLE";
+                    riskColor = "#B40000";
+                } else if (ourMaxForce > 0 && enemyMaxForce == 0) {
+                    riskStr = "SAFE"; riskColor = "#00B400";
+                } else if (ourMaxForce > enemyMaxForce * 1.5) {
+                    riskStr = "SAFE"; riskColor = "#00B400";
+                } else if (ourMaxForce > enemyMaxForce) {
+                    riskStr = "LOW"; riskColor = "#64C864";
+                } else if (ourMaxForce * 1.5 >= enemyMaxForce) {
+                    riskStr = "MEDIUM"; riskColor = "#FFC800";
+                } else {
+                    riskStr = "HIGH"; riskColor = "#FF3232";
+                }
+
+                lines << QString("<font color='%1'><b>Risk: %2</b></font>").arg(riskColor).arg(riskStr);
+                lines << QString("  Our force: %1 here, %2 max").arg(ourCurrentForce).arg(ourMaxForce);
+                lines << QString("  Enemy force: %1 here, %2 max").arg(enemyCurrentForce).arg(enemyMaxForce);
+                break;
+            }
+
+            default:
+                break;
+        }
+
+        lines << "";  // Separator before normal tooltip content
+    }
 
     // Check if it's a sea territory
     if (m_graph->isSeaTerritory(territoryName)) {

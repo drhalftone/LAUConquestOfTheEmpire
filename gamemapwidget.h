@@ -18,12 +18,26 @@
 
 #include "common.h"
 #include "mapgraph.h"
+#include "ai/reachabilitycalculator.h"
 
 // Forward declarations
 class Player;
 class PlayerInfoWidget;
 class GamePiece;
 class QMenu;
+
+/**
+ * @brief Heat map visualization modes for the map widget
+ */
+enum class HeatMapMode {
+    None,                    // Normal ownership view (column 0)
+    PlayerReachability,      // Territories reachable by current player this turn
+    MaxForceProjection,      // Max troops that could reach each territory (1 turn)
+    MaxForceProjectionTwoTurn, // Max troops that could reach each territory (2 turns)
+    EnemyThreat,             // Max enemy force that could reach each territory (1 turn)
+    EnemyThreatTwoTurn,      // Combined enemy threat (1 turn + 0.5 * 2 turn)
+    RiskLevel                // Risk levels (SAFE/LOW/MEDIUM/HIGH)
+};
 
 // Alias for compatibility - OpenGL widget uses territory names, not grid positions
 // This allows code to work with both MapWidget and GameMapWidget
@@ -101,11 +115,16 @@ public:
     void removeCityAt(int row, int col);
     void removeFortificationAt(int row, int col);
 
+    // === Heat Map Visualization ===
+    HeatMapMode getHeatMapMode() const { return m_heatMapMode; }
+    void setHeatMapMode(HeatMapMode mode);
+
 public slots:
     void saveGame();
     void loadGame();
     void showAbout();
     void updateTerritoryOwnership();  // Call when any territory ownership changes
+    void updateHeatMap();             // Recalculate heat map data for current mode
 
 signals:
     // Common signals
@@ -146,6 +165,14 @@ private:
     QString buildTerritoryTooltip(const QString &territoryName) const;
     void playMenuClickSound(QAction *action);
 
+    // Heat map helpers
+    void updateHeatMapPlayerReachability();
+    void updateHeatMapMaxForce();
+    void updateHeatMapMaxForceTwoTurn();
+    void updateHeatMapEnemyThreat();
+    void updateHeatMapEnemyThreatTwoTurn();
+    void updateHeatMapRiskLevel();
+
     // Map graph (owned by this widget)
     MapGraph *m_graph = nullptr;
 
@@ -174,11 +201,21 @@ private:
     QOpenGLShaderProgram *m_screenShader = nullptr;  // Renders FBO texture to screen
     QOpenGLShaderProgram *m_lineShader = nullptr;    // Renders solid color lines (roads)
 
-    // Ownership lookup texture (60 rows x 4 columns, RGB)
-    // Row = territory ID, Column 0 = border color
+    // Ownership/heat map lookup texture (60 rows x 8 columns, RGB)
+    // Row = territory ID (1-60 maps to rows 0-59)
+    // Column 0 = ownership border color (PROTECTED - never used for heat maps)
+    // Column 1 = Player reachability heat map
+    // Column 2 = Max force projection heat map
+    // Column 3 = Enemy threat heat map
+    // Column 4 = Risk level heat map
+    // Columns 5-7 = Reserved for future use
+    static constexpr int LUT_WIDTH = 8;
+    static constexpr int LUT_HEIGHT = 60;
     QOpenGLTexture *m_ownershipTexture = nullptr;
     QImage m_ownershipImage;  // CPU-side data for updating
     int m_borderRadius = 8;   // Border thickness in pixels
+    HeatMapMode m_heatMapMode = HeatMapMode::None;
+    QActionGroup *m_heatMapActionGroup = nullptr;  // For radio button behavior in menu
 
     // City and building icons
     QOpenGLTexture *m_cityIconTexture = nullptr;

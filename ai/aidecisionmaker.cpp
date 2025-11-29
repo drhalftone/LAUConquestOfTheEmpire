@@ -1526,7 +1526,17 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
 
         if (weOwnIt) {
             // === DEFEND: Our territory under threat ===
-            if (risk == RiskLevel::High || risk == RiskLevel::Medium) {
+            // Include HIGH, MEDIUM, and LOW risk if enemies can reach in 1-2 turns
+            // LOW risk territories on the frontline still need reinforcement
+            bool needsDefense = (risk == RiskLevel::High || risk == RiskLevel::Medium);
+
+            // Also defend LOW risk territories that are adjacent to enemy positions
+            // These are frontline territories that need troops as a buffer
+            if (risk == RiskLevel::Low && enemyMaxForce > 0) {
+                needsDefense = true;
+            }
+
+            if (needsDefense) {
                 target.type = "Defend";
                 target.score = 50;  // Base defense value
 
@@ -1539,7 +1549,10 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 // Higher priority for high risk
                 if (risk == RiskLevel::High) {
                     target.score += 100;
+                } else if (risk == RiskLevel::Medium) {
+                    target.score += 50;
                 }
+                // LOW risk frontline gets base score only
 
                 // Higher priority for home province
                 if (territory == player->getHomeProvinceName()) {
@@ -1773,46 +1786,230 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         else expandTargets++;
     }
 
-    // If we have few troops, focus on expansion (undefended territories)
-    // If we have many troops, we can attack
-    int troopsForAttack = totalTroops;
-    int maxAttackMissions = (troopsForAttack >= 4) ? 2 : (troopsForAttack >= 2) ? 1 : 0;
-
-    qDebug() << "Planning:" << maxAttackMissions << "attack missions with" << troopsForAttack << "troops";
     qDebug() << "  Troops at home (" << homeProvince << "):" << countAvailableTroopsAt(homeProvince, player);
+
+    // Build a map of all territories with available troops
+    QMap<QString, int> troopsAtTerritory;
+    for (const QString &terr : player->getOwnedTerritories()) {
+        int troops = countAvailableTroopsAt(terr, player);
+        if (troops > 0) {
+            troopsAtTerritory[terr] = troops;
+            qDebug() << "  Troops at" << terr << ":" << troops;
+        }
+    }
 
     int attackMissionsAssigned = 0;
     int expandMissionsAssigned = 0;
 
-    // PHASE 1: Assign attack/defense missions to generals AT HOME with troops
-    // Only generals at home can bring troops efficiently
+    // PHASE 1A: DEFEND our own territories first (highest priority!)
+    // Strategy: Find a general who can REACH a territory with troops, pick them up, and then reach the target
     for (const TargetTerritory &target : targets) {
-        if (!target.requiresTroops) continue;  // Skip expansion targets in this phase
-        if (attackMissionsAssigned >= maxAttackMissions) continue;
+        if (target.type != "Defend") continue;  // Only defense missions in this phase
 
-        int troopsAtHome = countAvailableTroopsAt(homeProvince, player);
-        if (troopsAtHome < target.troopsNeeded) {
-            qDebug() << "Skipping" << target.name << "- need" << target.troopsNeeded
-                     << "troops but only have" << troopsAtHome << "at home";
-            continue;
-        }
-
-        // Find a general AT HOME who can reach this target
+        // Find a general who can pick up troops and reach the target
         GeneralPiece *bestGeneral = nullptr;
+        QString troopPickupTerritory;
+        int bestTroopCount = 0;
 
         for (GeneralPiece *gen : availableGenerals) {
             if (assignedGenerals.contains(gen)) continue;
-            if (gen->getTerritoryName() != homeProvince) continue;  // Must be at home!
 
-            // Check if general can reach this target
-            if (!generalReachability[gen].contains(target.name)) continue;
+            QString genTerritory = gen->getTerritoryName();
+            int genMoves = gen->getMovesRemaining();
+            if (genMoves < 1) continue;
 
-            bestGeneral = gen;
-            break;  // Take first available general at home
+            // Option 1: General is already at a territory with troops
+            // Check if target is reachable based on CURRENT moves (not pre-calculated)
+            if (troopsAtTerritory.contains(genTerritory) && troopsAtTerritory[genTerritory] > 0) {
+                // With 1 move: can only reach adjacent territories (troops move with general)
+                // With 2 moves: can reach 2-hop territories (but troops only go 1 hop, left behind)
+                // For defense, we want troops TO the target, so check 1-hop adjacency
+                QList<QString> neighbors = graph->getNeighbors(genTerritory);
+                bool canReachWithTroops = neighbors.contains(target.name) && !graph->isSeaTerritory(target.name);
+
+                if (canReachWithTroops) {
+                    int troops = troopsAtTerritory[genTerritory];
+                    if (troops > bestTroopCount) {
+                        bestGeneral = gen;
+                        troopPickupTerritory = genTerritory;
+                        bestTroopCount = troops;
+                    }
+                }
+            }
+
+            // Option 2: General can move to an adjacent territory with troops, then to target
+            // This requires 2 moves: 1 to pick up troops, 1 to reach target
+            if (genMoves >= 2) {
+                QList<QString> adjacentToGen = graph->getNeighbors(genTerritory);
+                for (const QString &adj : adjacentToGen) {
+                    if (graph->isSeaTerritory(adj)) continue;
+                    if (!troopsAtTerritory.contains(adj) || troopsAtTerritory[adj] == 0) continue;
+
+                    // Check if from adj we can reach the target in 1 move
+                    QList<QString> adjacentToAdj = graph->getNeighbors(adj);
+                    bool canReachTarget = adjacentToAdj.contains(target.name) || adj == target.name;
+
+                    if (canReachTarget) {
+                        int troops = troopsAtTerritory[adj];
+                        if (troops > bestTroopCount) {
+                            bestGeneral = gen;
+                            troopPickupTerritory = adj;
+                            bestTroopCount = troops;
+                        }
+                    }
+                }
+            }
         }
 
         if (!bestGeneral) {
-            qDebug() << "No general at home can reach" << target.name;
+            qDebug() << "No general can reach troops and then" << target.name << "for defense";
+            continue;
+        }
+
+        // CRITICAL: Check if taking troops will leave the pickup territory vulnerable
+        // Don't strip troops from a territory that is itself at risk
+        int enemyThreatToPickup = 0;
+        if (riskMap.contains(troopPickupTerritory)) {
+            enemyThreatToPickup = riskMap[troopPickupTerritory].enemyMaxForce;
+        }
+
+        int troopsAtPickup = troopsAtTerritory[troopPickupTerritory];
+        int troopsToTake = qMin(6, bestTroopCount);
+
+        // Calculate how many troops we can safely take
+        // Leave enough to maintain at least LOW risk (our force > enemy force)
+        int minTroopsToLeave = enemyThreatToPickup + 1;  // Need more than enemy to stay safe
+        int safeTroopsToTake = qMax(0, troopsAtPickup - minTroopsToLeave);
+
+        if (safeTroopsToTake < troopsToTake) {
+            // We can't take as many as we wanted - take what's safe
+            if (safeTroopsToTake >= 2) {
+                troopsToTake = safeTroopsToTake;
+                qDebug() << "DEFENSE: Limiting troops from" << troopPickupTerritory
+                         << "to" << troopsToTake << "(leaving" << minTroopsToLeave
+                         << "to defend against" << enemyThreatToPickup << "enemy threat)";
+            } else if (troopPickupTerritory == target.name) {
+                // We're reinforcing this territory, not taking from it - OK to take 0
+                troopsToTake = 0;
+            } else {
+                // Can't safely take enough troops - skip this defense assignment
+                qDebug() << "DEFENSE: Skipping" << target.name << "- can't safely take troops from"
+                         << troopPickupTerritory << "(enemy threat:" << enemyThreatToPickup << ")";
+                continue;
+            }
+        }
+
+        // Create defense assignment
+        GeneralAssignment assignment;
+        assignment.general = bestGeneral;
+        assignment.targetTerritory = target.name;
+        assignment.missionType = "Defend";
+        assignment.priority = target.score + 100;  // Defense gets priority boost
+
+        // Get the troop IDs from the pickup territory
+        QList<int> troopIds;
+        for (InfantryPiece *inf : player->getInfantry()) {
+            if (inf->getTerritoryName() == troopPickupTerritory && inf->getMovesRemaining() > 0) {
+                troopIds.append(inf->getUniqueId());
+                if (troopIds.size() >= troopsToTake) break;
+            }
+        }
+        if (troopIds.size() < troopsToTake) {
+            for (CavalryPiece *cav : player->getCavalry()) {
+                if (cav->getTerritoryName() == troopPickupTerritory && cav->getMovesRemaining() > 0) {
+                    troopIds.append(cav->getUniqueId());
+                    if (troopIds.size() >= troopsToTake) break;
+                }
+            }
+        }
+
+        assignment.troopsToTake = troopIds.size();
+        assignment.troopIds = troopIds;
+        assignment.reason = QString("DEFEND %1 with %2 troops from %3 (enemy threat: %4)")
+            .arg(target.name).arg(assignment.troopsToTake).arg(troopPickupTerritory).arg(target.troopsNeeded);
+
+        plan.assignments.append(assignment);
+        assignedGenerals.insert(bestGeneral);
+        assignedTargets.insert(target.name);
+        plan.totalTroopsDeployed += assignment.troopsToTake;
+        plan.generalsUsed++;
+        plan.territoriesTargeted++;
+
+        // Mark these troops as used
+        troopsAtTerritory[troopPickupTerritory] -= assignment.troopsToTake;
+
+        qDebug() << "DEFENSE: General #" << bestGeneral->getNumber()
+                 << "from" << bestGeneral->getTerritoryName()
+                 << "picking up troops at" << troopPickupTerritory
+                 << "then defending" << target.name
+                 << "with" << assignment.troopsToTake << "troops (threat:" << target.troopsNeeded << ")";
+    }
+
+    // PHASE 1B: Attack missions - find generals who can pick up troops and reach enemy targets
+    // Calculate total available troops across all territories
+    int totalAvailableTroops = 0;
+    for (auto it = troopsAtTerritory.begin(); it != troopsAtTerritory.end(); ++it) {
+        totalAvailableTroops += it.value();
+    }
+    int maxAttackMissions = (totalAvailableTroops >= 4) ? 2 : (totalAvailableTroops >= 2) ? 1 : 0;
+
+    qDebug() << "Planning:" << maxAttackMissions << "attack missions with" << totalAvailableTroops << "total available troops";
+
+    for (const TargetTerritory &target : targets) {
+        if (target.type != "Attack") continue;  // Only attack missions
+        if (assignedTargets.contains(target.name)) continue;  // Skip already-assigned targets
+        if (attackMissionsAssigned >= maxAttackMissions) continue;
+
+        // Find a general who can pick up enough troops and reach the target
+        GeneralPiece *bestGeneral = nullptr;
+        QString troopPickupTerritory;
+        int bestTroopCount = 0;
+
+        for (GeneralPiece *gen : availableGenerals) {
+            if (assignedGenerals.contains(gen)) continue;
+
+            QString genTerritory = gen->getTerritoryName();
+            int genMoves = gen->getMovesRemaining();
+            if (genMoves < 1) continue;
+
+            // Option 1: General is already at a territory with enough troops
+            if (troopsAtTerritory.contains(genTerritory) && troopsAtTerritory[genTerritory] >= target.troopsNeeded) {
+                if (generalReachability[gen].contains(target.name)) {
+                    int troops = troopsAtTerritory[genTerritory];
+                    if (troops > bestTroopCount) {
+                        bestGeneral = gen;
+                        troopPickupTerritory = genTerritory;
+                        bestTroopCount = troops;
+                    }
+                }
+            }
+
+            // Option 2: General can move to adjacent territory with troops, then attack
+            if (genMoves >= 2) {
+                QList<QString> adjacentToGen = graph->getNeighbors(genTerritory);
+                for (const QString &adj : adjacentToGen) {
+                    if (graph->isSeaTerritory(adj)) continue;
+                    if (!troopsAtTerritory.contains(adj) || troopsAtTerritory[adj] < target.troopsNeeded) continue;
+
+                    // Check if from adj we can reach the target in 1 move
+                    QList<QString> adjacentToAdj = graph->getNeighbors(adj);
+                    bool canReachTarget = adjacentToAdj.contains(target.name) || adj == target.name;
+
+                    if (canReachTarget) {
+                        int troops = troopsAtTerritory[adj];
+                        if (troops > bestTroopCount) {
+                            bestGeneral = gen;
+                            troopPickupTerritory = adj;
+                            bestTroopCount = troops;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!bestGeneral || bestTroopCount < target.troopsNeeded) {
+            qDebug() << "Skipping attack on" << target.name << "- need" << target.troopsNeeded
+                     << "troops, best available:" << bestTroopCount;
             continue;
         }
 
@@ -1823,11 +2020,28 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         assignment.missionType = target.type;
         assignment.priority = target.score;
 
-        // Assign troops - take as many as possible (up to 6)
-        int troopsToTake = qMin(6, troopsAtHome);
-        assignTroopsToGeneral(assignment, player, troopsToTake);
-        assignment.reason = QString("%1 %2 with %3 troops (enemy: %4)")
-            .arg(target.type).arg(target.name).arg(assignment.troopsToTake).arg(target.enemyTroops);
+        // Get the troop IDs from the pickup territory
+        int troopsToTake = qMin(6, bestTroopCount);
+        QList<int> troopIds;
+        for (InfantryPiece *inf : player->getInfantry()) {
+            if (inf->getTerritoryName() == troopPickupTerritory && inf->getMovesRemaining() > 0) {
+                troopIds.append(inf->getUniqueId());
+                if (troopIds.size() >= troopsToTake) break;
+            }
+        }
+        if (troopIds.size() < troopsToTake) {
+            for (CavalryPiece *cav : player->getCavalry()) {
+                if (cav->getTerritoryName() == troopPickupTerritory && cav->getMovesRemaining() > 0) {
+                    troopIds.append(cav->getUniqueId());
+                    if (troopIds.size() >= troopsToTake) break;
+                }
+            }
+        }
+
+        assignment.troopsToTake = troopIds.size();
+        assignment.troopIds = troopIds;
+        assignment.reason = QString("%1 %2 with %3 troops from %4 (enemy: %5)")
+            .arg(target.type).arg(target.name).arg(assignment.troopsToTake).arg(troopPickupTerritory).arg(target.enemyTroops);
         attackMissionsAssigned++;
 
         plan.assignments.append(assignment);
@@ -1837,16 +2051,181 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         plan.generalsUsed++;
         plan.territoriesTargeted++;
 
-        qDebug() << "Assigned General #" << bestGeneral->getNumber()
-                 << "to" << target.name << "(" << target.type << ")"
+        // Mark these troops as used
+        troopsAtTerritory[troopPickupTerritory] -= assignment.troopsToTake;
+
+        qDebug() << "ATTACK: General #" << bestGeneral->getNumber()
+                 << "from" << bestGeneral->getTerritoryName()
+                 << "picking up troops at" << troopPickupTerritory
+                 << "then attacking" << target.name
                  << "with" << assignment.troopsToTake << "troops";
     }
 
-    // PHASE 2: Assign expansion missions to generals NOT at home (they're already out)
-    // These generals should expand without troops to maximize territory gain
+    // === CALCULATE ENEMY THREAT MAP (needed by multiple phases) ===
+    // This tells us how many turns until each enemy can reach each territory
+    QMap<QString, int> turnsUntilEnemyCanReach;  // territory -> minimum turns for any enemy
+
+    for (Player *enemy : allPlayers) {
+        if (enemy == player) continue;
+
+        // Get 3-turn reachability for this enemy
+        QMap<QString, MultiTurnReachInfo> enemyReach =
+            calc.getAllMultiTurnReachability(enemy, allPlayers, graph, 3);
+
+        for (auto it = enemyReach.begin(); it != enemyReach.end(); ++it) {
+            const QString &territory = it.key();
+            int turns = it.value().turnsToReach;
+
+            // Track minimum turns (closest enemy threat)
+            if (!turnsUntilEnemyCanReach.contains(territory) ||
+                turns < turnsUntilEnemyCanReach[territory]) {
+                turnsUntilEnemyCanReach[territory] = turns;
+            }
+        }
+    }
+
+    // Also mark LAND territories adjacent to enemy-owned as 1-turn threat
+    // Skip sea territories - they're only reachable with galleys
+    for (Player *enemy : allPlayers) {
+        if (enemy == player) continue;
+        for (const QString &enemyTerritory : enemy->getOwnedTerritories()) {
+            QList<QString> adjacent = graph->getNeighbors(enemyTerritory);
+            for (const QString &adj : adjacent) {
+                // Skip sea territories - enemies can't walk on water!
+                if (graph->isSeaTerritory(adj)) continue;
+
+                if (!turnsUntilEnemyCanReach.contains(adj) ||
+                    turnsUntilEnemyCanReach[adj] > 1) {
+                    turnsUntilEnemyCanReach[adj] = 1;
+                }
+            }
+            turnsUntilEnemyCanReach[enemyTerritory] = 0;
+        }
+    }
+
+    // Filter out sea territories from the threat map entirely (unless enemy has galleys there)
+    // This keeps the analysis focused on land threats
+    QList<QString> seaToRemove;
+    for (auto it = turnsUntilEnemyCanReach.begin(); it != turnsUntilEnemyCanReach.end(); ++it) {
+        if (graph->isSeaTerritory(it.key())) {
+            seaToRemove.append(it.key());
+        }
+    }
+    for (const QString &sea : seaToRemove) {
+        turnsUntilEnemyCanReach.remove(sea);
+    }
+
+    qDebug() << "Enemy threat analysis (land only):";
+    for (auto it = turnsUntilEnemyCanReach.begin(); it != turnsUntilEnemyCanReach.end(); ++it) {
+        if (it.value() <= 2) {
+            qDebug() << "  " << it.key() << ": enemy can reach in" << it.value() << "turns";
+        }
+    }
+
+    // === PHASE 2: EXPAND WITH TROOPS to high-threat targets (enemy ≤2 turns away) ===
+    // These territories are strategic priorities - we need troops there for defense!
+    // Send HOME generals WITH troops to these targets FIRST before assigning safe expansions.
+    int troopsAtHome = countAvailableTroopsAt(homeProvince, player);
+
+    if (troopsAtHome > 0) {
+        // Count unassigned generals at home
+        int unassignedAtHome = 0;
+        for (GeneralPiece *gen : availableGenerals) {
+            if (!assignedGenerals.contains(gen) && gen->getTerritoryName() == homeProvince) {
+                unassignedAtHome++;
+            }
+        }
+
+        // Find high-threat expansion targets (enemy can reach in ≤2 turns)
+        QList<TargetTerritory> highThreatTargets;
+        for (const TargetTerritory &target : targets) {
+            if (target.requiresTroops) continue;  // Skip attack targets
+            int enemyTurns = turnsUntilEnemyCanReach.value(target.name, 99);
+            if (enemyTurns <= 2) {
+                highThreatTargets.append(target);
+            }
+        }
+
+        if (unassignedAtHome > 0 && !highThreatTargets.isEmpty()) {
+            // CONCENTRATE FORCE: Don't spread troops thin!
+            // Better to send 4 troops to 1 target than 1 troop to 4 targets.
+            // Limit troop missions to what we can meaningfully defend (at least 2 troops each)
+            int minTroopsPerMission = 2;
+            int maxTroopMissions = troopsAtHome / minTroopsPerMission;  // How many missions we can support
+            if (maxTroopMissions < 1) maxTroopMissions = 1;  // At least try one mission
+
+            // Don't send more generals with troops than we have high-threat targets or troops for
+            int troopMissionsToAssign = qMin(maxTroopMissions, qMin(unassignedAtHome, highThreatTargets.size()));
+
+            // Distribute troops evenly among the missions we're doing
+            int troopsPerGeneral = troopsAtHome / troopMissionsToAssign;
+            if (troopsPerGeneral > 6) troopsPerGeneral = 6;  // Legion max
+
+            qDebug() << "PHASE 2: Assigning" << troopMissionsToAssign << "home generals WITH troops to high-threat targets"
+                     << "(" << troopsPerGeneral << "troops each," << troopsAtHome << "total available)";
+
+            int troopMissionsAssigned = 0;
+            for (const TargetTerritory &target : highThreatTargets) {
+                if (troopMissionsAssigned >= troopMissionsToAssign) break;  // Done with troop missions
+                if (assignedTargets.contains(target.name)) continue;
+                if (assignedGenerals.size() >= availableGenerals.size()) break;
+                if (countAvailableTroopsAt(homeProvince, player) == 0) break;  // No more troops
+
+                // Find an unassigned general AT HOME who can reach this target
+                GeneralPiece *homeGeneral = nullptr;
+                for (GeneralPiece *gen : availableGenerals) {
+                    if (assignedGenerals.contains(gen)) continue;
+                    if (gen->getTerritoryName() != homeProvince) continue;
+                    if (!generalReachability[gen].contains(target.name)) continue;
+
+                    homeGeneral = gen;
+                    break;
+                }
+
+                if (!homeGeneral) continue;
+
+                int enemyTurns = turnsUntilEnemyCanReach.value(target.name, 99);
+                int troopsForThisTarget = troopsPerGeneral;
+                if (enemyTurns == 1) {
+                    // Immediate threat: bring extra troops
+                    troopsForThisTarget = qMin(6, troopsPerGeneral + 1);
+                }
+                int troopsToTake = qMin(troopsForThisTarget, countAvailableTroopsAt(homeProvince, player));
+
+                // Create expansion assignment WITH troops
+                GeneralAssignment assignment;
+                assignment.general = homeGeneral;
+                assignment.targetTerritory = target.name;
+                assignment.missionType = "ExpandWithTroops";
+                assignment.priority = target.score + 50;  // Boost priority for troop missions
+
+                assignTroopsToGeneral(assignment, player, troopsToTake);
+                assignment.reason = QString("Expand to %1 with %2 troops (enemy %3 turns away)")
+                    .arg(target.name).arg(assignment.troopsToTake).arg(enemyTurns);
+
+                plan.assignments.append(assignment);
+                assignedGenerals.insert(homeGeneral);
+                assignedTargets.insert(target.name);
+                plan.totalTroopsDeployed += assignment.troopsToTake;
+                plan.generalsUsed++;
+                plan.territoriesTargeted++;
+
+                qDebug() << "Assigned General #" << homeGeneral->getNumber()
+                         << "to" << target.name << "(ExpandWithTroops)"
+                         << "with" << assignment.troopsToTake << "troops"
+                         << "(enemy" << enemyTurns << "turns away)";
+
+                troopMissionsAssigned++;
+            }
+        }
+    }
+
+    // === PHASE 3: EXPAND WITHOUT TROOPS to safe targets ===
+    // These are low-threat territories - send any available general WITHOUT troops
+    // Prefer generals NOT at home (save home generals for future troop missions)
     for (const TargetTerritory &target : targets) {
         if (target.requiresTroops) continue;  // Skip attack targets
-        if (expandMissionsAssigned >= 4) continue;
+        if (assignedTargets.contains(target.name)) continue;
         if (assignedGenerals.size() >= availableGenerals.size()) break;
 
         // Find a general who can reach this target, prefer those NOT at home
@@ -1890,77 +2269,10 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                  << "with 0 troops (expansion)";
     }
 
-    // PHASE 3: Generals AT HOME with troops should expand WITH troops
-    // This is the key fix - if no attack targets are reachable, generals at home
-    // should still go out and expand, but TAKE TROOPS for defense
-    int troopsAtHome = countAvailableTroopsAt(homeProvince, player);
-
-    if (troopsAtHome > 0) {
-        // Count unassigned generals at home
-        int unassignedAtHome = 0;
-        for (GeneralPiece *gen : availableGenerals) {
-            if (!assignedGenerals.contains(gen) && gen->getTerritoryName() == homeProvince) {
-                unassignedAtHome++;
-            }
-        }
-
-        if (unassignedAtHome > 0) {
-            // Calculate troops per general (distribute evenly)
-            int troopsPerGeneral = qMin(6, troopsAtHome / unassignedAtHome);
-            if (troopsPerGeneral < 1) troopsPerGeneral = 1;
-
-            qDebug() << "PHASE 3: Assigning" << unassignedAtHome << "home generals to expand with"
-                     << troopsPerGeneral << "troops each";
-
-            for (const TargetTerritory &target : targets) {
-                if (target.requiresTroops) continue;  // Skip attack targets
-                if (assignedGenerals.size() >= availableGenerals.size()) break;
-
-                // Find an unassigned general AT HOME who can reach this target
-                GeneralPiece *homeGeneral = nullptr;
-                for (GeneralPiece *gen : availableGenerals) {
-                    if (assignedGenerals.contains(gen)) continue;
-                    if (gen->getTerritoryName() != homeProvince) continue;
-                    if (!generalReachability[gen].contains(target.name)) continue;
-
-                    homeGeneral = gen;
-                    break;
-                }
-
-                if (!homeGeneral) continue;
-
-                // Create expansion assignment WITH troops
-                GeneralAssignment assignment;
-                assignment.general = homeGeneral;
-                assignment.targetTerritory = target.name;
-                assignment.missionType = "ExpandWithTroops";
-                assignment.priority = target.score;
-
-                // Assign troops
-                int troopsToTake = qMin(troopsPerGeneral, countAvailableTroopsAt(homeProvince, player));
-                assignTroopsToGeneral(assignment, player, troopsToTake);
-                assignment.reason = QString("Expand to %1 with %2 troops for defense")
-                    .arg(target.name).arg(assignment.troopsToTake);
-
-                plan.assignments.append(assignment);
-                assignedGenerals.insert(homeGeneral);
-                assignedTargets.insert(target.name);
-                plan.totalTroopsDeployed += assignment.troopsToTake;
-                plan.generalsUsed++;
-                plan.territoriesTargeted++;
-
-                qDebug() << "Assigned General #" << homeGeneral->getNumber()
-                         << "to" << target.name << "(ExpandWithTroops)"
-                         << "with" << assignment.troopsToTake << "troops";
-            }
-        }
-    }
-
     // Step 7: Handle remaining generals
-    // Generals not assigned to targets should either:
-    // - Stay where they are (if at home with no troops)
-    // - Return home to pick up troops (if troops available at home)
-    // - Look for stepping stone positions
+    // CRITICAL CHANGE: Only return home if there are NO MORE EXPANSION TARGETS *that this general can reach*
+    // If a general has troops, they should STAY and defend, not return
+    // Only generals with 0 troops AND no reachable expansion targets should return home
 
     troopsAtHome = countAvailableTroopsAt(homeProvince, player);  // Recalculate after assignments
 
@@ -1971,21 +2283,80 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         GeneralAssignment assignment;
         assignment.general = gen;
 
-        // Check if there are unassigned troops at home
-        if (troopsAtHome > 0 && currentTerritory != homeProvince) {
+        // Check if this general has troops in their legion
+        int generalLegionSize = gen->getLegion().size();
+
+        // If general has troops, they should STAY and defend their current position
+        if (generalLegionSize > 0) {
+            assignment.targetTerritory = currentTerritory;
+            assignment.missionType = "Defend";
+            assignment.priority = 75;  // Higher than return home
+            assignment.troopsToTake = 0;
+            assignment.reason = QString("Defending %1 with %2 troops").arg(currentTerritory).arg(generalLegionSize);
+
+            plan.assignments.append(assignment);
+            assignedGenerals.insert(gen);
+
+            qDebug() << "General #" << gen->getNumber() << "staying to DEFEND" << currentTerritory
+                     << "with" << generalLegionSize << "troops";
+            continue;
+        }
+
+        // Check if THIS GENERAL can reach any unassigned expansion target
+        bool canReachExpansionTarget = false;
+        QString bestReachableTarget;
+        int bestTargetScore = -1;
+
+        for (const TargetTerritory &target : targets) {
+            if (target.requiresTroops) continue;  // Only expansion targets
+            if (assignedTargets.contains(target.name)) continue;  // Already assigned
+
+            // Check if this general can reach this target
+            if (generalReachability[gen].contains(target.name)) {
+                canReachExpansionTarget = true;
+                if (target.score > bestTargetScore) {
+                    bestTargetScore = target.score;
+                    bestReachableTarget = target.name;
+                }
+            }
+        }
+
+        // If general can reach an expansion target, assign them to it!
+        if (canReachExpansionTarget && !bestReachableTarget.isEmpty()) {
+            assignment.targetTerritory = bestReachableTarget;
+            assignment.missionType = "Expand";
+            assignment.priority = bestTargetScore;
+            assignment.troopsToTake = 0;
+            assignment.reason = QString("Continue expanding to %1").arg(bestReachableTarget);
+
+            plan.assignments.append(assignment);
+            assignedGenerals.insert(gen);
+            assignedTargets.insert(bestReachableTarget);
+            plan.generalsUsed++;
+            plan.territoriesTargeted++;
+
+            qDebug() << "General #" << gen->getNumber() << "continuing expansion to" << bestReachableTarget;
+            continue;
+        }
+
+        // Only return home if:
+        // 1. There are troops at home to pick up
+        // 2. There are NO more expansion targets this general can reach
+        // 3. General is not already at home
+        if (troopsAtHome > 0 && !canReachExpansionTarget && currentTerritory != homeProvince) {
             // Check if we can reach home
             if (generalReachability[gen].contains(homeProvince)) {
                 assignment.targetTerritory = homeProvince;
                 assignment.missionType = "ReturnHome";
                 assignment.priority = 50;
                 assignment.troopsToTake = 0;  // Going home to GET troops
-                assignment.reason = QString("Return home for troops (%1 available)").arg(troopsAtHome);
+                assignment.reason = QString("Return home for troops - no reachable expansion targets (%1 troops available)").arg(troopsAtHome);
 
                 plan.assignments.append(assignment);
                 assignedGenerals.insert(gen);
                 plan.generalsUsed++;
 
-                qDebug() << "General #" << gen->getNumber() << "returning home for troops";
+                qDebug() << "General #" << gen->getNumber() << "returning home - no reachable expansion targets";
                 continue;
             }
         }
@@ -1995,7 +2366,7 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         assignment.missionType = "StayHome";
         assignment.priority = 0;
         assignment.troopsToTake = 0;
-        assignment.reason = "No valuable targets reachable";
+        assignment.reason = "Holding position";
 
         plan.assignments.append(assignment);
         assignedGenerals.insert(gen);
@@ -2042,16 +2413,74 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
         // Skip "StayHome" missions
         if (assignment.missionType == "StayHome") continue;
 
+        // Check if target is adjacent (reachable in one move)
+        QList<QString> neighbors = graph->getNeighbors(currentTerritory);
+        bool targetIsAdjacent = false;
+        for (const QString &neighbor : neighbors) {
+            if (neighbor == targetTerritory && !graph->isSeaTerritory(neighbor)) {
+                targetIsAdjacent = true;
+                break;
+            }
+        }
+
+        QString nextStep = targetTerritory;
+
+        if (!targetIsAdjacent) {
+            // Target is 2+ moves away - find the best intermediate step
+            // Use BFS to find shortest path to target
+            QMap<QString, QString> cameFrom;  // territory -> previous territory
+            QList<QString> toVisit;
+            QSet<QString> visited;
+
+            toVisit.append(currentTerritory);
+            visited.insert(currentTerritory);
+            cameFrom[currentTerritory] = "";
+
+            bool found = false;
+            while (!toVisit.isEmpty() && !found) {
+                QString current = toVisit.takeFirst();
+                QList<QString> currentNeighbors = graph->getNeighbors(current);
+
+                for (const QString &neighbor : currentNeighbors) {
+                    if (graph->isSeaTerritory(neighbor)) continue;
+                    if (visited.contains(neighbor)) continue;
+
+                    visited.insert(neighbor);
+                    cameFrom[neighbor] = current;
+                    toVisit.append(neighbor);
+
+                    if (neighbor == targetTerritory) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (found) {
+                // Trace back path to find first step
+                QString step = targetTerritory;
+                while (cameFrom.contains(step) && cameFrom[step] != currentTerritory) {
+                    step = cameFrom[step];
+                }
+                nextStep = step;
+                qDebug() << "Multi-hop path: General needs to go through" << nextStep << "to reach" << targetTerritory;
+            } else {
+                qDebug() << "WARNING: No path found from" << currentTerritory << "to" << targetTerritory;
+                continue;  // Skip this assignment, try next
+            }
+        }
+
         // This general needs to move - return this as the next move
         move.leader = general;
-        move.destination = targetTerritory;
+        move.destination = nextStep;  // Use the next step, not final target
         move.troopsCanBring = assignment.troopsToTake;
         move.score = assignment.priority;
         move.reason = assignment.reason;
 
         qDebug() << "Next move from plan: General #"
                  << static_cast<GeneralPiece*>(general)->getNumber()
-                 << "from" << currentTerritory << "to" << targetTerritory;
+                 << "from" << currentTerritory << "to" << nextStep
+                 << (nextStep != targetTerritory ? QString("(heading to %1)").arg(targetTerritory) : "");
 
         return move;
     }

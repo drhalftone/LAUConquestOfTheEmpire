@@ -1471,6 +1471,7 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     int plannedTroops = 0;
     QList<int> plannedTroopIds;
     bool hasPlannedAssignment = false;
+    QString missionType;
 
     if (m_planCreated && !m_currentPlan.isEmpty()) {
         for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
@@ -1478,28 +1479,96 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
                 hasPlannedAssignment = true;
                 plannedTroops = assignment.troopsToTake;
                 plannedTroopIds = assignment.troopIds;
+                missionType = assignment.missionType;
                 log(QString("Legion Building: %1 has PLANNED assignment: %2 troops for %3")
-                    .arg(leaderName).arg(plannedTroops).arg(assignment.missionType));
+                    .arg(leaderName).arg(plannedTroops).arg(missionType));
                 break;
             }
         }
     }
 
-    // If we have a planned assignment with specific troops, use those
-    if (hasPlannedAssignment && !plannedTroopIds.isEmpty()) {
-        // First, add troops already in this leader's legion
+    // ReturnHome mission: general should bring ALL their current troops with them!
+    // Defend mission: general should bring their current troops PLUS any planned troops
+    if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend")) {
+        // Keep troops currently in the legion that still have moves remaining
+        // Troops with 0 moves must be left behind - the general will continue without them
         for (int troopId : currentLegion) {
-            // Check if this troop is in availableTroops and has moves
-            bool available = false;
             for (GamePiece *troop : availableTroops) {
                 if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
-                    available = true;
+                    troopsToSelect.append(troopId);
                     break;
                 }
             }
-            if (available) {
-                troopsToSelect.append(troopId);
+        }
+
+        // Log if we had to leave troops behind
+        if (troopsToSelect.size() < currentLegionSize) {
+            log(QString("Legion Building: %1 leaving %2 troops behind (no moves remaining)")
+                .arg(leaderName).arg(currentLegionSize - troopsToSelect.size()));
+        }
+
+        // For DEFEND missions, also pick up the planned troops (general might be picking up reinforcements)
+        if (missionType == "Defend" && !plannedTroopIds.isEmpty()) {
+            for (int troopId : plannedTroopIds) {
+                if (troopsToSelect.contains(troopId)) continue;  // Already added
+
+                bool available = false;
+                for (GamePiece *troop : availableTroops) {
+                    if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                        available = true;
+                        break;
+                    }
+                }
+                if (available) {
+                    troopsToSelect.append(troopId);
+                }
             }
+
+            // FALLBACK: If planned troops weren't available, pick up ANY available troops
+            if (troopsToSelect.size() < plannedTroops) {
+                for (GamePiece *troop : availableTroops) {
+                    if (troopsToSelect.size() >= plannedTroops) break;
+                    if (troopsToSelect.contains(troop->getUniqueId())) continue;
+                    if (troop->getMovesRemaining() <= 0) continue;
+
+                    troopsToSelect.append(troop->getUniqueId());
+                }
+                log(QString("Legion Building: %1 DEFENDING FALLBACK - picking up %2 available troops (planned %3 unavailable)")
+                    .arg(leaderName).arg(troopsToSelect.size()).arg(plannedTroops));
+            } else {
+                log(QString("Legion Building: %1 DEFENDING - picking up %2 troops (had %3, adding %4 planned)")
+                    .arg(leaderName)
+                    .arg(troopsToSelect.size())
+                    .arg(currentLegionSize)
+                    .arg(plannedTroopIds.size()));
+            }
+            return troopsToSelect;
+        }
+
+        log(QString("Legion Building: %1 %2 - keeping %3 troops in legion")
+            .arg(leaderName)
+            .arg(missionType == "Defend" ? "DEFENDING" : "RETURNING HOME")
+            .arg(troopsToSelect.size()));
+        return troopsToSelect;
+    }
+
+    // If we have a planned assignment with specific troops, use those
+    if (hasPlannedAssignment && !plannedTroopIds.isEmpty()) {
+        // First, add troops already in this leader's legion that still have moves
+        // Troops with 0 moves must be left behind
+        for (int troopId : currentLegion) {
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    troopsToSelect.append(troopId);
+                    break;
+                }
+            }
+        }
+
+        // Log if we had to leave troops behind
+        if (troopsToSelect.size() < currentLegionSize) {
+            log(QString("Legion Building: %1 leaving %2 troops behind (no moves remaining)")
+                .arg(leaderName).arg(currentLegionSize - troopsToSelect.size()));
         }
 
         // Then add the specifically planned troops (if not already added)
@@ -1519,8 +1588,23 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
             }
         }
 
-        log(QString("Legion Building: %1 using PLANNED composition: %2 troops selected")
-            .arg(leaderName).arg(troopsToSelect.size()));
+        // If planned troops weren't available but we need troops (Defend/Attack missions),
+        // pick up ANY available troops with moves remaining
+        if (troopsToSelect.size() < plannedTroops &&
+            (missionType == "Defend" || missionType == "Attack")) {
+            for (GamePiece *troop : availableTroops) {
+                if (troopsToSelect.size() >= plannedTroops) break;
+                if (troopsToSelect.contains(troop->getUniqueId())) continue;
+                if (troop->getMovesRemaining() <= 0) continue;
+
+                troopsToSelect.append(troop->getUniqueId());
+            }
+            log(QString("Legion Building: %1 FALLBACK - picking up %2 available troops (planned %3 unavailable)")
+                .arg(leaderName).arg(troopsToSelect.size()).arg(plannedTroops));
+        } else {
+            log(QString("Legion Building: %1 using PLANNED composition: %2 troops selected")
+                .arg(leaderName).arg(troopsToSelect.size()));
+        }
         return troopsToSelect;
     }
 

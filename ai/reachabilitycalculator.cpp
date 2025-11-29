@@ -9,7 +9,7 @@ ReachabilityCalculator::ReachabilityCalculator()
 {
 }
 
-QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player)
+QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier)
 {
     QMap<QString, ReachInfo> results;
 
@@ -26,6 +26,9 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
     if (movesRemaining < 1.0) {
         movesRemaining = 2.0;  // Assume full moves for threat projection
     }
+
+    // Apply turn multiplier to leader's moves for multi-turn projection
+    movesRemaining *= turnMultiplier;
 
     if (startTerritory.isEmpty()) {
         return results;
@@ -68,7 +71,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
             ReachInfo info;
             info.territoryName = it.key();
             info.leadersWhoCanReach.append(leader);
-            info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0);  // All troops can land from galley
+            info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0, turnMultiplier);  // All troops can land from galley
             info.bestMovesRemaining = it.value();
             info.viaGalley = true;
             results[it.key()] = info;
@@ -95,7 +98,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                 ReachInfo info;
                 info.territoryName = neighbor;
                 info.leadersWhoCanReach.append(leader);
-                info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0);  // All troops can disembark
+                info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0, turnMultiplier);  // All troops can disembark
                 info.bestMovesRemaining = movesRemaining - 1.0;  // Disembarking costs 1 move
                 info.viaGalley = true;
                 results[neighbor] = info;
@@ -113,7 +116,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                 info.leadersWhoCanReach.append(leader);
                 // Calculate how many moves it takes to reach this territory
                 double movesUsed = movesRemaining - it.value();
-                info.maxTroopStrength = calculateTroopStrength(leader, player, movesUsed);
+                info.maxTroopStrength = calculateTroopStrength(leader, player, movesUsed, turnMultiplier);
                 info.bestMovesRemaining = it.value();
                 results[it.key()] = info;
             }
@@ -131,7 +134,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                     if (movesRemaining - 1.0 > results[territory].bestMovesRemaining) {
                         results[territory].bestMovesRemaining = movesRemaining - 1.0;
                         // Update troop strength for road travel (1 move)
-                        int roadTroops = calculateTroopStrength(leader, player, 1.0);
+                        int roadTroops = calculateTroopStrength(leader, player, 1.0, turnMultiplier);
                         if (roadTroops > results[territory].maxTroopStrength) {
                             results[territory].maxTroopStrength = roadTroops;
                         }
@@ -141,7 +144,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                     ReachInfo info;
                     info.territoryName = territory;
                     info.leadersWhoCanReach.append(leader);
-                    info.maxTroopStrength = calculateTroopStrength(leader, player, 1.0);  // Road costs 1 move
+                    info.maxTroopStrength = calculateTroopStrength(leader, player, 1.0, turnMultiplier);  // Road costs 1 move
                     info.bestMovesRemaining = movesRemaining - 1.0;  // Road travel costs 1 move
                     info.viaRoad = true;
                     results[territory] = info;
@@ -159,7 +162,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                     results[it.key()].bestMovesRemaining = it.value();
                 }
                 // Galley transport allows all troops to follow (0 land moves used)
-                int galleyTroops = calculateTroopStrength(leader, player, 0.0);
+                int galleyTroops = calculateTroopStrength(leader, player, 0.0, turnMultiplier);
                 if (galleyTroops > results[it.key()].maxTroopStrength) {
                     results[it.key()].maxTroopStrength = galleyTroops;
                 }
@@ -167,7 +170,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
                 ReachInfo info;
                 info.territoryName = it.key();
                 info.leadersWhoCanReach.append(leader);
-                info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0);  // All troops can take galley
+                info.maxTroopStrength = calculateTroopStrength(leader, player, 0.0, turnMultiplier);  // All troops can take galley
                 info.bestMovesRemaining = it.value();
                 info.viaGalley = true;
                 results[it.key()] = info;
@@ -191,11 +194,12 @@ void ReachabilityCalculator::getReachableByLand(const QString &startTerritory,
 
     visited.insert(startTerritory);
 
-    // IMPORTANT: Only return ADJACENT territories (1 move away)
-    // The game UI only allows moving to adjacent territories per action.
-    // Multi-hop moves are achieved by calling the AI movement loop multiple times.
-    // Do NOT recurse - only add direct neighbors.
+    // Use BFS to find ALL territories reachable within movesRemaining moves
+    // This is important for PLANNING - we need to know what territories a general
+    // can reach by the END of their turn, not just after one step.
+    // The AI movement loop will handle the actual step-by-step execution.
     QList<QString> neighbors = graph->getNeighbors(startTerritory);
+
     for (const QString &neighbor : neighbors) {
         // Skip sea territories (land movement only)
         if (graph->isSeaTerritory(neighbor)) {
@@ -205,13 +209,24 @@ void ReachabilityCalculator::getReachableByLand(const QString &startTerritory,
         // Each land move costs 1 movement point
         double newMoves = movesRemaining - 1.0;
 
-        // Add neighbor if not already added with better moves
-        if (!results.contains(neighbor) || results[neighbor] < newMoves) {
+        // Check if this is a new territory or a better path to an existing one
+        bool isBetterPath = !results.contains(neighbor) || results[neighbor] < newMoves;
+
+        // Add/update neighbor if not already added with better moves
+        if (isBetterPath) {
             results[neighbor] = newMoves;
         }
+
+        // RECURSE to find territories reachable in 2+ moves
+        // We recurse if:
+        // 1. We have moves remaining (newMoves >= 1.0)
+        // 2. Either: we haven't visited this neighbor yet, OR we found a better path
+        // The second condition allows us to re-explore from a node if we reach it faster
+        if (newMoves >= 1.0 && (!visited.contains(neighbor) || isBetterPath)) {
+            visited.insert(neighbor);  // Mark as visited before recursing
+            getReachableByLand(neighbor, newMoves, graph, visited, results, originalMoves);
+        }
     }
-    // NOTE: We intentionally do NOT recurse here.
-    // The AI will be called again after each move to evaluate the next step.
 }
 
 QStringList ReachabilityCalculator::getReachableByRoad(const QString &startTerritory, Player *player, MapGraph *graph)
@@ -297,7 +312,7 @@ QMap<QString, double> ReachabilityCalculator::getReachableByGalley(GamePiece *le
     return results;
 }
 
-QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player, MapGraph *graph)
+QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player, MapGraph *graph, int turnMultiplier)
 {
     QMap<QString, ReachInfo> results;
 
@@ -311,7 +326,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player,
 
     // Helper lambda to process a leader
     auto processLeader = [&](GamePiece *leader) {
-        QMap<QString, ReachInfo> leaderReach = getReachableFrom(leader, graph, player);
+        QMap<QString, ReachInfo> leaderReach = getReachableFrom(leader, graph, player, turnMultiplier);
         QString startTerritory = leader->getTerritoryName();
         // Note: troop count is now per-destination (stored in ReachInfo.maxTroopStrength)
         // because different destinations may have different distances and thus different troops can reach
@@ -354,7 +369,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player,
 
     // Process all Galleys (they can reach sea zones and landing spots)
     for (GalleyPiece *galley : player->getGalleys()) {
-        QMap<QString, ReachInfo> galleyReach = getReachableFrom(galley, graph, player);
+        QMap<QString, ReachInfo> galleyReach = getReachableFrom(galley, graph, player, turnMultiplier);
         QString galleyTerritory = galley->getTerritoryName();
 
         for (auto it = galleyReach.begin(); it != galleyReach.end(); ++it) {
@@ -383,7 +398,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player,
     return results;
 }
 
-int ReachabilityCalculator::calculateTroopStrength(GamePiece *leader, Player *player, double movesUsed)
+int ReachabilityCalculator::calculateTroopStrength(GamePiece *leader, Player *player, double movesUsed, int turnMultiplier)
 {
     if (!leader || !player) {
         return 0;
@@ -392,10 +407,10 @@ int ReachabilityCalculator::calculateTroopStrength(GamePiece *leader, Player *pl
     int strength = 0;
     QString leaderTerritory = leader->getTerritoryName();
 
-    // Movement ranges for different unit types
-    const double INFANTRY_MOVEMENT = 1.0;
-    const double CAVALRY_MOVEMENT = 2.0;
-    const double CATAPULT_MOVEMENT = 1.0;
+    // Movement ranges for different unit types, multiplied by turn count
+    const double INFANTRY_MOVEMENT = 1.0 * turnMultiplier;
+    const double CAVALRY_MOVEMENT = 2.0 * turnMultiplier;
+    const double CATAPULT_MOVEMENT = 1.0 * turnMultiplier;
 
     // For galleys, count troops aboard (they travel with the galley, no movement limit)
     if (leader->getType() == GamePiece::Type::Galley) {

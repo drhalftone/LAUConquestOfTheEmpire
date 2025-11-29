@@ -76,17 +76,19 @@ public:
      * @param leader The leader (Caesar, General, or Galley) to analyze
      * @param graph The map graph for neighbor/road queries
      * @param player The player who owns this leader
+     * @param turnMultiplier Multiplier for movement range (default 1). Use 2 for 2-turn projection.
      * @return Map of territory name -> ReachInfo
      */
-    QMap<QString, ReachInfo> getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player);
+    QMap<QString, ReachInfo> getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier = 1);
 
     /**
      * @brief Get all territories reachable by any of a player's leaders
      * @param player The player to analyze
      * @param graph The map graph for neighbor/road queries
+     * @param turnMultiplier Multiplier for movement range (default 1). Use 2 for 2-turn projection.
      * @return Map of territory name -> ReachInfo (aggregated across all leaders)
      */
-    QMap<QString, ReachInfo> getAllReachable(Player *player, MapGraph *graph);
+    QMap<QString, ReachInfo> getAllReachable(Player *player, MapGraph *graph, int turnMultiplier = 1);
 
     /**
      * @brief Generate a text report of reachability for a player
@@ -140,9 +142,11 @@ public:
      * @param player The player who owns the leader
      * @param movesUsed How many moves to reach the destination (affects which troops can follow)
      *        Infantry/Catapults can only move 1, Cavalry can move 2
+     * @param turnMultiplier Multiplier for movement range (default 1). Use 2 for 2-turn projection.
+     *        This multiplies the base movement for each unit type.
      * @return Total troop count that can actually reach the destination
      */
-    int calculateTroopStrength(GamePiece *leader, Player *player, double movesUsed = 0.0);
+    int calculateTroopStrength(GamePiece *leader, Player *player, double movesUsed = 0.0, int turnMultiplier = 1);
 
     /**
      * @brief Get territories reachable within 1-3 turns by a leader WITH troops
