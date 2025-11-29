@@ -1306,3 +1306,174 @@ QMap<QString, MultiTurnReachInfo> ReachabilityCalculator::getAllMultiTurnReachab
 
     return results;
 }
+
+// === Threat Map Methods (for AI decision-making) ===
+
+QMap<QString, int> ReachabilityCalculator::getEnemyThreatMap(Player *us, const QList<Player*> &allPlayers, MapGraph *graph, int turnMultiplier)
+{
+    QMap<QString, int> threatMap;
+
+    if (!us || !graph) {
+        return threatMap;
+    }
+
+    // DEBUG: Monitor Italia specifically
+    const QString DEBUG_TERRITORY = "Italia";
+    qDebug() << "=== getEnemyThreatMap for player" << us->getId() << "(turnMultiplier=" << turnMultiplier << ") ===";
+
+    for (Player *player : allPlayers) {
+        if (player == us) continue;  // Skip self
+
+        qDebug() << "  Checking enemy player" << player->getId();
+
+        // Count current enemy troop positions
+        QMap<QString, int> currentTroops;
+        for (InfantryPiece *inf : player->getInfantry()) {
+            currentTroops[inf->getTerritoryName()]++;
+            if (inf->getTerritoryName() == DEBUG_TERRITORY) {
+                qDebug() << "    [ITALIA] Enemy infantry at Italia";
+            }
+        }
+        for (CavalryPiece *cav : player->getCavalry()) {
+            currentTroops[cav->getTerritoryName()]++;
+            if (cav->getTerritoryName() == DEBUG_TERRITORY) {
+                qDebug() << "    [ITALIA] Enemy cavalry at Italia";
+            }
+        }
+        for (CatapultPiece *cat : player->getCatapults()) {
+            currentTroops[cat->getTerritoryName()]++;
+            if (cat->getTerritoryName() == DEBUG_TERRITORY) {
+                qDebug() << "    [ITALIA] Enemy catapult at Italia";
+            }
+        }
+
+        // Add current positions to threat map
+        for (auto it = currentTroops.begin(); it != currentTroops.end(); ++it) {
+            threatMap[it.key()] = qMax(threatMap.value(it.key(), 0), it.value());
+        }
+
+        // Get territories this enemy can reach (with turnMultiplier)
+        QMap<QString, ReachInfo> enemyReach = getAllReachable(player, graph, turnMultiplier);
+
+        // DEBUG: Check if Italia is reachable
+        if (enemyReach.contains(DEBUG_TERRITORY)) {
+            const ReachInfo &info = enemyReach[DEBUG_TERRITORY];
+            qDebug() << "    [ITALIA] Enemy player" << player->getId() << "CAN REACH Italia:";
+            qDebug() << "      - maxTroopStrength (TROOPS ONLY):" << info.maxTroopStrength;
+            qDebug() << "      - leadersWhoCanReach:" << info.leadersWhoCanReach.size();
+            qDebug() << "      - viaRoad:" << info.viaRoad << "viaGalley:" << info.viaGalley;
+            for (GamePiece *leader : info.leadersWhoCanReach) {
+                // Calculate troops this specific leader could bring
+                int leaderTroops = calculateTroopStrength(leader, player, 0.0, turnMultiplier);
+                qDebug() << "        Leader at:" << leader->getTerritoryName()
+                         << "type:" << static_cast<int>(leader->getType())
+                         << "troops at same location:" << leaderTroops;
+            }
+        } else {
+            qDebug() << "    [ITALIA] Enemy player" << player->getId() << "CANNOT reach Italia";
+        }
+
+        // Only add to threat map if there are actual TROOPS that can reach
+        // (leaders alone don't count as threat - they can't fight without troops)
+        for (auto it = enemyReach.begin(); it != enemyReach.end(); ++it) {
+            // Only count territories where enemy can actually bring troops
+            if (it.value().maxTroopStrength > 0) {
+                threatMap[it.key()] = qMax(threatMap.value(it.key(), 0), it.value().maxTroopStrength);
+            }
+        }
+    }
+
+    // DEBUG: Final threat level for Italia
+    qDebug() << "  [ITALIA] FINAL threat level:" << threatMap.value(DEBUG_TERRITORY, 0);
+
+    return threatMap;
+}
+
+QMap<QString, int> ReachabilityCalculator::getForceProjectionMap(Player *player, MapGraph *graph, int turnMultiplier)
+{
+    QMap<QString, int> forceMap;
+
+    if (!player || !graph) {
+        return forceMap;
+    }
+
+    // Get all territories we can reach
+    QMap<QString, ReachInfo> ourReach = getAllReachable(player, graph, turnMultiplier);
+    for (auto it = ourReach.begin(); it != ourReach.end(); ++it) {
+        forceMap[it.key()] = it.value().maxTroopStrength;
+    }
+
+    // Also count troops already stationed at territories (they're already there)
+    QMap<QString, int> currentTroops;
+    for (InfantryPiece *inf : player->getInfantry()) {
+        currentTroops[inf->getTerritoryName()]++;
+    }
+    for (CavalryPiece *cav : player->getCavalry()) {
+        currentTroops[cav->getTerritoryName()]++;
+    }
+    for (CatapultPiece *cat : player->getCatapults()) {
+        currentTroops[cat->getTerritoryName()]++;
+    }
+
+    // Add stationed troops to the force map
+    for (auto it = currentTroops.begin(); it != currentTroops.end(); ++it) {
+        forceMap[it.key()] = qMax(forceMap.value(it.key(), 0), it.value());
+    }
+
+    return forceMap;
+}
+
+bool ReachabilityCalculator::isSafeForExpansion(const QString &territory, Player *player, const QList<Player*> &allPlayers, MapGraph *graph)
+{
+    if (!player || !graph || territory.isEmpty()) {
+        return false;
+    }
+
+    // Check if WE can reach this territory
+    QMap<QString, ReachInfo> ourReach = getAllReachable(player, graph, 1);
+    if (!ourReach.contains(territory)) {
+        return false;  // We can't even reach it
+    }
+
+    // Check if any enemy can reach this territory in 1 turn with troops
+    QMap<QString, int> enemyThreat1Turn = getEnemyThreatMap(player, allPlayers, graph, 1);
+    int threatLevel = enemyThreat1Turn.value(territory, 0);
+
+    // Safe if no enemy troops can reach it in 1 turn
+    return (threatLevel == 0);
+}
+
+QMap<QString, int> ReachabilityCalculator::getEmergingThreats(Player *us, const QList<Player*> &allPlayers, MapGraph *graph)
+{
+    QMap<QString, int> emergingThreats;
+
+    if (!us || !graph) {
+        return emergingThreats;
+    }
+
+    // Get 1-turn and 2-turn threat maps
+    QMap<QString, int> threat1Turn = getEnemyThreatMap(us, allPlayers, graph, 1);
+    QMap<QString, int> threat2Turn = getEnemyThreatMap(us, allPlayers, graph, 2);
+
+    // Find territories that are threatened in 2 turns but NOT in 1 turn
+    // These are "emerging" threats we should prepare for
+    // Only count SIGNIFICANT emerging threats:
+    // - The 2-turn threat must be >= 3 troops (meaningful force)
+    // - The 2-turn threat must be at least 2 troops MORE than 1-turn threat
+    for (auto it = threat2Turn.begin(); it != threat2Turn.end(); ++it) {
+        int oneTurnThreat = threat1Turn.value(it.key(), 0);
+        int twoTurnThreat = it.value();
+
+        // Only count as emerging if:
+        // 1. 2-turn threat is meaningful (>= 3 troops)
+        // 2. 2-turn threat is significantly higher than 1-turn (at least 2 more troops)
+        bool isMeaningfulThreat = (twoTurnThreat >= 3);
+        bool isSignificantIncrease = (twoTurnThreat >= oneTurnThreat + 2);
+
+        if (isMeaningfulThreat && isSignificantIncrease) {
+            emergingThreats[it.key()] = twoTurnThreat;
+        }
+    }
+
+    return emergingThreats;
+}

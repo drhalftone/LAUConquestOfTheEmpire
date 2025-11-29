@@ -1496,6 +1496,16 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
     QStringList ownedTerritories = player->getOwnedTerritories();
     QSet<QString> ownedSet(ownedTerritories.begin(), ownedTerritories.end());
 
+    // === USE HEAT MAP DATA FOR THREAT ASSESSMENT ===
+    // Get 1-turn and 2-turn enemy threat maps
+    ReachabilityCalculator calc;
+    QMap<QString, int> enemyThreat1Turn = calc.getEnemyThreatMap(player, allPlayers, graph, 1);
+    QMap<QString, int> enemyThreat2Turn = calc.getEnemyThreatMap(player, allPlayers, graph, 2);
+
+    qDebug() << "=== THREAT MAP ANALYSIS ===";
+    qDebug() << "Territories with 1-turn enemy threat:" << enemyThreat1Turn.size();
+    qDebug() << "Territories with 2-turn enemy threat:" << enemyThreat2Turn.size();
+
     // Get all territories from the graph
     QStringList allTerritories = graph->getTerritoryNames();
 
@@ -1516,7 +1526,25 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
         bool hasEnemyCity = (cityOwner != nullptr && cityOwner != player);
         bool hasOurCity = (cityOwner == player);
 
-        // Get risk level
+        // === USE THREAT MAPS DIRECTLY ===
+        int threat1Turn = enemyThreat1Turn.value(territory, 0);
+        int threat2Turn = enemyThreat2Turn.value(territory, 0);
+        bool isSafeExpansion = (threat1Turn == 0);  // No enemy can reach in 1 turn = SAFE
+
+        // DEBUG: Monitor Italia specifically
+        if (territory == "Italia") {
+            qDebug() << "[ITALIA DEBUG in identifyTargets]";
+            qDebug() << "  weOwnIt:" << weOwnIt;
+            qDebug() << "  threat1Turn:" << threat1Turn;
+            qDebug() << "  threat2Turn:" << threat2Turn;
+            qDebug() << "  isSafeExpansion:" << isSafeExpansion;
+            qDebug() << "  enemyTroops (current):" << target.enemyTroops;
+            qDebug() << "  requiresTroops:" << target.requiresTroops;
+            qDebug() << "  hasEnemyCity:" << hasEnemyCity;
+            qDebug() << "  hasOurCity:" << hasOurCity;
+        }
+
+        // Get risk level from riskMap for compatibility
         RiskLevel risk = RiskLevel::Safe;
         int enemyMaxForce = 0;
         if (riskMap.contains(territory)) {
@@ -1524,17 +1552,18 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
             enemyMaxForce = riskMap[territory].enemyMaxForce;
         }
 
+        // DEBUG: More Italia info
+        if (territory == "Italia") {
+            qDebug() << "  riskMap contains Italia:" << riskMap.contains(territory);
+            qDebug() << "  risk level:" << static_cast<int>(risk);
+            qDebug() << "  enemyMaxForce from riskMap:" << enemyMaxForce;
+        }
+
         if (weOwnIt) {
             // === DEFEND: Our territory under threat ===
-            // Include HIGH, MEDIUM, and LOW risk if enemies can reach in 1-2 turns
-            // LOW risk territories on the frontline still need reinforcement
-            bool needsDefense = (risk == RiskLevel::High || risk == RiskLevel::Medium);
-
-            // Also defend LOW risk territories that are adjacent to enemy positions
-            // These are frontline territories that need troops as a buffer
-            if (risk == RiskLevel::Low && enemyMaxForce > 0) {
-                needsDefense = true;
-            }
+            // ONLY defend if there's a 1-turn threat (immediate danger)
+            // 2-turn threats are used as tiebreaker only, not primary reason to defend
+            bool needsDefense = (threat1Turn > 0);  // Immediate threat ONLY
 
             if (needsDefense) {
                 target.type = "Defend";
@@ -1546,26 +1575,33 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                     target.score += city->isFortified() ? 150 : 100;
                 }
 
-                // Higher priority for high risk
-                if (risk == RiskLevel::High) {
-                    target.score += 100;
-                } else if (risk == RiskLevel::Medium) {
-                    target.score += 50;
+                // Use 1-turn threat level for primary scoring
+                if (threat1Turn >= 4) {
+                    target.score += 150;  // Heavy immediate threat
+                } else if (threat1Turn >= 2) {
+                    target.score += 100;  // Moderate immediate threat
+                } else if (threat1Turn > 0) {
+                    target.score += 50;   // Light immediate threat
                 }
-                // LOW risk frontline gets base score only
+
+                // 2-turn threat as TIEBREAKER only (small bonus)
+                // This helps prioritize between territories with similar 1-turn threats
+                if (threat2Turn > threat1Turn) {
+                    target.score += qMin(20, (threat2Turn - threat1Turn) * 2);
+                }
 
                 // Higher priority for home province
                 if (territory == player->getHomeProvinceName()) {
                     target.score += 200;
                 }
 
-                // Troops needed = enemy force that can reach us
-                target.troopsNeeded = enemyMaxForce;
+                // Troops needed = based on 1-turn threat (what we're actually defending against)
+                target.troopsNeeded = threat1Turn;
                 target.requiresTroops = true;  // Defense requires troops
 
                 targets.append(target);
             }
-            // Safe own territory - not a target (don't move there unless repositioning)
+            // Safe own territory (no 1-turn threat) - not a defense target
         } else {
             // === EXPAND or ATTACK: Not our territory ===
             if (target.enemyTroops == 0 && !target.requiresTroops) {
@@ -1574,12 +1610,19 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 target.score = 100 + (value * 10);  // Higher value = higher priority
                 target.troopsNeeded = 0;
 
-                // Bonus for safe expansion (enemy can't counter-attack)
-                if (risk == RiskLevel::Safe || risk == RiskLevel::Low) {
-                    target.score += 50;
-                } else if (enemyMaxForce > 0) {
-                    // Risky expansion - reduce score
-                    target.score -= 30;
+                // === KEY INSIGHT: Use heat map for safe expansion ===
+                // If enemy 1-turn threat is 0, this is SAFE to take with a lone general
+                if (isSafeExpansion) {
+                    target.score += 100;  // BIG bonus for truly safe expansion
+                    qDebug() << "SAFE EXPANSION:" << territory
+                             << "(value=" << value << ") - no enemy can reach in 1 turn";
+                } else {
+                    // Risky expansion - enemy can counter-attack
+                    // Reduce score based on threat level
+                    int penalty = qMin(80, threat1Turn * 20);
+                    target.score -= penalty;
+                    qDebug() << "RISKY EXPANSION:" << territory
+                             << "- enemy threat:" << threat1Turn << "(penalty:" << penalty << ")";
                 }
 
                 // Bonus for enemy cities (even undefended)
@@ -1588,6 +1631,13 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 }
 
                 targets.append(target);
+
+                // DEBUG: Italia final decision for Expand
+                if (territory == "Italia") {
+                    qDebug() << "[ITALIA] Decision: EXPAND";
+                    qDebug() << "  final score:" << target.score;
+                    qDebug() << "  isSafeExpansion:" << isSafeExpansion;
+                }
             } else {
                 // ATTACK: Has defenders - requires troops
                 target.type = "Attack";
@@ -1600,12 +1650,32 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                     target.score += 100;
                 }
 
-                // Penalty for high risk (enemy reinforcements nearby)
-                if (risk == RiskLevel::High) {
-                    target.score -= 40;
+                // Penalty based on enemy reinforcement capability (2-turn threat)
+                if (threat2Turn > threat1Turn) {
+                    // Enemy can bring MORE troops in 2 turns - risky attack
+                    int penalty = (threat2Turn - threat1Turn) * 10;
+                    target.score -= penalty;
                 }
 
                 targets.append(target);
+
+                // DEBUG: Italia final decision for Attack
+                if (territory == "Italia") {
+                    qDebug() << "[ITALIA] Decision: ATTACK";
+                    qDebug() << "  final score:" << target.score;
+                    qDebug() << "  troopsNeeded:" << target.troopsNeeded;
+                }
+            }
+        }
+
+        // DEBUG: Italia - if we own it and didn't add as defense target, log why
+        if (territory == "Italia" && weOwnIt) {
+            bool needsDefense = (threat1Turn > 0);
+            qDebug() << "[ITALIA] We own it:";
+            qDebug() << "  needsDefense (1-turn threat > 0):" << needsDefense;
+            qDebug() << "  2-turn threat (tiebreaker only):" << threat2Turn;
+            if (!needsDefense) {
+                qDebug() << "  -> NOT added as target (safe, no immediate 1-turn threat)";
             }
         }
     }
@@ -1645,7 +1715,7 @@ int AIDecisionMaker::countAvailableTroopsAt(const QString &territory, Player *pl
     return count;
 }
 
-void AIDecisionMaker::assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops)
+void AIDecisionMaker::assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops, bool requiresMultiHop)
 {
     if (!player || !assignment.general) return;
 
@@ -1667,7 +1737,24 @@ void AIDecisionMaker::assignTroopsToGeneral(GeneralAssignment &assignment, Playe
         }
     }
 
-    // Priority: catapults > cavalry > infantry
+    // For multi-hop routes (2+ moves to reach target), ONLY use cavalry
+    // Infantry/catapults only have 1 move and will be left behind!
+    if (requiresMultiHop) {
+        qDebug() << "assignTroopsToGeneral: Multi-hop mission - only assigning cavalry (2 moves)";
+        for (CavalryPiece *cav : player->getCavalry()) {
+            if (troopsAssigned >= maxTroops) break;
+            if (cav->getTerritoryName() != territory) continue;
+            if (cav->getMovesRemaining() < 2) continue;  // Need FULL 2 moves for multi-hop
+            if (assignedElsewhere.contains(cav->getUniqueId())) continue;
+
+            assignment.troopIds.append(cav->getUniqueId());
+            troopsAssigned++;
+        }
+        assignment.troopsToTake = troopsAssigned;
+        return;
+    }
+
+    // Single-hop route: Priority: catapults > cavalry > infantry
     // First add catapults
     for (CatapultPiece *cat : player->getCatapults()) {
         if (troopsAssigned >= maxTroops) break;
@@ -1810,6 +1897,7 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         GeneralPiece *bestGeneral = nullptr;
         QString troopPickupTerritory;
         int bestTroopCount = 0;
+        bool bestIsMultiHop = false;  // Track if best option requires 2 hops (cavalry only)
 
         for (GeneralPiece *gen : availableGenerals) {
             if (assignedGenerals.contains(gen)) continue;
@@ -1821,10 +1909,9 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             // Option 1: General is already at a territory with troops
             // Check if target is reachable based on CURRENT moves (not pre-calculated)
             if (troopsAtTerritory.contains(genTerritory) && troopsAtTerritory[genTerritory] > 0) {
-                // With 1 move: can only reach adjacent territories (troops move with general)
-                // With 2 moves: can reach 2-hop territories (but troops only go 1 hop, left behind)
-                // For defense, we want troops TO the target, so check 1-hop adjacency
                 QList<QString> neighbors = graph->getNeighbors(genTerritory);
+
+                // Option 1a: Target is 1-hop adjacent - all troops can follow
                 bool canReachWithTroops = neighbors.contains(target.name) && !graph->isSeaTerritory(target.name);
 
                 if (canReachWithTroops) {
@@ -1833,28 +1920,78 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                         bestGeneral = gen;
                         troopPickupTerritory = genTerritory;
                         bestTroopCount = troops;
+                        bestIsMultiHop = false;
+                    }
+                }
+
+                // Option 1b: Target is 2-hops away - only CAVALRY can follow (they have 2 moves)
+                // This allows defending territories that aren't directly adjacent
+                if (genMoves >= 2 && !canReachWithTroops) {
+                    for (const QString &intermediate : neighbors) {
+                        if (graph->isSeaTerritory(intermediate)) continue;
+                        QList<QString> neighborsOfIntermediate = graph->getNeighbors(intermediate);
+                        if (neighborsOfIntermediate.contains(target.name) && !graph->isSeaTerritory(target.name)) {
+                            // Target is 2 hops away via 'intermediate'
+                            // Count only cavalry at this territory (infantry can't make 2-hop journey)
+                            int cavalryCount = 0;
+                            for (CavalryPiece *cav : player->getCavalry()) {
+                                if (cav->getTerritoryName() == genTerritory && cav->getMovesRemaining() >= 2) {
+                                    cavalryCount++;
+                                }
+                            }
+                            if (cavalryCount > 0 && cavalryCount > bestTroopCount) {
+                                bestGeneral = gen;
+                                troopPickupTerritory = genTerritory;
+                                bestTroopCount = cavalryCount;
+                                bestIsMultiHop = true;
+                                qDebug() << "Defense Option 1b: General #" << gen->getNumber()
+                                         << "at" << genTerritory << "can reach" << target.name
+                                         << "via" << intermediate << "with" << cavalryCount << "cavalry (multi-hop)";
+                            }
+                            break;  // Found a path, no need to check other intermediates
+                        }
                     }
                 }
             }
 
             // Option 2: General can move to an adjacent territory with troops, then to target
             // This requires 2 moves: 1 to pick up troops, 1 to reach target
-            if (genMoves >= 2) {
+            // EXCEPTION: If troops are already at the target, general just needs to go there (1 move)
+            if (genMoves >= 1) {
                 QList<QString> adjacentToGen = graph->getNeighbors(genTerritory);
                 for (const QString &adj : adjacentToGen) {
                     if (graph->isSeaTerritory(adj)) continue;
                     if (!troopsAtTerritory.contains(adj) || troopsAtTerritory[adj] == 0) continue;
 
-                    // Check if from adj we can reach the target in 1 move
-                    QList<QString> adjacentToAdj = graph->getNeighbors(adj);
-                    bool canReachTarget = adjacentToAdj.contains(target.name) || adj == target.name;
-
-                    if (canReachTarget) {
+                    // Special case: troops are already at the target!
+                    // General just needs to go there (1 move), troops don't need to move
+                    if (adj == target.name) {
                         int troops = troopsAtTerritory[adj];
                         if (troops > bestTroopCount) {
                             bestGeneral = gen;
-                            troopPickupTerritory = adj;
+                            troopPickupTerritory = adj;  // Will be == target.name
                             bestTroopCount = troops;
+                            bestIsMultiHop = false;
+                            qDebug() << "Defense Option 2 (troops at target): General #" << gen->getNumber()
+                                     << "at" << genTerritory << "can reach" << target.name
+                                     << "where" << troops << "troops already are";
+                        }
+                        continue;  // Found this case, no need to check from adj
+                    }
+
+                    // Normal case: Need 2 moves - pick up troops at adj, then go to target
+                    if (genMoves >= 2) {
+                        QList<QString> adjacentToAdj = graph->getNeighbors(adj);
+                        bool canReachTarget = adjacentToAdj.contains(target.name);
+
+                        if (canReachTarget) {
+                            int troops = troopsAtTerritory[adj];
+                            if (troops > bestTroopCount) {
+                                bestGeneral = gen;
+                                troopPickupTerritory = adj;
+                                bestTroopCount = troops;
+                                bestIsMultiHop = false;  // Troops at adj only need 1 hop to target
+                            }
                         }
                     }
                 }
@@ -1906,27 +2043,53 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         assignment.missionType = "Defend";
         assignment.priority = target.score + 100;  // Defense gets priority boost
 
+        // Check if troops are already at the target (general just needs to go there)
+        bool troopsAtTarget = (troopPickupTerritory == target.name);
+
         // Get the troop IDs from the pickup territory
+        // EXCEPTION: If troops are already at target, don't assign any - they don't need to move!
         QList<int> troopIds;
-        for (InfantryPiece *inf : player->getInfantry()) {
-            if (inf->getTerritoryName() == troopPickupTerritory && inf->getMovesRemaining() > 0) {
-                troopIds.append(inf->getUniqueId());
-                if (troopIds.size() >= troopsToTake) break;
-            }
-        }
-        if (troopIds.size() < troopsToTake) {
+        if (troopsAtTarget) {
+            // Troops are already at the defense target - general just needs to go there
+            // Don't assign any troop IDs (they won't be moving)
+            qDebug() << "DEFENSE: Troops already at target" << target.name
+                     << "- General #" << bestGeneral->getNumber() << "will go there alone";
+            // troopIds stays empty - troops don't need to move
+            troopsToTake = 0;  // Don't try to bring any troops
+        } else if (bestIsMultiHop) {
+            // Multi-hop defense: ONLY cavalry can make the journey
+            qDebug() << "DEFENSE: Multi-hop route - selecting only cavalry for" << target.name;
             for (CavalryPiece *cav : player->getCavalry()) {
-                if (cav->getTerritoryName() == troopPickupTerritory && cav->getMovesRemaining() > 0) {
+                if (cav->getTerritoryName() == troopPickupTerritory && cav->getMovesRemaining() >= 2) {
                     troopIds.append(cav->getUniqueId());
                     if (troopIds.size() >= troopsToTake) break;
+                }
+            }
+        } else {
+            // Single-hop defense: infantry first, then cavalry
+            for (InfantryPiece *inf : player->getInfantry()) {
+                if (inf->getTerritoryName() == troopPickupTerritory && inf->getMovesRemaining() > 0) {
+                    troopIds.append(inf->getUniqueId());
+                    if (troopIds.size() >= troopsToTake) break;
+                }
+            }
+            if (troopIds.size() < troopsToTake) {
+                for (CavalryPiece *cav : player->getCavalry()) {
+                    if (cav->getTerritoryName() == troopPickupTerritory && cav->getMovesRemaining() > 0) {
+                        troopIds.append(cav->getUniqueId());
+                        if (troopIds.size() >= troopsToTake) break;
+                    }
                 }
             }
         }
 
         assignment.troopsToTake = troopIds.size();
         assignment.troopIds = troopIds;
-        assignment.reason = QString("DEFEND %1 with %2 troops from %3 (enemy threat: %4)")
-            .arg(target.name).arg(assignment.troopsToTake).arg(troopPickupTerritory).arg(target.troopsNeeded);
+        QString defenseNote = troopsAtTarget ? QString(" (troops already at target: %1)").arg(bestTroopCount)
+                            : (bestIsMultiHop ? " (multi-hop, cavalry only)" : "");
+        assignment.reason = QString("DEFEND %1 with %2 troops from %3 (enemy threat: %4)%5")
+            .arg(target.name).arg(troopsAtTarget ? bestTroopCount : assignment.troopsToTake)
+            .arg(troopPickupTerritory).arg(target.troopsNeeded).arg(defenseNote);
 
         plan.assignments.append(assignment);
         assignedGenerals.insert(bestGeneral);
@@ -1935,14 +2098,21 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         plan.generalsUsed++;
         plan.territoriesTargeted++;
 
-        // Mark these troops as used
+        // Mark these troops as used (only if we're actually moving them)
         troopsAtTerritory[troopPickupTerritory] -= assignment.troopsToTake;
 
-        qDebug() << "DEFENSE: General #" << bestGeneral->getNumber()
-                 << "from" << bestGeneral->getTerritoryName()
-                 << "picking up troops at" << troopPickupTerritory
-                 << "then defending" << target.name
-                 << "with" << assignment.troopsToTake << "troops (threat:" << target.troopsNeeded << ")";
+        if (troopsAtTarget) {
+            qDebug() << "DEFENSE: General #" << bestGeneral->getNumber()
+                     << "from" << bestGeneral->getTerritoryName()
+                     << "going to defend" << target.name
+                     << "(" << bestTroopCount << "troops already there, threat:" << target.troopsNeeded << ")";
+        } else {
+            qDebug() << "DEFENSE: General #" << bestGeneral->getNumber()
+                     << "from" << bestGeneral->getTerritoryName()
+                     << "picking up troops at" << troopPickupTerritory
+                     << "then defending" << target.name
+                     << "with" << assignment.troopsToTake << "troops (threat:" << target.troopsNeeded << ")";
+        }
     }
 
     // PHASE 1B: Attack missions - find generals who can pick up troops and reach enemy targets
@@ -2199,7 +2369,12 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                 assignment.missionType = "ExpandWithTroops";
                 assignment.priority = target.score + 50;  // Boost priority for troop missions
 
-                assignTroopsToGeneral(assignment, player, troopsToTake);
+                // Check if this is a multi-hop route (target is not directly adjacent)
+                // If so, only cavalry can make the journey (infantry have only 1 move)
+                QList<QString> neighbors = graph->getNeighbors(homeProvince);
+                bool isMultiHop = !neighbors.contains(target.name);
+
+                assignTroopsToGeneral(assignment, player, troopsToTake, isMultiHop);
                 assignment.reason = QString("Expand to %1 with %2 troops (enemy %3 turns away)")
                     .arg(target.name).arg(assignment.troopsToTake).arg(enemyTurns);
 
@@ -2221,12 +2396,25 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     }
 
     // === PHASE 3: EXPAND WITHOUT TROOPS to safe targets ===
-    // These are low-threat territories - send any available general WITHOUT troops
-    // Prefer generals NOT at home (save home generals for future troop missions)
+    // Use the threat map to verify: only send lone generals to territories where
+    // enemy 1-turn threat is 0 (truly safe expansion)
+    QMap<QString, int> enemyThreat1Turn = calc.getEnemyThreatMap(player, allPlayers, graph, 1);
+
+    qDebug() << "=== PHASE 3: SAFE EXPANSION ===";
+
     for (const TargetTerritory &target : targets) {
         if (target.requiresTroops) continue;  // Skip attack targets
         if (assignedTargets.contains(target.name)) continue;
         if (assignedGenerals.size() >= availableGenerals.size()) break;
+
+        // === KEY: Use threat map to verify this is SAFE for a lone general ===
+        int threat = enemyThreat1Turn.value(target.name, 0);
+        if (threat > 0) {
+            // NOT safe - enemy troops can reach this territory in 1 turn
+            // Skip this for lone generals; it was already deprioritized in identifyTargets
+            qDebug() << "Skipping" << target.name << "for lone general - enemy threat:" << threat;
+            continue;
+        }
 
         // Find a general who can reach this target, prefer those NOT at home
         GeneralPiece *bestGeneral = nullptr;
@@ -2248,14 +2436,14 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
 
         if (!bestGeneral) continue;
 
-        // Create expansion assignment (no troops)
+        // Create expansion assignment (no troops) - SAFE because threat is 0
         GeneralAssignment assignment;
         assignment.general = bestGeneral;
         assignment.targetTerritory = target.name;
-        assignment.missionType = target.type;
+        assignment.missionType = "SafeExpand";
         assignment.priority = target.score;
         assignment.troopsToTake = 0;
-        assignment.reason = QString("Expand to undefended %1").arg(target.name);
+        assignment.reason = QString("SAFE expand to %1 (no enemy can reach in 1 turn)").arg(target.name);
         expandMissionsAssigned++;
 
         plan.assignments.append(assignment);
@@ -2264,9 +2452,8 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         plan.generalsUsed++;
         plan.territoriesTargeted++;
 
-        qDebug() << "Assigned General #" << bestGeneral->getNumber()
-                 << "to" << target.name << "(" << target.type << ")"
-                 << "with 0 troops (expansion)";
+        qDebug() << "SAFE EXPANSION: General #" << bestGeneral->getNumber()
+                 << "to" << target.name << "(no enemy threat)";
     }
 
     // Step 7: Handle remaining generals

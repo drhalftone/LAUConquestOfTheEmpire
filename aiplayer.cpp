@@ -1490,14 +1490,35 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
     // ReturnHome mission: general should bring ALL their current troops with them!
     // Defend mission: general should bring their current troops PLUS any planned troops
     if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend")) {
+        // DEBUG: Log what's in currentLegion vs availableTroops
+        log(QString("Legion Building: %1 has currentLegion with %2 troops: %3")
+            .arg(leaderName).arg(currentLegion.size()).arg(QDebug::toString(currentLegion)));
+        QStringList availableIds;
+        for (GamePiece *troop : availableTroops) {
+            availableIds.append(QString("%1(mv=%2)").arg(troop->getUniqueId()).arg(troop->getMovesRemaining()));
+        }
+        log(QString("Legion Building: availableTroops has %1 troops: %2")
+            .arg(availableTroops.size()).arg(availableIds.join(", ")));
+
         // Keep troops currently in the legion that still have moves remaining
         // Troops with 0 moves must be left behind - the general will continue without them
         for (int troopId : currentLegion) {
+            bool foundInAvailable = false;
+            bool hasMoves = false;
             for (GamePiece *troop : availableTroops) {
-                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
-                    troopsToSelect.append(troopId);
+                if (troop->getUniqueId() == troopId) {
+                    foundInAvailable = true;
+                    hasMoves = (troop->getMovesRemaining() > 0);
+                    if (hasMoves) {
+                        troopsToSelect.append(troopId);
+                    }
                     break;
                 }
+            }
+            if (!foundInAvailable) {
+                log(QString("Legion Building: Troop %1 in legion but NOT in availableTroops (different territory?)").arg(troopId));
+            } else if (!hasMoves) {
+                log(QString("Legion Building: Troop %1 in legion but has NO MOVES").arg(troopId));
             }
         }
 

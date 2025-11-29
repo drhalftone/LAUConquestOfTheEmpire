@@ -271,7 +271,7 @@ private:
     /**
      * @brief Assign specific troop IDs to a general's assignment
      */
-    void assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops);
+    void assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops, bool requiresMultiHop = false);
 
     // Scoring weights (can be tuned)
     int m_territoryValueWeight = 10;   // Points per territory value (5 or 10)

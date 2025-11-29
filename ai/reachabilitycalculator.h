@@ -171,6 +171,47 @@ public:
      */
     QMap<QString, MultiTurnReachInfo> getAllMultiTurnReachability(Player *player, const QList<Player*> &allPlayers, MapGraph *graph, int maxTurns = 3);
 
+    // === Threat Map Methods (for AI decision-making) ===
+
+    /**
+     * @brief Get enemy threat map - max enemy force that can reach each territory
+     * @param us The player we're analyzing for (enemies are everyone else)
+     * @param allPlayers All players in the game
+     * @param graph The map graph
+     * @param turnMultiplier 1 for 1-turn threat, 2 for 2-turn threat
+     * @return Map of territory name -> max enemy troop strength that can reach it
+     */
+    QMap<QString, int> getEnemyThreatMap(Player *us, const QList<Player*> &allPlayers, MapGraph *graph, int turnMultiplier = 1);
+
+    /**
+     * @brief Get our force projection map - max force we can project to each territory
+     * @param player The player to analyze
+     * @param graph The map graph
+     * @param turnMultiplier 1 for 1-turn projection, 2 for 2-turn projection
+     * @return Map of territory name -> max troop strength we can project there
+     */
+    QMap<QString, int> getForceProjectionMap(Player *player, MapGraph *graph, int turnMultiplier = 1);
+
+    /**
+     * @brief Check if a territory is safe to expand to (we can reach, enemy cannot in 1 turn)
+     * @param territory Territory name to check
+     * @param player The player considering expansion
+     * @param allPlayers All players in the game
+     * @param graph The map graph
+     * @return true if territory is safe for expansion (enemy 1-turn threat is 0)
+     */
+    bool isSafeForExpansion(const QString &territory, Player *player, const QList<Player*> &allPlayers, MapGraph *graph);
+
+    /**
+     * @brief Get territories that will be threatened in 2 turns but not in 1 turn
+     * These are territories where we should preemptively move troops
+     * @param us The player we're analyzing for
+     * @param allPlayers All players in the game
+     * @param graph The map graph
+     * @return Map of territory name -> enemy force that can reach in 2 turns
+     */
+    QMap<QString, int> getEmergingThreats(Player *us, const QList<Player*> &allPlayers, MapGraph *graph);
+
 private:
     /**
      * @brief Get territories reachable by land movement
