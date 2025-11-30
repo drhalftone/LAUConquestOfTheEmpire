@@ -731,6 +731,15 @@ void GameMapWidget::updateHeatMapPlayerReachability()
             continue;
         }
 
+        // Skip if this territory is unowned and we have no troops to claim it
+        // Leaders (Caesar/General) cannot claim territories on their own - they need troops
+        // Troops need a leader to move, so both are required
+        if (info.maxTroopStrength == 0) {
+            // No troops can reach - can't claim an unowned territory
+            // (Leaders alone can move through but can't claim)
+            continue;
+        }
+
         Territory territory = m_graph->getTerritory(territoryName);
         if (territory.id > 0 && territory.id <= 60) {
             int row = territory.id - 1;
