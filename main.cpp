@@ -328,6 +328,7 @@ int main(int argc, char *argv[])
         Q_UNUSED(fromCol);
         Q_UNUSED(toRow);
         Q_UNUSED(toCol);
+        mapWidget->updateHeatMap();  // Refresh heat map (reachability/risk/threat)
         mapWidget->update();  // Redraw the entire map
     });
 
