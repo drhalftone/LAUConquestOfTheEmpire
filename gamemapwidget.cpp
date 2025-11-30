@@ -711,17 +711,23 @@ void GameMapWidget::updateHeatMapPlayerReachability()
     }
 
     // Use reachability calculator to find all reachable territories
+    // useActualMoves=true means use CURRENT movement points, not assumed full moves
     ReachabilityCalculator calc;
-    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph);
+    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph, 1, true);
 
     // Color reachable territories green (brighter = more moves remaining)
-    // Skip territories we already marked as occupied
+    // Skip territories we already marked as occupied AND territories we already own
     for (auto it = reachable.begin(); it != reachable.end(); ++it) {
         const QString &territoryName = it.key();
         const ReachInfo &info = it.value();
 
         // Skip if already occupied (those are cyan)
         if (occupiedTerritories.contains(territoryName)) {
+            continue;
+        }
+
+        // Skip if we already own this territory (can't claim what we own)
+        if (currentPlayer->ownsTerritory(territoryName)) {
             continue;
         }
 

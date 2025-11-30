@@ -9,7 +9,7 @@ ReachabilityCalculator::ReachabilityCalculator()
 {
 }
 
-QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier)
+QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier, bool useActualMoves)
 {
     QMap<QString, ReachInfo> results;
 
@@ -23,7 +23,8 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getReachableFrom(GamePiece *lea
     // For threat assessment purposes, assume leaders have at least 1 move
     // (enemy leaders may have 0 moves remaining after their turn, but they'll
     // have full moves on THEIR next turn when they could attack us)
-    if (movesRemaining < 1.0) {
+    // However, if useActualMoves is true, use the actual current movement points
+    if (!useActualMoves && movesRemaining < 1.0) {
         movesRemaining = 2.0;  // Assume full moves for threat projection
     }
 
@@ -312,7 +313,7 @@ QMap<QString, double> ReachabilityCalculator::getReachableByGalley(GamePiece *le
     return results;
 }
 
-QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player, MapGraph *graph, int turnMultiplier)
+QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player, MapGraph *graph, int turnMultiplier, bool useActualMoves)
 {
     QMap<QString, ReachInfo> results;
 
@@ -326,7 +327,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player,
 
     // Helper lambda to process a leader
     auto processLeader = [&](GamePiece *leader) {
-        QMap<QString, ReachInfo> leaderReach = getReachableFrom(leader, graph, player, turnMultiplier);
+        QMap<QString, ReachInfo> leaderReach = getReachableFrom(leader, graph, player, turnMultiplier, useActualMoves);
         QString startTerritory = leader->getTerritoryName();
         // Note: troop count is now per-destination (stored in ReachInfo.maxTroopStrength)
         // because different destinations may have different distances and thus different troops can reach
@@ -369,7 +370,7 @@ QMap<QString, ReachInfo> ReachabilityCalculator::getAllReachable(Player *player,
 
     // Process all Galleys (they can reach sea zones and landing spots)
     for (GalleyPiece *galley : player->getGalleys()) {
-        QMap<QString, ReachInfo> galleyReach = getReachableFrom(galley, graph, player, turnMultiplier);
+        QMap<QString, ReachInfo> galleyReach = getReachableFrom(galley, graph, player, turnMultiplier, useActualMoves);
         QString galleyTerritory = galley->getTerritoryName();
 
         for (auto it = galleyReach.begin(); it != galleyReach.end(); ++it) {

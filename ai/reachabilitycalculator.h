@@ -77,18 +77,20 @@ public:
      * @param graph The map graph for neighbor/road queries
      * @param player The player who owns this leader
      * @param turnMultiplier Multiplier for movement range (default 1). Use 2 for 2-turn projection.
+     * @param useActualMoves If true, use actual current moves. If false, assume full moves (for threat assessment).
      * @return Map of territory name -> ReachInfo
      */
-    QMap<QString, ReachInfo> getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier = 1);
+    QMap<QString, ReachInfo> getReachableFrom(GamePiece *leader, MapGraph *graph, Player *player, int turnMultiplier = 1, bool useActualMoves = false);
 
     /**
      * @brief Get all territories reachable by any of a player's leaders
      * @param player The player to analyze
      * @param graph The map graph for neighbor/road queries
      * @param turnMultiplier Multiplier for movement range (default 1). Use 2 for 2-turn projection.
+     * @param useActualMoves If true, use actual current moves. If false, assume full moves (for threat assessment).
      * @return Map of territory name -> ReachInfo (aggregated across all leaders)
      */
-    QMap<QString, ReachInfo> getAllReachable(Player *player, MapGraph *graph, int turnMultiplier = 1);
+    QMap<QString, ReachInfo> getAllReachable(Player *player, MapGraph *graph, int turnMultiplier = 1, bool useActualMoves = false);
 
     /**
      * @brief Generate a text report of reachability for a player
