@@ -23,6 +23,7 @@
 // Forward declarations
 class Player;
 class PlayerInfoWidget;
+class MoveEnumeratorWidget;
 class GamePiece;
 class QMenu;
 
@@ -166,7 +167,6 @@ private:
     void playMenuClickSound(QAction *action);
 
     // Heat map helpers
-    void updateHeatMapPlayerReachability();
     void updateHeatMapMaxForce();
     void updateHeatMapMaxForceTwoTurn();
     void updateHeatMapEnemyThreat();
@@ -179,6 +179,7 @@ private:
     // Player references
     QList<Player*> m_players;
     PlayerInfoWidget *m_playerInfoWidget = nullptr;
+    MoveEnumeratorWidget *m_moveEnumeratorWidget = nullptr;
     int m_currentPlayerIndex = 0;
 
     // Game state

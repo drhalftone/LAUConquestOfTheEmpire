@@ -107,13 +107,10 @@ QList<ScoredMove> AIDecisionMaker::getAllScoredMoves(Player *player, const QList
     // Process all Generals
     for (GeneralPiece *general : player->getGenerals()) {
         if (!hasMovesRemaining(general)) {
-            qDebug() << "  General #" << general->getNumber() << "has no moves remaining, skipping";
             continue;
         }
 
         QMap<QString, ReachInfo> reachable = calc.getReachableFrom(general, graph, player);
-        qDebug() << "  General #" << general->getNumber() << "at" << general->getTerritoryName()
-                 << "can reach" << reachable.size() << "territories";
 
         for (auto it = reachable.begin(); it != reachable.end(); ++it) {
             TerritoryRisk risk;
@@ -594,8 +591,11 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
         return unassigned;
     };
 
-    // Check if this general needs more troops (has few or none)
-    bool needsTroops = (move.troopsCanBring <= 2);  // Generals with 0-2 troops should seek more
+    // Check if this general needs more troops (has NONE currently)
+    // IMPORTANT: Only generals with 0 troops should seek more - otherwise they vacillate
+    // between home and the front lines endlessly. A general with 1+ troops should continue
+    // their mission rather than going home for more troops.
+    bool needsTroops = (move.troopsCanBring == 0);  // Only generals with NO troops should seek more
     QString homeProvince = player->getHomeProvinceName();
 
     if (needsTroops && weOwnIt) {
@@ -679,25 +679,18 @@ int AIDecisionMaker::countEnemyTroopsAt(const QString &territory, Player *us, co
         for (InfantryPiece *inf : player->getInfantry()) {
             if (inf->getTerritoryName() == territory) {
                 count++;
-                qDebug() << "  Found enemy infantry at" << territory << "owned by player" << player->getId();
             }
         }
         for (CavalryPiece *cav : player->getCavalry()) {
             if (cav->getTerritoryName() == territory) {
                 count++;
-                qDebug() << "  Found enemy cavalry at" << territory << "owned by player" << player->getId();
             }
         }
         for (CatapultPiece *cat : player->getCatapults()) {
             if (cat->getTerritoryName() == territory) {
                 count++;
-                qDebug() << "  Found enemy catapult at" << territory << "owned by player" << player->getId();
             }
         }
-    }
-
-    if (count == 0) {
-        qDebug() << "  countEnemyTroopsAt(" << territory << "): 0 enemy troops found";
     }
 
     return count;
@@ -1534,9 +1527,9 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
     QMap<QString, int> enemyThreat1Turn = calc.getEnemyThreatMap(player, allPlayers, graph, 1);
     QMap<QString, int> enemyThreat2Turn = calc.getEnemyThreatMap(player, allPlayers, graph, 2);
 
-    qDebug() << "=== THREAT MAP ANALYSIS ===";
-    qDebug() << "Territories with 1-turn enemy threat:" << enemyThreat1Turn.size();
-    qDebug() << "Territories with 2-turn enemy threat:" << enemyThreat2Turn.size();
+    // Get our force projection map to compare against threats
+    QMap<QString, int> ourForce1Turn = calc.getForceProjectionMap(player, graph, 1);
+
 
     // Get all territories from the graph
     QStringList allTerritories = graph->getTerritoryNames();
@@ -1563,19 +1556,6 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
         int threat2Turn = enemyThreat2Turn.value(territory, 0);
         bool isSafeExpansion = (threat1Turn == 0);  // No enemy can reach in 1 turn = SAFE
 
-        // DEBUG: Monitor Italia specifically
-        if (territory == "Italia") {
-            qDebug() << "[ITALIA DEBUG in identifyTargets]";
-            qDebug() << "  weOwnIt:" << weOwnIt;
-            qDebug() << "  threat1Turn:" << threat1Turn;
-            qDebug() << "  threat2Turn:" << threat2Turn;
-            qDebug() << "  isSafeExpansion:" << isSafeExpansion;
-            qDebug() << "  enemyTroops (current):" << target.enemyTroops;
-            qDebug() << "  requiresTroops:" << target.requiresTroops;
-            qDebug() << "  hasEnemyCity:" << hasEnemyCity;
-            qDebug() << "  hasOurCity:" << hasOurCity;
-        }
-
         // Get risk level from riskMap for compatibility
         RiskLevel risk = RiskLevel::Safe;
         int enemyMaxForce = 0;
@@ -1584,18 +1564,20 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
             enemyMaxForce = riskMap[territory].enemyMaxForce;
         }
 
-        // DEBUG: More Italia info
-        if (territory == "Italia") {
-            qDebug() << "  riskMap contains Italia:" << riskMap.contains(territory);
-            qDebug() << "  risk level:" << static_cast<int>(risk);
-            qDebug() << "  enemyMaxForce from riskMap:" << enemyMaxForce;
-        }
-
         if (weOwnIt) {
             // === DEFEND: Our territory under threat ===
             // ONLY defend if there's a 1-turn threat (immediate danger)
+            // AND we don't have overwhelming force advantage
             // 2-turn threats are used as tiebreaker only, not primary reason to defend
-            bool needsDefense = (threat1Turn > 0);  // Immediate threat ONLY
+            int ourForce = ourForce1Turn.value(territory, 0);
+
+            // Calculate if we need defense:
+            // - Must have immediate threat (threat1Turn > 0)
+            // - Must NOT have overwhelming advantage (ourForce < threat * 3)
+            // If we have 3x+ their force, we're fine - focus on expansion instead
+            bool hasImmediateThreat = (threat1Turn > 0);
+            bool hasOverwhelmingAdvantage = (ourForce >= threat1Turn * 3 && ourForce >= 3);
+            bool needsDefense = hasImmediateThreat && !hasOverwhelmingAdvantage;
 
             if (needsDefense) {
                 target.type = "Defend";
@@ -1633,21 +1615,20 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
 
                 targets.append(target);
             }
-            // Safe own territory (no 1-turn threat) - not a defense target
+            // Owned territory either safe (no threat) or has overwhelming advantage - not a defense target
         } else {
             // === EXPAND or ATTACK: Not our territory ===
             if (target.enemyTroops == 0 && !target.requiresTroops) {
                 // EXPAND: Undefended territory - can capture with lone general
+                // Expansion is HIGH priority - every unclaimed territory is free income!
                 target.type = "Expand";
-                target.score = 100 + (value * 10);  // Higher value = higher priority
+                target.score = 200 + (value * 15);  // Base 200 + 15 per value point
                 target.troopsNeeded = 0;
 
                 // === KEY INSIGHT: Use heat map for safe expansion ===
                 // If enemy 1-turn threat is 0, this is SAFE to take with a lone general
                 if (isSafeExpansion) {
-                    target.score += 100;  // BIG bonus for truly safe expansion
-                    qDebug() << "SAFE EXPANSION:" << territory
-                             << "(value=" << value << ") - no enemy can reach in 1 turn";
+                    target.score += 150;  // BIG bonus for truly safe expansion
                 } else {
                     // Risky expansion - enemy can counter-attack
                     // But capturing contested territory is still valuable:
@@ -1668,8 +1649,6 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                     // Light threat (1-2) - no penalty, capturing is worth it
 
                     target.score -= penalty;
-                    qDebug() << "RISKY EXPANSION:" << territory
-                             << "- enemy threat:" << threat1Turn << "(penalty:" << penalty << ")";
                 }
 
                 // Bonus for enemy cities (even undefended)
@@ -1678,18 +1657,15 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 }
 
                 targets.append(target);
-
-                // DEBUG: Italia final decision for Expand
-                if (territory == "Italia") {
-                    qDebug() << "[ITALIA] Decision: EXPAND";
-                    qDebug() << "  final score:" << target.score;
-                    qDebug() << "  isSafeExpansion:" << isSafeExpansion;
-                }
             } else {
-                // ATTACK: Has defenders - requires troops
+                // ATTACK: Has defenders - requires troops WITH ADVANTAGE
+                // Don't attack with equal force - that's too risky!
+                // Require at least +2 troops OR 50% more force (whichever is greater)
                 target.type = "Attack";
-                target.score = 80 + (value * 10);
-                target.troopsNeeded = target.enemyTroops + 1;  // Need advantage
+                target.score = 150 + (value * 15);  // Base 150 + 15 per value point
+
+                int minAdvantage = qMax(2, (target.enemyTroops + 1) / 2);  // At least +2 or +50%
+                target.troopsNeeded = target.enemyTroops + minAdvantage;
                 target.requiresTroops = true;
 
                 // Big bonus for enemy cities
@@ -1705,24 +1681,6 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 }
 
                 targets.append(target);
-
-                // DEBUG: Italia final decision for Attack
-                if (territory == "Italia") {
-                    qDebug() << "[ITALIA] Decision: ATTACK";
-                    qDebug() << "  final score:" << target.score;
-                    qDebug() << "  troopsNeeded:" << target.troopsNeeded;
-                }
-            }
-        }
-
-        // DEBUG: Italia - if we own it and didn't add as defense target, log why
-        if (territory == "Italia" && weOwnIt) {
-            bool needsDefense = (threat1Turn > 0);
-            qDebug() << "[ITALIA] We own it:";
-            qDebug() << "  needsDefense (1-turn threat > 0):" << needsDefense;
-            qDebug() << "  2-turn threat (tiebreaker only):" << threat2Turn;
-            if (!needsDefense) {
-                qDebug() << "  -> NOT added as target (safe, no immediate 1-turn threat)";
             }
         }
     }
@@ -1918,6 +1876,25 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
 
     // Create a mutable copy of risk scores that we'll update as troops are assigned
     QMap<QString, int> effectiveRiskScore;  // territory -> current risk priority
+
+    // Identify "threatened" territories using the RISK MAP data directly
+    // A territory is threatened if enemies can reach it (even with 0 force - they have generals nearby)
+    // This uses riskMap.enemyLeaders which tracks all enemy generals that can reach each territory
+    QSet<QString> threatenedTerritories;
+    for (auto it = riskMap.begin(); it != riskMap.end(); ++it) {
+        if (player->ownsTerritory(it.key())) {
+            const TerritoryRisk &risk = it.value();
+            // Territory is threatened if enemy can reach it (force > 0 OR enemy leaders can reach)
+            if (risk.enemyMaxForce > 0 || !risk.enemyLeaders.isEmpty()) {
+                threatenedTerritories.insert(it.key());
+            }
+        }
+    }
+
+    if (!threatenedTerritories.isEmpty()) {
+        qDebug() << "Threatened territories (enemy can reach):" << threatenedTerritories;
+    }
+
     for (auto it = riskMap.begin(); it != riskMap.end(); ++it) {
         const TerritoryRisk &risk = it.value();
         int score = 0;
@@ -1950,6 +1927,21 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                     score = 50;
                 }
                 // else we're fine - focus on expansion instead
+            } else if (risk.risk == RiskLevel::Low && threatenedTerritories.contains(it.key())) {
+                // LOW risk but enemies CAN reach - should still maintain presence
+                // This prevents troops from wandering to the back while frontline is exposed
+                // The key insight: LOW risk means enemy force is 0, but they have generals nearby!
+                score = 100;  // Significant score - this is the frontline
+            }
+
+            // THREATENED BONUS: Territories that enemies can reach get extra priority
+            // This ensures troops are positioned toward threats, not scattered to the interior
+            if (threatenedTerritories.contains(it.key())) {
+                // Bonus based on number of enemy leaders that can reach (more generals = more threat)
+                int enemyLeaderCount = risk.enemyLeaders.size();
+                score += 30 + enemyLeaderCount * 20;  // 50 for 1 general, 70 for 2, etc.
+                qDebug() << "  Threatened territory" << it.key() << "bonus:" << (30 + enemyLeaderCount * 20)
+                         << "(enemy generals:" << enemyLeaderCount << ")";
             }
         }
 
@@ -1967,9 +1959,214 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         }
     }
 
+    // STRATEGIC EXPANSION: Boost scores for expansion targets adjacent to threatened territories
+    // This makes expansion go toward enemies rather than into empty space.
+    for (const TargetTerritory &target : targets) {
+        if (target.type != "Expand" && target.type != "Attack") continue;
+        if (!effectiveRiskScore.contains(target.name)) continue;
+
+        // Check if this expansion target is adjacent to a threatened territory
+        bool adjacentToThreat = false;
+        QStringList neighbors = graph->getNeighbors(target.name);
+        for (const QString &neighbor : neighbors) {
+            if (threatenedTerritories.contains(neighbor)) {
+                adjacentToThreat = true;
+                break;
+            }
+        }
+
+        if (adjacentToThreat) {
+            // Boost expansion targets that extend toward enemies
+            effectiveRiskScore[target.name] += 100;
+            qDebug() << "Boosting strategic expansion target:" << target.name << "new score:" << effectiveRiskScore[target.name];
+        }
+    }
+
+    // PROPORTIONAL TROOP DISTRIBUTION: Calculate how many troops each territory should receive
+    // based on its proportion of total risk. This ensures troops are distributed fairly.
+    // IMPORTANT: Only consider NEARBY targets for proportional distribution to avoid scattering.
+    QMap<QString, int> targetTroopAllocation;  // territory -> target number of troops
+    int totalAvailableTroops = availableTroops.size();
+
+    // Find centroid of our troops (most common location) for distance calculations
+    QMap<QString, int> troopLocations;
+    for (const TroopInfo &t : availableTroops) {
+        troopLocations[t.territory]++;
+    }
+    QString troopCentroid;
+    int maxTroops = 0;
+    for (auto it = troopLocations.begin(); it != troopLocations.end(); ++it) {
+        if (it.value() > maxTroops) {
+            maxTroops = it.value();
+            troopCentroid = it.key();
+        }
+    }
+
+    // Calculate distance-weighted scores - nearby high-priority targets get more allocation
+    // This prevents scattering troops to distant targets like Britannia when closer ones exist
+    QMap<QString, int> distanceWeightedScore;
+    int totalWeightedScore = 0;
+
+    for (auto it = effectiveRiskScore.begin(); it != effectiveRiskScore.end(); ++it) {
+        int baseScore = it.value();
+        if (baseScore <= 0) continue;
+
+        // Calculate distance from troop centroid using BFS
+        int distance = 1;
+        if (!troopCentroid.isEmpty() && it.key() != troopCentroid) {
+            QMap<QString, int> dist;
+            QList<QString> queue;
+            queue.append(troopCentroid);
+            dist[troopCentroid] = 0;
+            bool found = false;
+
+            while (!queue.isEmpty() && !found) {
+                QString current = queue.takeFirst();
+                if (current == it.key()) {
+                    distance = dist[current];
+                    found = true;
+                    break;
+                }
+                for (const QString &neighbor : graph->getNeighbors(current)) {
+                    if (graph->isSeaTerritory(neighbor)) continue;
+                    if (dist.contains(neighbor)) continue;
+                    dist[neighbor] = dist[current] + 1;
+                    if (dist[neighbor] <= 5) {
+                        queue.append(neighbor);
+                    }
+                }
+            }
+            if (!found) distance = 6;  // Far away
+        }
+
+        // Apply STRONG distance penalty to focus on nearby targets
+        // Distance 1: full score, Distance 2: 50%, Distance 3: 25%, etc.
+        int weightedScore = baseScore;
+        if (distance > 1) {
+            weightedScore = baseScore / (distance * distance);  // Quadratic falloff
+        }
+
+        // Threatened territories get distance bonus (defense is urgent regardless of distance)
+        if (threatenedTerritories.contains(it.key())) {
+            weightedScore = qMax(weightedScore, baseScore / 2);  // At least half score for defense
+        }
+
+        if (weightedScore > 0) {
+            distanceWeightedScore[it.key()] = weightedScore;
+            totalWeightedScore += weightedScore;
+        }
+    }
+
+    if (totalWeightedScore > 0 && totalAvailableTroops > 0) {
+        qDebug() << "=== PROPORTIONAL TROOP ALLOCATION ===";
+        qDebug() << "Total weighted score:" << totalWeightedScore << ", Available troops:" << totalAvailableTroops;
+        qDebug() << "Troop centroid:" << troopCentroid;
+
+        // Calculate proportional allocation for each territory
+        int allocatedSoFar = 0;
+        QList<QPair<QString, int>> sortedByScore;
+        for (auto it = distanceWeightedScore.begin(); it != distanceWeightedScore.end(); ++it) {
+            sortedByScore.append({it.key(), it.value()});
+        }
+        // Sort by weighted score descending
+        std::sort(sortedByScore.begin(), sortedByScore.end(),
+                  [](const QPair<QString, int> &a, const QPair<QString, int> &b) {
+                      return a.second > b.second;
+                  });
+
+        // Only allocate to top targets (limit scattering)
+        int maxTargets = qMin(totalAvailableTroops, 8);  // No more targets than troops, max 8
+        int targetsAllocated = 0;
+
+        for (const auto &pair : sortedByScore) {
+            if (targetsAllocated >= maxTargets) break;
+
+            const QString &territory = pair.first;
+            int weightedScore = pair.second;
+
+            // Proportional allocation: (score / totalScore) * totalTroops
+            double proportion = static_cast<double>(weightedScore) / totalWeightedScore;
+            int targetCount = static_cast<int>(proportion * totalAvailableTroops + 0.5);  // Round
+
+            // Minimum 1 troop for significant targets (weighted score >= 50)
+            if (targetCount == 0 && weightedScore >= 50) {
+                targetCount = 1;
+            }
+
+            // Cap at remaining troops
+            targetCount = qMin(targetCount, totalAvailableTroops - allocatedSoFar);
+
+            if (targetCount > 0) {
+                targetTroopAllocation[territory] = targetCount;
+                allocatedSoFar += targetCount;
+                targetsAllocated++;
+                qDebug() << QString("  %1: weighted=%2, proportion=%3%, target=%4 troops")
+                    .arg(territory)
+                    .arg(weightedScore)
+                    .arg(static_cast<int>(proportion * 100))
+                    .arg(targetCount);
+            }
+        }
+        qDebug() << "Total allocated:" << allocatedSoFar << "of" << totalAvailableTroops << "to" << targetsAllocated << "targets";
+    }
+
+    // Track how many troops have been assigned to each ultimate target
+    QMap<QString, int> troopsAssignedToTarget;  // ultimate target -> count assigned so far
+
+    // Helper: Check if a territory has available galley (either beached here or in adjacent sea)
+    auto hasGalleyAtTerritory = [&graph, &player](const QString &territory) -> bool {
+        for (GalleyPiece *galley : player->getGalleys()) {
+            if (galley->hasTransportedThisTurn() ||
+                galley->hasLeaderAboard() ||
+                galley->getMovesRemaining() < 0.5) {
+                continue;  // Galley not available
+            }
+
+            // Check for BEACHED galley at this exact territory
+            if (galley->isBeached() && galley->getTerritoryName() == territory) {
+                return true;
+            }
+
+            // Check for galley at sea in an adjacent sea zone
+            QString galleyLocation = galley->getTerritoryName();
+            if (!galley->isBeached() && graph->isSeaTerritory(galleyLocation)) {
+                // Check if this sea zone is adjacent to our territory
+                QStringList neighbors = graph->getNeighbors(territory);
+                if (neighbors.contains(galleyLocation)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    // Helper: Check if a route requires galley transport (no land path)
+    auto requiresGalley = [&graph](const QString &from, const QString &target) -> bool {
+        if (from == target) return false;
+
+        // BFS to check for land path
+        QSet<QString> visited;
+        QList<QString> queue;
+        queue.append(from);
+        visited.insert(from);
+
+        while (!queue.isEmpty()) {
+            QString current = queue.takeFirst();
+            if (current == target) return false;  // Land path exists
+
+            for (const QString &neighbor : graph->getNeighbors(current)) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+                if (visited.contains(neighbor)) continue;
+                visited.insert(neighbor);
+                queue.append(neighbor);
+            }
+        }
+        return true;  // No land path - requires galley
+    };
+
     // Helper: BFS to find the first step toward a distant territory
-    // Returns the target directly if only reachable via galley (no land path)
-    auto findFirstStepToward = [&graph](const QString &from, const QString &target) -> QString {
+    // Only returns target directly if galley is available at 'from' territory
+    auto findFirstStepToward = [&graph, &hasGalleyAtTerritory](const QString &from, const QString &target) -> QString {
         if (from == target) return QString();
 
         // BFS to find shortest path by land
@@ -2000,14 +2197,18 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         }
 
         // No land path found - target might be reachable via galley
-        // Return the target directly; the execution layer will check
-        // if galley transport is available via getMovesForLeader
-        return target;
+        // But ONLY if galley is actually available at the source territory!
+        if (hasGalleyAtTerritory(from)) {
+            return target;
+        }
+
+        // No galley available - can't reach this target
+        return QString();
     };
 
     // Helper: Calculate distance (in hops) between two territories
-    // Returns 2 for galley-reachable territories (approximate distance via sea)
-    auto getDistance = [&graph](const QString &from, const QString &target) -> int {
+    // Returns 2 for galley-reachable territories (only if galley is available at source)
+    auto getDistance = [&graph, &hasGalleyAtTerritory](const QString &from, const QString &target) -> int {
         if (from == target) return 0;
 
         QMap<QString, int> dist;
@@ -2034,25 +2235,64 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             }
         }
 
-        // No land path found - check if might be galley-reachable
-        // If from has adjacent sea and target has adjacent sea, assume galley route
-        bool fromHasSea = false;
-        bool targetHasSea = false;
-        for (const QString &neighbor : graph->getNeighbors(from)) {
-            if (graph->isSeaTerritory(neighbor)) {
-                fromHasSea = true;
-                break;
+        // No land path found - check if galley-reachable
+        // Must verify that galley can actually reach a sea zone adjacent to target
+        if (hasGalleyAtTerritory(from)) {
+            // Find sea zones adjacent to source (where galley can launch)
+            QSet<QString> sourceSeaZones;
+            for (const QString &neighbor : graph->getNeighbors(from)) {
+                if (graph->isSeaTerritory(neighbor)) {
+                    sourceSeaZones.insert(neighbor);
+                }
             }
-        }
-        for (const QString &neighbor : graph->getNeighbors(target)) {
-            if (graph->isSeaTerritory(neighbor)) {
-                targetHasSea = true;
-                break;
-            }
-        }
 
-        if (fromHasSea && targetHasSea) {
-            return 2;  // Approximate galley distance (board + sail + land)
+            // Find sea zones adjacent to target (where galley can disembark)
+            QSet<QString> targetSeaZones;
+            for (const QString &neighbor : graph->getNeighbors(target)) {
+                if (graph->isSeaTerritory(neighbor)) {
+                    targetSeaZones.insert(neighbor);
+                }
+            }
+
+            // Check if any source sea zone can reach any target sea zone
+            // Use BFS through connected sea zones (galley has ~4 moves)
+            if (!sourceSeaZones.isEmpty() && !targetSeaZones.isEmpty()) {
+                // BFS from source sea zones to find reachable sea zones
+                QSet<QString> reachableSeaZones;
+                QList<QString> seaQueue;
+                QMap<QString, int> seaDist;
+
+                for (const QString &sourceSea : sourceSeaZones) {
+                    seaQueue.append(sourceSea);
+                    seaDist[sourceSea] = 1;  // Launch costs 1 move
+                    reachableSeaZones.insert(sourceSea);
+                }
+
+                while (!seaQueue.isEmpty()) {
+                    QString currentSea = seaQueue.takeFirst();
+                    int currentDist = seaDist[currentSea];
+
+                    // Galley has 4 moves: 1 for launch + up to 3 more for sailing
+                    if (currentDist >= 4) continue;
+
+                    for (const QString &neighbor : graph->getNeighbors(currentSea)) {
+                        if (graph->isSeaTerritory(neighbor) && !seaDist.contains(neighbor)) {
+                            seaDist[neighbor] = currentDist + 1;
+                            seaQueue.append(neighbor);
+                            reachableSeaZones.insert(neighbor);
+                        }
+                    }
+                }
+
+                // Check if any target sea zone is reachable
+                for (const QString &targetSea : targetSeaZones) {
+                    if (reachableSeaZones.contains(targetSea)) {
+                        // Distance = sea hops + 1 for disembark
+                        int seaHops = seaDist.value(targetSea, 999);
+                        return seaHops + 1;  // Approximate galley distance
+                    }
+                }
+            }
         }
 
         return 999;  // Truly unreachable
@@ -2070,20 +2310,22 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
 
     // Calculate how many troops should stay home to defend Caesar based on RISK
     // Use the risk map to determine enemy threat to home province
+    // Keep ~2/3 of what we'd need to fully match the threat (be aggressive, not overly defensive)
     int troopsToKeepHome = 0;
     int enemyThreatToHome = 0;
     if (!caesarTerritory.isEmpty() && riskMap.contains(caesarTerritory)) {
         const TerritoryRisk &homeRisk = riskMap[caesarTerritory];
         enemyThreatToHome = homeRisk.enemyMaxForce;
 
-        // Keep enough troops to match enemy threat, plus a small buffer
-        // If enemy can bring 5 troops, we want at least 5-6 at home
+        // Base defense = 2/3 of enemy threat (rounded up), then adjust by risk level
+        int baseDefense = (enemyThreatToHome * 2 + 2) / 3;  // ~67% of threat, round up
+
         if (homeRisk.risk == RiskLevel::High) {
-            troopsToKeepHome = enemyThreatToHome + 2;  // Extra buffer for high risk
+            troopsToKeepHome = baseDefense + 1;  // Small buffer for high risk
         } else if (homeRisk.risk == RiskLevel::Medium) {
-            troopsToKeepHome = enemyThreatToHome + 1;
+            troopsToKeepHome = baseDefense;
         } else if (homeRisk.risk == RiskLevel::Low) {
-            troopsToKeepHome = qMax(0, enemyThreatToHome);  // Match threat
+            troopsToKeepHome = qMax(0, baseDefense - 1);  // Can afford to be more aggressive
         } else {
             troopsToKeepHome = 0;  // Safe - no need to keep troops home
         }
@@ -2136,8 +2378,19 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
 
             // PREVENT SWAPS: Don't move to a territory if troops from there are coming here
             // This prevents useless A->B, B->A swaps that accomplish nothing
+            // troopsLeavingFrom[dest] = source means "troops going TO dest came FROM source"
+            //
+            // If we're at territory A wanting to go to B:
+            // - Check if troops from B are going to A: troopsLeavingFrom[A] == B
+            // - Check if troops from A are going to B: troopsLeavingFrom[B] == A (already committed)
+            //
+            // Block if EITHER direction already exists - first mover wins
             if (troopsLeavingFrom.contains(firstStep) && troopsLeavingFrom[firstStep] == troop.territory) {
-                // Someone from firstStep is already going to our territory - don't swap!
+                // Troops going to firstStep came from our territory - we're already sending TO firstStep
+                continue;
+            }
+            if (troopsLeavingFrom.contains(troop.territory) && troopsLeavingFrom[troop.territory] == firstStep) {
+                // Troops going to our territory came from firstStep - they're coming TO us
                 continue;
             }
 
@@ -2145,10 +2398,58 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             // But still consider distant targets - just at reduced priority
             int effectiveScore = baseScore / distance;
 
-            // Apply diminishing returns for troops already going to same first step
+            // Check if this destination requires galley transport
+            bool isGalleyRoute = requiresGalley(troop.territory, ultimateTarget);
+
+            // PROPORTIONAL ALLOCATION: Check if this target has received its fair share
+            // Skip or heavily penalize targets that already have enough troops assigned
+            int targetAllocation = targetTroopAllocation.value(ultimateTarget, 0);
+            int alreadyAssigned = troopsAssignedToTarget.value(ultimateTarget, 0);
+
+            if (targetAllocation > 0 && alreadyAssigned >= targetAllocation) {
+                // This target has received its proportional share
+                // Apply heavy penalty but don't skip entirely (allow overflow if no other options)
+                effectiveScore = effectiveScore / 4;
+            } else if (targetAllocation > 0 && alreadyAssigned >= targetAllocation - 1) {
+                // Almost at target - small penalty to let other territories catch up
+                effectiveScore = static_cast<int>(effectiveScore * 0.7);
+            }
+
+            // CONSOLIDATION LOGIC: VERY STRONGLY encourage troops to travel together
+            // A general can take 5 troops, so we want FULL groups not scattered 1-troop movements
+            // The key insight: it's MUCH better to send 5 troops to 1 place than 1 troop to 5 places
             int alreadyGoing = troopsGoingTo.value(firstStep, 0);
-            if (alreadyGoing > 0) {
-                effectiveScore = static_cast<int>(effectiveScore / (1.0 + alreadyGoing * 0.3));
+
+            // Count how many different destinations troops from THIS territory are already going to
+            int destinationsFromHere = 0;
+            for (auto it = troopsGoingTo.begin(); it != troopsGoingTo.end(); ++it) {
+                // Check if this destination has troops coming from our territory
+                if (troopsLeavingFrom.value(it.key()) == troop.territory && it.value() > 0) {
+                    destinationsFromHere++;
+                }
+            }
+
+            if (alreadyGoing > 0 && alreadyGoing < 5) {
+                // MASSIVE BOOST for joining existing group - troops MUST consolidate!
+                // This bonus should be so high that troops always join existing groups
+                double consolidationBonus = 3.0 + (alreadyGoing * 0.5);  // 3.5x for 1, 4.0x for 2, 4.5x for 3, 5.0x for 4
+                if (isGalleyRoute) {
+                    consolidationBonus += 1.0;  // Even bigger bonus for galley (maximize payload)
+                }
+                effectiveScore = static_cast<int>(effectiveScore * consolidationBonus);
+            } else if (alreadyGoing >= 5) {
+                // Group is full (5 troops max per general) - heavy penalty, find another group
+                effectiveScore = static_cast<int>(effectiveScore / 3.0);
+            } else {
+                // First troop to this destination - check if we're scattering too much
+                // Penalize opening new destinations if we already have groups forming
+                if (destinationsFromHere >= 1) {
+                    // Already have troops going somewhere from here - BIG penalty for scattering
+                    effectiveScore = static_cast<int>(effectiveScore * 0.3);
+                } else if (isGalleyRoute) {
+                    // First troop to a galley route - small bonus
+                    effectiveScore = static_cast<int>(effectiveScore * 1.1);
+                }
             }
 
             if (effectiveScore > bestScore ||
@@ -2190,6 +2491,9 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             if (troopIsWithCaesar) {
                 homeTroopsAssigned++;
             }
+
+            // Track troops assigned to each ultimate target for proportional distribution
+            troopsAssignedToTarget[bestUltimateTarget]++;
 
             // REDUCE the risk score for the ultimate target since we're sending reinforcement
             // This makes the next troop iteration see different priorities
@@ -2242,10 +2546,20 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         groupMap[key].totalScore += troop.effectiveScore;
     }
 
-    // Convert to list and sort by total score (highest first)
+    // Convert to list and sort by EFFECTIVENESS (larger groups are more valuable per general)
+    // A general taking 5 troops is 5x more efficient than a general taking 1 troop
+    // So we prioritize: (1) groups with more troops, (2) higher total score as tiebreaker
     QList<TroopGroup> groups = groupMap.values();
     std::sort(groups.begin(), groups.end(),
               [](const TroopGroup &a, const TroopGroup &b) {
+                  // Primary: group size (more troops = higher priority)
+                  // We want full legions (5 troops) assigned first
+                  int sizeA = qMin(5, a.troopIndices.size());  // Cap at 5 (one general's worth)
+                  int sizeB = qMin(5, b.troopIndices.size());
+                  if (sizeA != sizeB) {
+                      return sizeA > sizeB;  // Larger groups first
+                  }
+                  // Secondary: total score as tiebreaker
                   return a.totalScore > b.totalScore;
               });
 
@@ -2255,63 +2569,163 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             .arg(g.from).arg(g.to).arg(g.troopIndices.size()).arg(g.totalScore);
     }
 
-    // Step 6: Assign generals to each group
+    // Step 6: Assign generals to DIFFERENT destinations based on risk
+    // Instead of assigning to troop groups, we assign each general to the best unassigned destination
     QSet<GeneralPiece*> assignedGenerals;
     QSet<int> assignedTroopIds;
+    QSet<QString> assignedDestinations;  // Track where generals are already going
 
-    for (const TroopGroup &group : groups) {
-        if (group.troopIndices.isEmpty()) continue;
+    // Sort risk scores to get best destinations
+    QList<QPair<QString, int>> sortedDestinations;
+    for (auto it = effectiveRiskScore.begin(); it != effectiveRiskScore.end(); ++it) {
+        if (it.value() > 0) {
+            sortedDestinations.append({it.key(), it.value()});
+        }
+    }
+    std::sort(sortedDestinations.begin(), sortedDestinations.end(),
+              [](const QPair<QString, int> &a, const QPair<QString, int> &b) {
+                  return a.second > b.second;
+              });
 
-        // Find a general at the 'from' territory who isn't assigned yet
-        GeneralPiece *bestGeneral = nullptr;
-        for (GeneralPiece *gen : availableGenerals) {
-            if (assignedGenerals.contains(gen)) continue;
-            if (gen->getTerritoryName() == group.from) {
-                bestGeneral = gen;
-                break;
+    // Group generals by territory
+    QMap<QString, QList<GeneralPiece*>> generalsByTerritory;
+    for (GeneralPiece *gen : availableGenerals) {
+        generalsByTerritory[gen->getTerritoryName()].append(gen);
+    }
+
+    // For each territory with generals, assign them to DIFFERENT destinations
+    for (auto it = generalsByTerritory.begin(); it != generalsByTerritory.end(); ++it) {
+        QString fromTerritory = it.key();
+        QList<GeneralPiece*> generalsHere = it.value();
+
+        // Count available troops at this territory
+        QList<int> troopsAtThisTerritory;
+        for (int i = 0; i < availableTroops.size(); i++) {
+            const TroopInfo &troop = availableTroops[i];
+            if (troop.territory == fromTerritory && !assignedTroopIds.contains(troop.piece->getUniqueId())) {
+                troopsAtThisTerritory.append(i);
             }
         }
 
-        if (!bestGeneral) {
-            qDebug() << "  No general at" << group.from << "- cannot move" << group.troopIndices.size() << "troops to" << group.to;
-            continue;
+        int totalTroopsHere = troopsAtThisTerritory.size();
+        int numGenerals = generalsHere.size();
+
+        // Calculate fair share per general
+        int troopsPerGeneral = 1;
+        if (numGenerals > 0 && totalTroopsHere > 0) {
+            troopsPerGeneral = (totalTroopsHere + numGenerals - 1) / numGenerals;
+            troopsPerGeneral = qMin(5, troopsPerGeneral);  // Cap at max legion size
         }
 
-        // Create assignment
-        GeneralAssignment assignment;
-        assignment.general = bestGeneral;
-        assignment.targetTerritory = group.to;
-        assignment.missionType = "ExpandWithTroops";
-        assignment.priority = group.totalScore;
+        qDebug() << "Territory" << fromTerritory << ":" << numGenerals << "generals,"
+                 << totalTroopsHere << "troops -> " << troopsPerGeneral << "troops per general";
 
-        // Assign troops (up to 5, leaving room for general in legion of 6)
-        int troopsToAssign = qMin(5, group.troopIndices.size());
-        for (int i = 0; i < troopsToAssign; i++) {
-            int troopIdx = group.troopIndices[i];
-            const TroopInfo &troop = availableTroops[troopIdx];
-            if (!assignedTroopIds.contains(troop.piece->getUniqueId())) {
+        // Assign each general to a different destination based on risk priority
+        int troopIndex = 0;
+        for (GeneralPiece *gen : generalsHere) {
+            if (assignedGenerals.contains(gen)) continue;
+
+            // Find best unassigned destination reachable from here
+            // IMPORTANT: Prefer UNCLAIMED or ENEMY territories over our own
+            QString bestDest;
+            int bestScore = 0;
+
+            for (const auto &dest : sortedDestinations) {
+                QString destName = dest.first;
+                int destScore = dest.second;
+
+                // Skip if already assigned a general there (spread out!)
+                if (assignedDestinations.contains(destName)) continue;
+
+                // Skip if it's our current territory
+                if (destName == fromTerritory) continue;
+
+                // Skip territories we already own UNLESS they're threatened or have high defense value
+                // We want to EXPAND, not shuffle troops between owned territories
+                bool weOwnIt = player->ownsTerritory(destName);
+                if (weOwnIt) {
+                    // Only go to our own territory if it's threatened
+                    if (!threatenedTerritories.contains(destName)) {
+                        continue;  // Skip - we don't need to go to safe owned territory
+                    }
+                }
+
+                // Check if reachable (adjacent or via path, including galley)
+                int distance = getDistance(fromTerritory, destName);
+                if (distance == 0 || distance > 4) continue;  // Not reachable in reasonable moves
+
+                // Check if this is a galley route
+                bool isGalleyRoute = requiresGalley(fromTerritory, destName);
+                bool hasGalley = hasGalleyAtTerritory(fromTerritory);
+
+                // Skip galley routes if no galley available
+                if (isGalleyRoute && !hasGalley) continue;
+
+                // Score adjusted by distance
+                int adjustedScore = destScore / distance;
+
+                // Bonus for expansion targets (unclaimed/enemy)
+                if (!weOwnIt) {
+                    adjustedScore = static_cast<int>(adjustedScore * 1.5);  // 50% bonus for expansion
+                }
+
+                // Bonus for galley routes (use those galleys!)
+                if (isGalleyRoute && hasGalley) {
+                    adjustedScore = static_cast<int>(adjustedScore * 1.3);  // 30% bonus for galley usage
+                    qDebug() << "    Galley route available:" << fromTerritory << "->" << destName << "score:" << adjustedScore;
+                }
+
+                if (adjustedScore > bestScore) {
+                    bestScore = adjustedScore;
+                    bestDest = destName;
+                }
+            }
+
+            if (bestDest.isEmpty()) {
+                qDebug() << "  General #" << gen->getNumber() << "at" << fromTerritory << "- no valid destination found";
+                continue;
+            }
+
+            // Create assignment
+            GeneralAssignment assignment;
+            assignment.general = gen;
+            assignment.targetTerritory = bestDest;
+            assignment.missionType = "ExpandWithTroops";
+            assignment.priority = bestScore;
+
+            // Assign proportional troops
+            int troopsToTake = qMin(troopsPerGeneral, totalTroopsHere - troopIndex);
+            troopsToTake = qMin(troopsToTake, 5);  // Max 5 per legion
+            troopsToTake = qMax(troopsToTake, 0);
+
+            for (int i = 0; i < troopsToTake && (troopIndex + i) < troopsAtThisTerritory.size(); i++) {
+                int troopIdx = troopsAtThisTerritory[troopIndex + i];
+                const TroopInfo &troop = availableTroops[troopIdx];
                 assignment.troopIds.append(troop.piece->getUniqueId());
                 assignedTroopIds.insert(troop.piece->getUniqueId());
             }
+            troopIndex += troopsToTake;
+            assignment.troopsToTake = assignment.troopIds.size();
+
+            if (assignment.troopsToTake == 0 && totalTroopsHere > 0) {
+                qDebug() << "  General #" << gen->getNumber() << "- no troops left to assign";
+                continue;
+            }
+
+            assignment.reason = QString("Move %1 troops from %2 to %3 (risk score: %4)")
+                .arg(assignment.troopsToTake).arg(fromTerritory).arg(bestDest).arg(bestScore);
+
+            plan.assignments.append(assignment);
+            assignedGenerals.insert(gen);
+            assignedDestinations.insert(bestDest);  // Mark destination as taken
+            plan.generalsUsed++;
+            plan.territoriesTargeted++;
+            plan.totalTroopsDeployed += assignment.troopsToTake;
+
+            qDebug() << "  Assigned General #" << gen->getNumber()
+                     << "to take" << assignment.troopsToTake << "troops from" << fromTerritory
+                     << "to" << bestDest << "(score:" << bestScore << ")";
         }
-        assignment.troopsToTake = assignment.troopIds.size();
-
-        if (assignment.troopsToTake == 0) {
-            qDebug() << "  No troops available to assign for" << group.from << "->" << group.to;
-            continue;
-        }
-
-        assignment.reason = QString("Move %1 troops from %2 to %3")
-            .arg(assignment.troopsToTake).arg(group.from).arg(group.to);
-
-        plan.assignments.append(assignment);
-        assignedGenerals.insert(bestGeneral);
-        plan.generalsUsed++;
-        plan.territoriesTargeted++;
-        plan.totalTroopsDeployed += assignment.troopsToTake;
-
-        qDebug() << "  Assigned General #" << bestGeneral->getNumber()
-                 << "to take" << assignment.troopsToTake << "troops from" << group.from << "to" << group.to;
     }
 
     // Step 7: Identify territories with stranded troops (assigned destination but no general there)
@@ -2347,11 +2761,23 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
               });
 
     // Send idle generals to pick up stranded troops
+    // For LARGE groups (3+ troops), generals will travel further to pick them up
+    // A strong legion without a general is a waste!
     for (const auto &stranded : strandedList) {
         QString strandedTerritory = stranded.first;
         int strandedScore = stranded.second;
+        int troopCount = strandedTroopCounts[strandedTerritory];
 
-        // Find the closest idle general
+        // Determine max distance based on how many troops are stranded
+        // More troops = worth traveling further to pick up
+        int maxDistance = 1;  // Default: only adjacent
+        if (troopCount >= 5) {
+            maxDistance = 3;  // Large group - worth a longer trip
+        } else if (troopCount >= 3) {
+            maxDistance = 2;  // Medium group - worth going a bit further
+        }
+
+        // Find the closest idle general within max distance
         GeneralPiece *closestGeneral = nullptr;
         int closestDistance = 999;
 
@@ -2360,45 +2786,203 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
 
             // Calculate distance from this general to the stranded territory
             int dist = getDistance(gen->getTerritoryName(), strandedTerritory);
-            if (dist < closestDistance) {
+
+            if (dist <= maxDistance && dist < closestDistance) {
                 closestDistance = dist;
                 closestGeneral = gen;
             }
         }
 
-        if (closestGeneral && closestDistance < 999) {
-            // Assign this general to go pick up the stranded troops
+        if (closestGeneral && closestDistance <= maxDistance) {
+            // Assign this general to pick up the stranded troops
             GeneralAssignment assignment;
             assignment.general = closestGeneral;
             assignment.targetTerritory = strandedTerritory;
             assignment.missionType = "PickupTroops";
-            assignment.priority = strandedScore / 2;  // Lower priority than direct missions
+            // Higher priority for larger groups
+            assignment.priority = strandedScore / 2 + troopCount * 30;
             assignment.troopsToTake = 0;  // Will pick up when they arrive
             assignment.reason = QString("Go to %1 to pick up %2 stranded troops")
-                .arg(strandedTerritory).arg(strandedTroopCounts[strandedTerritory]);
+                .arg(strandedTerritory).arg(troopCount);
 
             plan.assignments.append(assignment);
             assignedGenerals.insert(closestGeneral);
 
             qDebug() << "  General #" << closestGeneral->getNumber() << "at" << closestGeneral->getTerritoryName()
-                     << "assigned to pick up troops at" << strandedTerritory << "(distance=" << closestDistance << ")";
+                     << "assigned to pick up" << troopCount << "troops at" << strandedTerritory
+                     << "(distance=" << closestDistance << ")";
+        } else {
+            qDebug() << "  No general within" << maxDistance << "moves to pick up" << troopCount
+                     << "troops at" << strandedTerritory;
         }
     }
 
-    // Remaining generals without assignments stay in place
+    // Step 8: Check if under-strength generals should RETREAT due to enemy threat
+    // If a general's legion is smaller than the enemy force that can attack them, they should retreat!
+    qDebug() << "=== RISK-BASED RETREAT CHECK ===";
+
     for (GeneralPiece *gen : availableGenerals) {
         if (assignedGenerals.contains(gen)) continue;
 
+        QString genTerritory = gen->getTerritoryName();
+        int legionSize = gen->getLegion().size();
+
+        // Check the risk at this territory
+        if (!riskMap.contains(genTerritory)) continue;
+
+        const TerritoryRisk &risk = riskMap[genTerritory];
+        int enemyThreat = risk.enemyMaxForce;
+
+        // If enemy can attack with more force than we have, we should retreat
+        // Give a small buffer - retreat if enemy has at least 2 more troops than us
+        if (enemyThreat > legionSize + 1) {
+            qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                     << "is OUTMATCHED (legion=" << legionSize << ", enemy threat=" << enemyThreat << ")";
+
+            // Find a safe territory to retreat to (owned by us, lower threat)
+            QString bestRetreat;
+            int bestRetreatScore = -999;
+
+            QStringList neighbors = graph->getNeighbors(genTerritory);
+            for (const QString &neighbor : neighbors) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+                if (!player->ownsTerritory(neighbor)) continue;  // Can only retreat to owned territory
+
+                // Check threat at this neighbor
+                int neighborThreat = 0;
+                if (riskMap.contains(neighbor)) {
+                    neighborThreat = riskMap[neighbor].enemyMaxForce;
+                }
+
+                // Score: prefer lower threat, prefer home province
+                int score = -neighborThreat;
+                if (neighbor == homeProvince) {
+                    score += 100;  // Strong preference to retreat home
+                }
+
+                if (score > bestRetreatScore) {
+                    bestRetreatScore = score;
+                    bestRetreat = neighbor;
+                }
+            }
+
+            if (!bestRetreat.isEmpty()) {
+                GeneralAssignment assignment;
+                assignment.general = gen;
+                assignment.targetTerritory = bestRetreat;
+                assignment.missionType = "Retreat";
+                assignment.priority = 200 + (enemyThreat - legionSize) * 30;  // Higher priority if more outmatched
+                assignment.troopsToTake = legionSize;  // Take all troops when retreating
+                assignment.reason = QString("Retreating from %1 (our force %2 vs enemy threat %3)")
+                    .arg(genTerritory).arg(legionSize).arg(enemyThreat);
+
+                plan.assignments.append(assignment);
+                assignedGenerals.insert(gen);
+
+                qDebug() << "    -> Retreating to" << bestRetreat;
+            } else {
+                qDebug() << "    -> No safe retreat available!";
+            }
+        }
+    }
+
+    // Remaining generals without assignments - check if they have stranded troops at their location
+    // If so, pick them up and take them somewhere useful!
+    for (GeneralPiece *gen : availableGenerals) {
+        if (assignedGenerals.contains(gen)) continue;
+
+        QString genTerritory = gen->getTerritoryName();
+
+        // Check if there are stranded troops at this general's location
+        int strandedHere = strandedTroopCounts.value(genTerritory, 0);
+
         GeneralAssignment assignment;
         assignment.general = gen;
-        assignment.targetTerritory = gen->getTerritoryName();
+        assignment.troopsToTake = 0;
+
+        if (strandedHere > 0) {
+            // There are stranded troops here! This general should pick them up and go somewhere.
+            // Find the best destination for expansion
+            QString bestDest;
+            int bestScore = 0;
+
+            QStringList neighbors = graph->getNeighbors(genTerritory);
+            for (const QString &neighbor : neighbors) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+
+                // Check if this is an expansion target (unclaimed)
+                bool isUnclaimed = true;
+                for (Player *p : allPlayers) {
+                    if (p->ownsTerritory(neighbor)) {
+                        isUnclaimed = false;
+                        break;
+                    }
+                }
+
+                if (isUnclaimed) {
+                    // Check for enemy troops
+                    bool hasEnemyTroops = false;
+                    for (Player *p : allPlayers) {
+                        if (p == player) continue;
+                        if (!p->getPiecesAtTerritory(neighbor).isEmpty()) {
+                            hasEnemyTroops = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasEnemyTroops) {
+                        int score = effectiveRiskScore.value(neighbor, 200);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestDest = neighbor;
+                        }
+                    }
+                }
+            }
+
+            if (!bestDest.isEmpty()) {
+                // Collect stranded troops and go expand
+                assignment.targetTerritory = bestDest;
+                assignment.missionType = "ExpandWithTroops";
+                assignment.priority = bestScore;
+
+                // Gather stranded troop IDs (up to 5)
+                int troopsToTake = qMin(5, strandedHere);
+                for (int i = 0; i < availableTroops.size() && assignment.troopIds.size() < troopsToTake; i++) {
+                    const TroopInfo &troop = availableTroops[i];
+                    if (troop.territory == genTerritory &&
+                        !troop.assignedDestination.isEmpty() &&
+                        !assignedTroopIds.contains(troop.piece->getUniqueId())) {
+                        assignment.troopIds.append(troop.piece->getUniqueId());
+                        assignedTroopIds.insert(troop.piece->getUniqueId());
+                    }
+                }
+                assignment.troopsToTake = assignment.troopIds.size();
+
+                if (assignment.troopsToTake > 0) {
+                    assignment.reason = QString("Picking up %1 stranded troops and expanding to %2")
+                        .arg(assignment.troopsToTake).arg(bestDest);
+
+                    plan.assignments.append(assignment);
+                    assignedGenerals.insert(gen);
+                    plan.generalsUsed++;
+                    plan.totalTroopsDeployed += assignment.troopsToTake;
+
+                    qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                             << "picking up" << assignment.troopsToTake << "stranded troops -> expanding to" << bestDest;
+                    continue;
+                }
+            }
+        }
+
+        // No stranded troops or no valid destination - stay in place
+        assignment.targetTerritory = genTerritory;
         assignment.missionType = "StayHome";
         assignment.priority = 0;
-        assignment.troopsToTake = 0;
-        assignment.reason = "No troops to move";
+        assignment.reason = "Waiting for troops";
 
         plan.assignments.append(assignment);
-        qDebug() << "  General #" << gen->getNumber() << "staying at" << gen->getTerritoryName() << "(no stranded troops to pick up)";
+        qDebug() << "  General #" << gen->getNumber() << "staying at" << genTerritory << "(waiting for troops)";
     }
 
     // Sort by priority for execution
@@ -2415,7 +2999,7 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     return plan;
 }
 
-ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player *player, MapGraph *graph)
+ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player *player, const QList<Player*> &allPlayers, MapGraph *graph)
 {
     ScoredMove move;
 
@@ -2451,6 +3035,80 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
         }
 
         QString nextStep = targetTerritory;
+
+        // OPPORTUNISTIC EXPANSION: Even if target is adjacent, check for better unclaimed territories
+        // A general should always capture unclaimed land if it's right there!
+        int legionSize = assignment.troopsToTake;
+        if (legionSize >= 1) {
+            QString bestOpportunity;
+            int bestValue = 0;
+
+            for (const QString &neighbor : neighbors) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+                if (neighbor == targetTerritory) continue;  // Don't compare with our actual target
+
+                Territory territory = graph->getTerritory(neighbor);
+                if (territory.name.isEmpty()) continue;
+
+                // Check ownership using player methods
+                bool isOurs = player->ownsTerritory(neighbor);
+                bool isUnclaimed = !isOurs;
+
+                // Check if any other player owns it
+                for (Player *otherPlayer : allPlayers) {
+                    if (otherPlayer != player && otherPlayer->ownsTerritory(neighbor)) {
+                        isUnclaimed = false;
+                        break;
+                    }
+                }
+
+                bool isEnemy = !isOurs && !isUnclaimed;
+
+                if (isUnclaimed) {
+                    // Unclaimed territory - always worth capturing
+                    int value = territory.value;
+                    if (value > bestValue) {
+                        bestValue = value;
+                        bestOpportunity = neighbor;
+                    }
+                } else if (isEnemy) {
+                    // Enemy territory - check actual enemy strength before attacking!
+                    // Count enemy troops there
+                    int enemyTroops = 0;
+                    for (Player *p : allPlayers) {
+                        if (p == player) continue;
+                        for (GamePiece *piece : p->getPiecesAtTerritory(neighbor)) {
+                            if (piece->getType() == GamePiece::Type::Infantry ||
+                                piece->getType() == GamePiece::Type::Cavalry ||
+                                piece->getType() == GamePiece::Type::Catapult) {
+                                enemyTroops++;
+                            }
+                        }
+                    }
+
+                    // Only attack if we have significant advantage (+2 or +50%, whichever is more)
+                    int minAdvantage = qMax(2, (enemyTroops + 1) / 2);
+                    if (legionSize >= enemyTroops + minAdvantage) {
+                        int value = territory.value;
+                        if (value > bestValue) {
+                            bestValue = value;
+                            bestOpportunity = neighbor;
+                        }
+                    }
+                }
+            }
+
+            // Take the opportunity if it's higher value than our target (or target is already ours)
+            Territory targetTerr = graph->getTerritory(targetTerritory);
+            bool targetAlreadyOurs = player->ownsTerritory(targetTerritory);
+            int targetValue = targetTerr.value;
+
+            if (!bestOpportunity.isEmpty() && (targetAlreadyOurs || bestValue > targetValue)) {
+                qDebug() << "OPPORTUNISTIC EXPANSION: Capturing" << bestOpportunity
+                         << "(value=" << bestValue << ") instead of" << targetTerritory;
+                nextStep = bestOpportunity;
+            }
+        }
 
         if (!targetIsAdjacent) {
             // Target is 2+ moves away - find the best intermediate step
@@ -2491,14 +3149,45 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
                 }
                 nextStep = step;
                 qDebug() << "Multi-hop path: General needs to go through" << nextStep << "to reach" << targetTerritory;
-            } else {
-                // No land path found - check if target is reachable via galley
-                // The destination might be across the sea. If so, just set the target
-                // directly and let the execution layer figure out the galley route.
-                // The validation in aiMoveLeaderToTerritory will check getMovesForLeader
-                // which includes galley transport options.
-                qDebug() << "No land path from" << currentTerritory << "to" << targetTerritory << "- checking galley routes";
-                nextStep = targetTerritory;  // Try direct - galley might make it reachable
+            }
+
+            if (!found) {
+                // No land path found - check if galley is available at current territory
+                // Check for: 1) beached galley at this territory, 2) galley at sea in adjacent zone
+                bool hasGalleyAvailable = false;
+
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->hasTransportedThisTurn() ||
+                        galley->hasLeaderAboard() ||
+                        galley->getMovesRemaining() < 0.5) {
+                        continue;
+                    }
+
+                    // Check for BEACHED galley at this territory
+                    if (galley->isBeached() && galley->getTerritoryName() == currentTerritory) {
+                        hasGalleyAvailable = true;
+                        break;
+                    }
+
+                    // Check for galley at sea in adjacent zone
+                    QString galleyLocation = galley->getTerritoryName();
+                    if (!galley->isBeached() && graph->isSeaTerritory(galleyLocation)) {
+                        if (neighbors.contains(galleyLocation)) {
+                            hasGalleyAvailable = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (hasGalleyAvailable) {
+                    // Galley available - target might be reachable via sea
+                    qDebug() << "No land path from" << currentTerritory << "to" << targetTerritory << "- galley available for transport";
+                    nextStep = targetTerritory;  // Try direct - galley can make it reachable
+                } else {
+                    // No galley available - can't reach this target, skip this assignment
+                    qDebug() << "No land path from" << currentTerritory << "to" << targetTerritory << "- NO galley available, skipping";
+                    continue;
+                }
             }
         }
 

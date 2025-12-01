@@ -22,6 +22,7 @@ struct ReachInfo {
     double bestMovesRemaining = 0.0;        // Most moves remaining after arrival (best case)
     bool viaRoad = false;                   // Can be reached via road network
     bool viaGalley = false;                 // Can be reached via galley transport
+    int galleyId = -1;                      // Serial number of galley used (-1 if not via galley)
 };
 
 /**

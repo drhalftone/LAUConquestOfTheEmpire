@@ -3036,18 +3036,35 @@ void PlayerInfoWidget::disembarkFromGalley(GamePiece *leader, const QString &lan
 
     // Move troops to land
     QList<GamePiece*> piecesAtSea = player->getPiecesAtTerritory(seaTerritory);
+    qDebug() << "Disembark: Looking for troops at" << seaTerritory << "- found" << piecesAtSea.size() << "pieces";
+    qDebug() << "Disembark: Legion has" << legionIds.size() << "troop IDs:" << legionIds;
+
+    int troopsMoved = 0;
     for (GamePiece *piece : piecesAtSea) {
+        qDebug() << "  Piece at sea:" << piece->getUniqueId() << "type:" << static_cast<int>(piece->getType())
+                 << "in legion:" << legionIds.contains(piece->getUniqueId());
         if (legionIds.contains(piece->getUniqueId())) {
             piece->setTerritoryName(landTerritory);
             piece->clearGalley();
             piece->setMovesRemaining(0);  // Cannot move after disembarking
+            troopsMoved++;
+            qDebug() << "  -> Moved troop" << piece->getUniqueId() << "to" << landTerritory;
         }
     }
+    qDebug() << "Disembark: Moved" << troopsMoved << "troops to" << landTerritory;
 
     // Mark galley as having completed transport
     // Note: Disembarking does NOT cost galley movement - only troops pay the disembark cost
     galley->setTransportedThisTurn(true);
     galley->setLeaderAboard(0);
+
+    // Beach the galley at the land territory
+    // Save the current sea zone so the galley knows which direction it came from
+    // Note: isBeached() is computed from territory name - setting to land territory makes it beached
+    galley->setLastSeaZone(seaTerritory);
+    galley->setTerritoryName(landTerritory);
+    qDebug() << "Galley" << galley->getSerialNumber() << "beached at" << landTerritory
+             << "(lastSeaZone=" << galley->getLastSeaZone() << ", isBeached=" << galley->isBeached() << ")";
 
     // Check if there are enemies at the destination (combat will be triggered separately)
     bool hasEnemies = false;
@@ -5187,30 +5204,10 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
         return false;
     }
 
-    // Check if leader has troops when moving to unowned/enemy territory
-    // Generals CANNOT capture territory without troops
-    bool isGeneral = (leader->getType() == GamePiece::Type::General);
-    if (isGeneral) {
-        // Check if destination is owned by us
-        Player *owningPlayer = nullptr;
-        for (Player *p : m_players) {
-            if (p->getId() == leader->getPlayer()) {
-                owningPlayer = p;
-                break;
-            }
-        }
-
-        bool weOwnDestination = owningPlayer && owningPlayer->ownsTerritory(destinationTerritory);
-        if (!weOwnDestination) {
-            // Need troops to capture - check if general has troops in legion
-            GeneralPiece *general = static_cast<GeneralPiece*>(leader);
-            if (general->getLegion().isEmpty()) {
-                qDebug() << "AI Move: General" << general->getNumber() << "cannot move to unowned territory"
-                         << destinationTerritory << "without troops - aborting move";
-                return false;
-            }
-        }
-    }
+    // NOTE: We don't check if the general has troops here because troops are selected
+    // in the troop selection dialog (moveLeaderToTerritory, moveLeaderViaRoad, etc.)
+    // Those dialogs will correctly validate and cancel the move if no troops are selected
+    // for unowned/enemy territories.
 
     QString fromTerritory = leader->getTerritoryName();
     int movesBefore = leader->getMovesRemaining();
@@ -5222,7 +5219,40 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
     // Use appropriate movement method
     if (isViaGalley && galley) {
         // Galley transport - board galley, sail, and disembark
-        qDebug() << "AI Move: Using galley transport through" << seaZone;
+        // RULE: Leaders cannot move before boarding a galley!
+        // Check if leader has already moved this turn (moves < full moves)
+        double fullMoves = 2.0;  // Generals and Caesars have 2 moves
+        if (leader->getMovesRemaining() < fullMoves) {
+            qDebug() << "AI Move: Leader has already moved this turn (moves=" << leader->getMovesRemaining()
+                     << ") - cannot board galley. Skipping galley route.";
+            return false;
+        }
+
+        // seaZone now contains the DISEMBARK sea zone (where we land from)
+        // We need to determine the LAUNCH sea zone from the galley's facing
+        QString disembarkSeaZone = seaZone;
+        QString launchSeaZone;
+
+        if (galley->isBeached()) {
+            // For beached galley, use its last sea zone or find adjacent sea
+            if (galley->hasLastSeaZone()) {
+                launchSeaZone = galley->getLastSeaZone();
+            } else {
+                // Find an adjacent sea zone to launch into
+                QStringList leaderNeighbors = m_mapWidget->getGraph()->getNeighbors(fromTerritory);
+                for (const QString &neighbor : leaderNeighbors) {
+                    if (m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
+                        launchSeaZone = neighbor;
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Galley already at sea
+            launchSeaZone = galley->getTerritoryName();
+        }
+
+        qDebug() << "AI Move: Using galley transport - launch to" << launchSeaZone << ", disembark from" << disembarkSeaZone;
 
         // Find the player who owns this leader
         Player *player = nullptr;
@@ -5238,31 +5268,76 @@ bool PlayerInfoWidget::aiMoveLeaderToTerritory(GamePiece *leader, const QString 
             return false;
         }
 
-        // Board the galley (leader moves to sea zone with galley)
-        boardGalleyFromBeach(leader, galley, seaZone);
+        // Board the galley (leader moves to launch sea zone)
+        boardGalleyFromBeach(leader, galley, launchSeaZone);
 
-        // Move galley to destination's adjacent sea zone if needed
-        // For simplicity, we sail directly and disembark
-        // The galley may need to move to reach the destination
+        // Navigate galley from launch zone to disembark zone if they differ
+        // Use BFS to find path through connected sea zones
+        if (!disembarkSeaZone.isEmpty() && galley->getTerritoryName() != disembarkSeaZone) {
+            // BFS to find path from current position to disembark zone
+            QMap<QString, QString> cameFrom;
+            QList<QString> queue;
+            QString currentSeaZone = galley->getTerritoryName();
+            queue.append(currentSeaZone);
+            cameFrom[currentSeaZone] = "";
 
-        // Find the sea zone adjacent to destination
-        QStringList destNeighbors = m_mapWidget->getGraph()->getNeighbors(destinationTerritory);
-        QString destSeaZone;
-        for (const QString &neighbor : destNeighbors) {
-            if (m_mapWidget->getGraph()->isSeaTerritory(neighbor)) {
-                // Check if this sea zone is reachable from current galley position
-                // For now, we assume the galley BFS already validated this
-                destSeaZone = neighbor;
-                break;
+            bool found = false;
+            while (!queue.isEmpty() && !found) {
+                QString current = queue.takeFirst();
+                if (current == disembarkSeaZone) {
+                    found = true;
+                    break;
+                }
+                QStringList neighbors = m_mapWidget->getGraph()->getNeighbors(current);
+                for (const QString &neighbor : neighbors) {
+                    if (m_mapWidget->getGraph()->isSeaTerritory(neighbor) && !cameFrom.contains(neighbor)) {
+                        cameFrom[neighbor] = current;
+                        queue.append(neighbor);
+                    }
+                }
             }
-        }
 
-        // Move galley if needed (if not already adjacent to destination)
-        if (!destSeaZone.isEmpty() && galley->getTerritoryName() != destSeaZone) {
-            // Move galley to destination sea zone
-            galley->setLastTerritoryName(galley->getTerritoryName());
-            galley->setTerritoryName(destSeaZone);
-            galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+            // Trace path and move galley step by step
+            if (found) {
+                QList<QString> path;
+                QString step = disembarkSeaZone;
+                while (!step.isEmpty() && step != currentSeaZone) {
+                    path.prepend(step);
+                    step = cameFrom.value(step, "");
+                }
+
+                // Move through each sea zone in the path
+                for (const QString &nextSea : path) {
+                    if (galley->getMovesRemaining() < 1.0) {
+                        qDebug() << "AI Move: Galley ran out of moves before reaching disembark zone";
+                        break;
+                    }
+
+                    QString prevSea = galley->getTerritoryName();
+                    galley->setLastTerritoryName(prevSea);
+                    galley->setTerritoryName(nextSea);
+                    galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                    // Move leader and troops with the galley
+                    leader->setTerritoryName(nextSea);
+
+                    QList<int> legionIds;
+                    if (leader->getType() == GamePiece::Type::Caesar) {
+                        legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+                    } else if (leader->getType() == GamePiece::Type::General) {
+                        legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+                    }
+
+                    for (int troopId : legionIds) {
+                        GamePiece *troop = player->getPieceByUniqueId(troopId);
+                        if (troop && troop->getTerritoryName() == prevSea) {
+                            troop->setTerritoryName(nextSea);
+                        }
+                    }
+
+                    qDebug() << "Galley sailed from" << prevSea << "to" << nextSea;
+                }
+            }
         }
 
         // Disembark to destination
@@ -5465,14 +5540,21 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
             }
 
             // Found a usable galley - find all land territories it can reach
+            double movesAfterLaunch = galley->getMovesRemaining() - 1.0;  // Launching costs 1.0
             qDebug() << "  Found usable galley" << galley->getSerialNumber()
                      << (isBeached ? "beached at" : "at sea in") << galley->getTerritoryName()
-                     << "-> launching to" << galleySeaZone;
+                     << "-> launching to" << galleySeaZone
+                     << "with" << galley->getMovesRemaining() << "moves, after launch:" << movesAfterLaunch;
 
             // BFS through sea zones to find all reachable land territories
+            // Movement costs per GalleyMovement_Plan.md:
+            // - Launching from coast to sea = 1 movement
+            // - Moving between sea zones = 1 movement
+            // - Landing on coast = 1 movement
+            // With 2 movement points: Coast→Sea→Coast (lands adjacent) or Coast→Sea→Sea (can't land)
             QSet<QString> visitedSeas;
             QList<QPair<QString, double>> toVisit;
-            toVisit.append({galleySeaZone, galley->getMovesRemaining() - 0.5});  // Boarding costs 0.5
+            toVisit.append({galleySeaZone, movesAfterLaunch});
             visitedSeas.insert(galleySeaZone);
 
             while (!toVisit.isEmpty()) {
@@ -5490,7 +5572,11 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
                             toVisit.append({landNeighbor, remainingMoves - 1.0});
                         }
                     } else {
-                        // Land territory - can disembark here
+                        // Land territory - can disembark here if we have moves for landing
+                        // Landing costs 1 movement point
+                        if (remainingMoves < 1.0) {
+                            continue;  // Not enough moves to land
+                        }
                         // Skip if we're already at this territory
                         if (landNeighbor == territoryName) {
                             continue;
@@ -5512,7 +5598,9 @@ QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiec
                         option.destinationTerritory = landNeighbor;
                         option.isViaGalley = true;
                         option.galley = galley;
-                        option.seaZone = galleySeaZone;
+                        // Store the sea zone we'd DISEMBARK from (currentSea), not the launch zone
+                        // This is critical for proper navigation through connected sea zones
+                        option.seaZone = currentSea;
                         option.isViaRoad = false;
 
                         // Get territory info

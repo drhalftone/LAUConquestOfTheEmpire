@@ -153,7 +153,7 @@ public:
      * @param player The player (to check current general positions)
      * @return Next ScoredMove to execute, or invalid if plan complete
      */
-    ScoredMove getNextMoveFromPlan(const MovementPlan &plan, Player *player, MapGraph *graph);
+    ScoredMove getNextMoveFromPlan(const MovementPlan &plan, Player *player, const QList<Player*> &allPlayers, MapGraph *graph);
 
     // === Purchase Decision Methods ===
 

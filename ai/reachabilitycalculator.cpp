@@ -1,4 +1,5 @@
 #include "reachabilitycalculator.h"
+#include "moveenumerator.h"
 #include "../gamepiece.h"
 #include "../player.h"
 #include "../mapgraph.h"
@@ -261,51 +262,50 @@ QMap<QString, double> ReachabilityCalculator::getReachableByGalley(GamePiece *le
 
     QString leaderTerritory = leader->getTerritoryName();
 
-    // Find adjacent sea zones
-    QList<QString> neighbors = graph->getNeighbors(leaderTerritory);
-    for (const QString &seaZone : neighbors) {
-        if (!graph->isSeaTerritory(seaZone)) {
+    // Use MoveEnumerator to get galley destinations (single source of truth)
+    MoveEnumerator enumerator;
+
+    // Check for galleys BEACHED at the leader's territory
+    for (GalleyPiece *galley : player->getGalleys()) {
+        // Galley must be beached at the same land territory as the leader
+        if (galley->getTerritoryName() != leaderTerritory) {
             continue;
         }
 
-        // Check if player has a galley here that can transport
-        for (GalleyPiece *galley : player->getGalleys()) {
-            if (galley->getTerritoryName() == seaZone &&
-                !galley->hasTransportedThisTurn() &&
-                !galley->hasLeaderAboard() &&
-                galley->getMovesRemaining() >= 0.5) {
+        // Skip galleys that are at sea (can't board from land)
+        if (graph->isSeaTerritory(leaderTerritory)) {
+            continue;
+        }
 
-                // Found a galley - calculate where it can take us
-                double galleyMoves = galley->getMovesRemaining() - 0.5;  // Boarding costs 0.5
+        if (galley->hasTransportedThisTurn() ||
+            galley->hasLeaderAboard() ||
+            galley->getMovesRemaining() < 1.0) {
+            continue;
+        }
 
-                // BFS from galley position through sea zones
-                QSet<QString> visited;
-                QList<QPair<QString, double>> toVisit;
-                toVisit.append({seaZone, galleyMoves});
-                visited.insert(seaZone);
+        // Use MoveEnumerator to get all possible galley moves
+        GalleyMoveSet galleyMoves = enumerator.enumerateGalleyMoves(galley, graph);
 
-                while (!toVisit.isEmpty()) {
-                    auto [current, moves] = toVisit.takeFirst();
+        for (const GalleyMove &gm : galleyMoves.possibleMoves) {
+            QString dest = gm.endingTerritory();
 
-                    // Check land neighbors for disembark options
-                    QList<QString> seaNeighbors = graph->getNeighbors(current);
-                    for (const QString &neighbor : seaNeighbors) {
-                        if (!graph->isSeaTerritory(neighbor)) {
-                            // Land territory - can disembark here
-                            // Disembarking doesn't cost the leader extra moves
-                            double landMoves = leader->getMovesRemaining() - 1.0;  // Landing costs 1 leader move
-                            if (landMoves >= 0) {
-                                if (!results.contains(neighbor) || results[neighbor] < landMoves) {
-                                    results[neighbor] = landMoves;
-                                }
-                            }
-                        } else if (moves >= 1.0 && !visited.contains(neighbor)) {
-                            // Sea territory - galley can move here
-                            visited.insert(neighbor);
-                            toVisit.append({neighbor, moves - 1.0});
-                        }
-                    }
-                }
+            // Skip staying in place and returning to start
+            if (dest == leaderTerritory) {
+                continue;
+            }
+
+            // Skip sea zone destinations (we want land destinations for troops)
+            if (graph->isSeaTerritory(dest)) {
+                continue;
+            }
+
+            // Calculate moves remaining after landing
+            // The galley move uses galley's moves, but we track leader's remaining moves
+            // For simplicity, use 0.0 moves remaining after galley transport
+            double movesRemaining = 0.0;
+
+            if (!results.contains(dest) || results[dest] < movesRemaining) {
+                results[dest] = movesRemaining;
             }
         }
     }
@@ -561,10 +561,17 @@ QString ReachabilityCalculator::generateReport(Player *player, MapGraph *graph)
         report += "\n";
     }
 
-    // Galleys
+    // Galleys - only show galleys beached on land (troops can only board beached galleys)
     for (GalleyPiece *galley : player->getGalleys()) {
+        QString galleyTerritory = galley->getTerritoryName();
+
+        // Skip galleys at sea - they can't be boarded by troops
+        if (graph->isSeaTerritory(galleyTerritory)) {
+            continue;
+        }
+
         report += QString("GALLEY at %1 (%2 moves remaining)\n")
-            .arg(galley->getTerritoryName())
+            .arg(galleyTerritory)
             .arg(galley->getMovesRemaining(), 0, 'f', 1);
 
         int troopStrength = calculateTroopStrength(galley, player);
@@ -1318,34 +1325,19 @@ QMap<QString, int> ReachabilityCalculator::getEnemyThreatMap(Player *us, const Q
         return threatMap;
     }
 
-    // DEBUG: Monitor Italia specifically
-    const QString DEBUG_TERRITORY = "Italia";
-    qDebug() << "=== getEnemyThreatMap for player" << us->getId() << "(turnMultiplier=" << turnMultiplier << ") ===";
-
     for (Player *player : allPlayers) {
         if (player == us) continue;  // Skip self
-
-        qDebug() << "  Checking enemy player" << player->getId();
 
         // Count current enemy troop positions
         QMap<QString, int> currentTroops;
         for (InfantryPiece *inf : player->getInfantry()) {
             currentTroops[inf->getTerritoryName()]++;
-            if (inf->getTerritoryName() == DEBUG_TERRITORY) {
-                qDebug() << "    [ITALIA] Enemy infantry at Italia";
-            }
         }
         for (CavalryPiece *cav : player->getCavalry()) {
             currentTroops[cav->getTerritoryName()]++;
-            if (cav->getTerritoryName() == DEBUG_TERRITORY) {
-                qDebug() << "    [ITALIA] Enemy cavalry at Italia";
-            }
         }
         for (CatapultPiece *cat : player->getCatapults()) {
             currentTroops[cat->getTerritoryName()]++;
-            if (cat->getTerritoryName() == DEBUG_TERRITORY) {
-                qDebug() << "    [ITALIA] Enemy catapult at Italia";
-            }
         }
 
         // Add current positions to threat map
@@ -1356,24 +1348,6 @@ QMap<QString, int> ReachabilityCalculator::getEnemyThreatMap(Player *us, const Q
         // Get territories this enemy can reach (with turnMultiplier)
         QMap<QString, ReachInfo> enemyReach = getAllReachable(player, graph, turnMultiplier);
 
-        // DEBUG: Check if Italia is reachable
-        if (enemyReach.contains(DEBUG_TERRITORY)) {
-            const ReachInfo &info = enemyReach[DEBUG_TERRITORY];
-            qDebug() << "    [ITALIA] Enemy player" << player->getId() << "CAN REACH Italia:";
-            qDebug() << "      - maxTroopStrength (TROOPS ONLY):" << info.maxTroopStrength;
-            qDebug() << "      - leadersWhoCanReach:" << info.leadersWhoCanReach.size();
-            qDebug() << "      - viaRoad:" << info.viaRoad << "viaGalley:" << info.viaGalley;
-            for (GamePiece *leader : info.leadersWhoCanReach) {
-                // Calculate troops this specific leader could bring
-                int leaderTroops = calculateTroopStrength(leader, player, 0.0, turnMultiplier);
-                qDebug() << "        Leader at:" << leader->getTerritoryName()
-                         << "type:" << static_cast<int>(leader->getType())
-                         << "troops at same location:" << leaderTroops;
-            }
-        } else {
-            qDebug() << "    [ITALIA] Enemy player" << player->getId() << "CANNOT reach Italia";
-        }
-
         // Only add to threat map if there are actual TROOPS that can reach
         // (leaders alone don't count as threat - they can't fight without troops)
         for (auto it = enemyReach.begin(); it != enemyReach.end(); ++it) {
@@ -1383,9 +1357,6 @@ QMap<QString, int> ReachabilityCalculator::getEnemyThreatMap(Player *us, const Q
             }
         }
     }
-
-    // DEBUG: Final threat level for Italia
-    qDebug() << "  [ITALIA] FINAL threat level:" << threatMap.value(DEBUG_TERRITORY, 0);
 
     return threatMap;
 }

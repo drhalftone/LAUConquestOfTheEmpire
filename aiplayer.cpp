@@ -459,7 +459,7 @@ void AIPlayer::executeMovementPhaseRiskBased()
     }
 
     // Get the next move from the plan (not greedy per-move scoring)
-    ScoredMove bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, graph);
+    ScoredMove bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, allPlayers, graph);
 
     if (!bestMove.isValid()) {
         // Check if any generals still have moves remaining
@@ -491,17 +491,178 @@ void AIPlayer::executeMovementPhaseRiskBased()
             }
 
             // Try to get a move from the new plan
-            bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, graph);
+            bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, allPlayers, graph);
         }
 
         if (!bestMove.isValid()) {
-            log("No valid moves available - ending turn");
+            log("No valid general moves available - checking for idle galleys...");
             for (GeneralPiece *gen : m_player->getGenerals()) {
                 log(QString("  General #%1 at %2: %3 moves remaining")
                     .arg(gen->getNumber())
                     .arg(gen->getTerritoryName())
                     .arg(gen->getMovesRemaining()));
             }
+
+            // === IDLE GALLEY RETURN-HOME LOGIC ===
+            // Check for idle beached galleys that should sail back toward home
+            // An idle galley is: beached, no leader aboard, has moves, not at home
+            QString homeProvince = m_player->getHomeProvinceName();
+            bool movedGalley = false;
+
+            for (GalleyPiece *galley : m_player->getGalleys()) {
+                if (!galley->isBeached()) continue;  // Only handle beached galleys
+                if (galley->hasLeaderAboard()) continue;  // Leader will handle this galley
+                if (galley->getMovesRemaining() < 1.0) continue;  // No moves left
+                if (galley->hasTransportedThisTurn()) continue;  // Already used this turn
+
+                QString galleyTerritory = galley->getTerritoryName();
+
+                // Skip if already at home province
+                if (galleyTerritory == homeProvince) {
+                    log(QString("Galley %1 already at home province %2")
+                        .arg(galley->getSerialNumber()).arg(homeProvince));
+                    continue;
+                }
+
+                // Find adjacent sea zones to launch from
+                QStringList neighbors = graph->getNeighbors(galleyTerritory);
+                QString launchSeaZone;
+
+                // Prefer the galley's last sea zone if still adjacent
+                if (galley->hasLastSeaZone() && neighbors.contains(galley->getLastSeaZone())) {
+                    launchSeaZone = galley->getLastSeaZone();
+                } else {
+                    // Find any adjacent sea zone
+                    for (const QString &neighbor : neighbors) {
+                        if (graph->isSeaTerritory(neighbor)) {
+                            launchSeaZone = neighbor;
+                            break;
+                        }
+                    }
+                }
+
+                if (launchSeaZone.isEmpty()) {
+                    log(QString("Galley %1 at %2 has no adjacent sea zone to launch from")
+                        .arg(galley->getSerialNumber()).arg(galleyTerritory));
+                    continue;
+                }
+
+                // Find sea zones adjacent to home province (destinations we want to reach)
+                QStringList homeNeighbors = graph->getNeighbors(homeProvince);
+                QSet<QString> homeSeaZones;
+                for (const QString &neighbor : homeNeighbors) {
+                    if (graph->isSeaTerritory(neighbor)) {
+                        homeSeaZones.insert(neighbor);
+                    }
+                }
+
+                if (homeSeaZones.isEmpty()) {
+                    log(QString("Home province %1 has no adjacent sea zones - galley cannot sail home")
+                        .arg(homeProvince));
+                    continue;
+                }
+
+                // BFS from launch zone to find path to any home sea zone
+                QMap<QString, QString> cameFrom;
+                QList<QString> queue;
+                queue.append(launchSeaZone);
+                cameFrom[launchSeaZone] = galleyTerritory;  // Came from land
+
+                QString targetSeaZone;
+                bool found = false;
+
+                while (!queue.isEmpty() && !found) {
+                    QString current = queue.takeFirst();
+
+                    if (homeSeaZones.contains(current)) {
+                        targetSeaZone = current;
+                        found = true;
+                        break;
+                    }
+
+                    for (const QString &neighbor : graph->getNeighbors(current)) {
+                        if (graph->isSeaTerritory(neighbor) && !cameFrom.contains(neighbor)) {
+                            cameFrom[neighbor] = current;
+                            queue.append(neighbor);
+                        }
+                    }
+                }
+
+                if (!found) {
+                    log(QString("Galley %1 cannot find sea route from %2 to home")
+                        .arg(galley->getSerialNumber()).arg(launchSeaZone));
+                    continue;
+                }
+
+                // Trace path and find how far we can sail this turn
+                QList<QString> path;
+                QString step = targetSeaZone;
+                while (!step.isEmpty() && step != galleyTerritory) {
+                    path.prepend(step);
+                    step = cameFrom.value(step, "");
+                }
+
+                log(QString("Galley %1 at %2 sailing toward home via: %3")
+                    .arg(galley->getSerialNumber())
+                    .arg(galleyTerritory)
+                    .arg(path.join(" -> ")));
+
+                // Launch galley to first sea zone (costs 1 move)
+                galley->setLastTerritoryName(galleyTerritory);
+                galley->setLastSeaZone("");  // Clear - we're leaving this shore
+                galley->setTerritoryName(path.first());
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                log(QString("  Launched to %1 (moves remaining: %2)")
+                    .arg(path.first()).arg(galley->getMovesRemaining()));
+
+                // Continue sailing through path while we have moves
+                for (int i = 1; i < path.size() && galley->getMovesRemaining() >= 1.0; i++) {
+                    QString prevSea = galley->getTerritoryName();
+                    QString nextSea = path[i];
+
+                    galley->setLastTerritoryName(prevSea);
+                    galley->setTerritoryName(nextSea);
+                    galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                    log(QString("  Sailed to %1 (moves remaining: %2)")
+                        .arg(nextSea).arg(galley->getMovesRemaining()));
+                }
+
+                // If we're adjacent to home and have a move left, beach at home
+                QString currentSeaZone = galley->getTerritoryName();
+                if (homeSeaZones.contains(currentSeaZone) && galley->getMovesRemaining() >= 1.0) {
+                    galley->setLastSeaZone(currentSeaZone);
+                    galley->setTerritoryName(homeProvince);
+                    galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                    log(QString("  Beached at home province %1!").arg(homeProvince));
+                } else {
+                    // Beach at any adjacent land territory if we can't make it home
+                    // This prevents galley from being stuck at sea
+                    for (const QString &neighbor : graph->getNeighbors(currentSeaZone)) {
+                        if (!graph->isSeaTerritory(neighbor) && m_player->ownsTerritory(neighbor)) {
+                            galley->setLastSeaZone(currentSeaZone);
+                            galley->setTerritoryName(neighbor);
+                            // Don't consume move for beaching - galley will try again next turn
+                            log(QString("  Beached at %1 (will continue home next turn)").arg(neighbor));
+                            break;
+                        }
+                    }
+                }
+
+                movedGalley = true;
+            }
+
+            if (movedGalley) {
+                // Galleys moved - refresh the map and continue phase
+                if (m_mapWidget) {
+                    m_mapWidget->update();
+                }
+                // Don't end turn yet - there might be more to do next iteration
+                // But consume one iteration to prevent infinite loop
+            }
+
             executeEndTurn();
             return;
         }
@@ -510,6 +671,122 @@ void AIPlayer::executeMovementPhaseRiskBased()
     // Check if the move has a positive score
     if (bestMove.score <= 0) {
         log(QString("Best move has non-positive score (%1) - reason: %2").arg(bestMove.score).arg(bestMove.reason));
+
+        // Before ending, check for idle galleys that should return home
+        // (Same logic as above, but for when moves have non-positive scores)
+        QString homeProvince = m_player->getHomeProvinceName();
+
+        for (GalleyPiece *galley : m_player->getGalleys()) {
+            if (!galley->isBeached()) continue;
+            if (galley->hasLeaderAboard()) continue;
+            if (galley->getMovesRemaining() < 1.0) continue;
+            if (galley->hasTransportedThisTurn()) continue;
+
+            QString galleyTerritory = galley->getTerritoryName();
+            if (galleyTerritory == homeProvince) continue;
+
+            // Find adjacent sea zone
+            QStringList neighbors = graph->getNeighbors(galleyTerritory);
+            QString launchSeaZone;
+            if (galley->hasLastSeaZone() && neighbors.contains(galley->getLastSeaZone())) {
+                launchSeaZone = galley->getLastSeaZone();
+            } else {
+                for (const QString &neighbor : neighbors) {
+                    if (graph->isSeaTerritory(neighbor)) {
+                        launchSeaZone = neighbor;
+                        break;
+                    }
+                }
+            }
+
+            if (launchSeaZone.isEmpty()) continue;
+
+            // Find path to home
+            QStringList homeNeighbors = graph->getNeighbors(homeProvince);
+            QSet<QString> homeSeaZones;
+            for (const QString &neighbor : homeNeighbors) {
+                if (graph->isSeaTerritory(neighbor)) {
+                    homeSeaZones.insert(neighbor);
+                }
+            }
+
+            if (homeSeaZones.isEmpty()) continue;
+
+            // BFS to home
+            QMap<QString, QString> cameFrom;
+            QList<QString> queue;
+            queue.append(launchSeaZone);
+            cameFrom[launchSeaZone] = galleyTerritory;
+
+            QString targetSeaZone;
+            bool found = false;
+
+            while (!queue.isEmpty() && !found) {
+                QString current = queue.takeFirst();
+                if (homeSeaZones.contains(current)) {
+                    targetSeaZone = current;
+                    found = true;
+                    break;
+                }
+                for (const QString &neighbor : graph->getNeighbors(current)) {
+                    if (graph->isSeaTerritory(neighbor) && !cameFrom.contains(neighbor)) {
+                        cameFrom[neighbor] = current;
+                        queue.append(neighbor);
+                    }
+                }
+            }
+
+            if (!found) continue;
+
+            // Build path
+            QList<QString> path;
+            QString step = targetSeaZone;
+            while (!step.isEmpty() && step != galleyTerritory) {
+                path.prepend(step);
+                step = cameFrom.value(step, "");
+            }
+
+            log(QString("Galley %1 returning home: %2 -> %3")
+                .arg(galley->getSerialNumber())
+                .arg(galleyTerritory)
+                .arg(path.join(" -> ")));
+
+            // Launch
+            galley->setLastTerritoryName(galleyTerritory);
+            galley->setLastSeaZone("");
+            galley->setTerritoryName(path.first());
+            galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+            // Sail
+            for (int i = 1; i < path.size() && galley->getMovesRemaining() >= 1.0; i++) {
+                galley->setLastTerritoryName(galley->getTerritoryName());
+                galley->setTerritoryName(path[i]);
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+            }
+
+            // Beach at home if possible
+            QString currentSeaZone = galley->getTerritoryName();
+            if (homeSeaZones.contains(currentSeaZone) && galley->getMovesRemaining() >= 1.0) {
+                galley->setLastSeaZone(currentSeaZone);
+                galley->setTerritoryName(homeProvince);
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+                log(QString("  Galley beached at home!"));
+            } else {
+                for (const QString &neighbor : graph->getNeighbors(currentSeaZone)) {
+                    if (!graph->isSeaTerritory(neighbor) && m_player->ownsTerritory(neighbor)) {
+                        galley->setLastSeaZone(currentSeaZone);
+                        galley->setTerritoryName(neighbor);
+                        log(QString("  Galley beached at %1").arg(neighbor));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+
         executeEndTurn();
         return;
     }
@@ -522,6 +799,44 @@ void AIPlayer::executeMovementPhaseRiskBased()
             executeMovementPhaseRiskBased();
         });
         return;
+    }
+
+    // CRITICAL CHECK: If moving to enemy/unclaimed territory, verify troops can follow!
+    // Generals cannot capture territory without troops. If all infantry already moved
+    // (0 moves remaining), the general shouldn't try to capture.
+    bool weOwnDestination = m_player->ownsTerritory(bestMove.destination);
+    bool hasEnemiesAtDestination = m_infoWidget->hasEnemyPiecesAt(bestMove.destination, m_player);
+
+    if (!weOwnDestination || hasEnemiesAtDestination) {
+        // Need troops to capture or fight - check if any troops can follow
+        QString currentTerritory = bestMove.leader->getTerritoryName();
+        QList<GamePiece*> troopsHere = m_player->getPiecesAtTerritory(currentTerritory);
+        bool hasTroopsWithMoves = false;
+
+        for (GamePiece *piece : troopsHere) {
+            if ((piece->getType() == GamePiece::Type::Infantry ||
+                 piece->getType() == GamePiece::Type::Cavalry ||
+                 piece->getType() == GamePiece::Type::Catapult) &&
+                piece->getMovesRemaining() > 0) {
+                hasTroopsWithMoves = true;
+                break;
+            }
+        }
+
+        if (!hasTroopsWithMoves) {
+            // Determine if it's a combat or capture situation
+            QString situation = hasEnemiesAtDestination ? "combat" : "unclaimed/enemy territory";
+            log(QString("SKIPPING MOVE: %1 would enter %2 at %3 but NO troops can follow (all exhausted)")
+                .arg(bestMove.leader->getSerialNumber())
+                .arg(situation)
+                .arg(bestMove.destination));
+            // Consume this general's moves to prevent infinite loop
+            bestMove.leader->setMovesRemaining(0);
+            scheduleNextAction([this]() {
+                executeMovementPhaseRiskBased();
+            });
+            return;
+        }
     }
 
     // Log the decision
@@ -1486,8 +1801,9 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
                 plannedTroops = assignment.troopsToTake;
                 plannedTroopIds = assignment.troopIds;
                 missionType = assignment.missionType;
-                log(QString("Legion Building: %1 has PLANNED assignment: %2 troops for %3")
-                    .arg(leaderName).arg(plannedTroops).arg(missionType));
+                log(QString("Legion Building: %1 has PLANNED assignment: %2 troops for %3, troopIds=%4")
+                    .arg(leaderName).arg(plannedTroops).arg(missionType)
+                    .arg(QDebug::toString(plannedTroopIds)));
                 break;
             }
         }
@@ -1507,7 +1823,7 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<Game
         hasPlannedAssignment = false;  // Fall through to quota system below
     }
 
-    if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend")) {
+    if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend" || missionType == "PickupTroops")) {
         // DEBUG: Log what's in currentLegion vs availableTroops
         log(QString("Legion Building: %1 has currentLegion with %2 troops: %3")
             .arg(leaderName).arg(currentLegion.size()).arg(QDebug::toString(currentLegion)));

@@ -36,6 +36,29 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     m_attackingPieces = m_attackingPlayer->getPiecesAtTerritory(combatTerritoryName);
     m_defendingPieces = m_defendingPlayer->getPiecesAtTerritory(combatTerritoryName);
 
+    // For LAND combat, remove beached galleys - per rules:
+    // "Galleys on shore which brought land units into a province never count for land combat purposes"
+    bool isLandCombat = !m_mapWidget->getGraph()->isSeaTerritory(combatTerritoryName);
+    if (isLandCombat) {
+        // Filter out galleys from attacking pieces
+        QList<GamePiece*> filteredAttacking;
+        for (GamePiece *piece : m_attackingPieces) {
+            if (piece->getType() != GamePiece::Type::Galley) {
+                filteredAttacking.append(piece);
+            }
+        }
+        m_attackingPieces = filteredAttacking;
+
+        // Filter out galleys from defending pieces
+        QList<GamePiece*> filteredDefending;
+        for (GamePiece *piece : m_defendingPieces) {
+            if (piece->getType() != GamePiece::Type::Galley) {
+                filteredDefending.append(piece);
+            }
+        }
+        m_defendingPieces = filteredDefending;
+    }
+
     // Check if defender has any troops (not just leaders)
     bool defenderHasTroops = false;
     for (GamePiece *piece : m_defendingPieces) {
@@ -1314,15 +1337,19 @@ bool CombatDialog::checkCombatEnd()
     bool attackerHasTroops = !m_attackingTroopButtons.isEmpty();
     bool defenderHasTroops = !m_defendingTroopButtons.isEmpty();
 
-    // Also check for galleys - generals on galleys are protected until the galley is sunk
-    bool attackerHasGalleys = !m_attackingGalleyButtons.isEmpty();
-    bool defenderHasGalleys = !m_defendingGalleyButtons.isEmpty();
+    // Check if this is sea combat - galleys only count in sea combat
+    // Per rules: "Galleys on shore which brought land units into a province never count for land combat purposes"
+    bool isSeaCombat = m_mapWidget->getGraph() && m_mapWidget->getGraph()->isSeaTerritory(m_combatTerritoryName);
 
-    qDebug() << "Attacker has troops:" << attackerHasTroops << "galleys:" << attackerHasGalleys;
+    // Galleys only matter for sea combat - in land combat, beached galleys don't participate
+    bool attackerHasGalleys = isSeaCombat && !m_attackingGalleyButtons.isEmpty();
+    bool defenderHasGalleys = isSeaCombat && !m_defendingGalleyButtons.isEmpty();
+
+    qDebug() << "Attacker has troops:" << attackerHasTroops << "galleys:" << attackerHasGalleys << "(sea combat:" << isSeaCombat << ")";
     qDebug() << "Defender has troops:" << defenderHasTroops << "galleys:" << defenderHasGalleys;
 
-    // Defender is only defeated when they have no troops AND no galleys
-    // (Generals on galleys are protected by the galley)
+    // Defender is only defeated when they have no troops AND no galleys (galleys only count in sea combat)
+    // In land combat, defender is defeated when they have no troops - galleys don't protect them
     if (!defenderHasTroops && !defenderHasGalleys) {
         qDebug() << "Defender defeated - processing victory";
 
