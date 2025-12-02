@@ -512,41 +512,52 @@ GalleyMoveSet MoveEnumerator::enumerateGalleyMoves(GamePiece *galley, MapGraph *
             }
         }
     } else {
-        // Beached on land - first move must be to the sea zone the galley came from
-        // (galley remembers which sea zone it beached from via lastSeaZone)
+        // Beached on land - can launch into the lastSeaZone or any sea zone that shares the beach
+        // Neighbors are stored in clockwise order, so consecutive sea zones share a beach
         GalleyPiece *galleyPiece = qobject_cast<GalleyPiece*>(galley);
-        QString sea1 = galleyPiece ? galleyPiece->getLastSeaZone() : QString();
+        QString lastSeaZone = galleyPiece ? galleyPiece->getLastSeaZone() : QString();
 
-        if (sea1.isEmpty()) {
-            // No last sea zone recorded - galley can't move
+        if (lastSeaZone.isEmpty()) {
+            // No last sea zone recorded - galley can't move (shouldn't happen for valid beach)
             return result;
         }
 
-        // Move 1 only (stay at sea1 for move 2)
-        if (movesRemaining >= 0.5) {
-            GalleyMove gm;
-            gm.galley = galley;
-            gm.transition1.source = result.startTerritory;
-            gm.transition1.sink = sea1;
-            gm.transition2.source = sea1;
-            gm.transition2.sink = sea1;
-            result.possibleMoves.append(gm);
+        // Get all sea zones that share this beach (consecutive in clockwise neighbor order)
+        QList<QString> adjacentSeas = graph->getConnectedBeachSeaZones(result.startTerritory, lastSeaZone);
+
+        if (adjacentSeas.isEmpty()) {
+            // Fallback to just lastSeaZone if something went wrong
+            adjacentSeas.append(lastSeaZone);
         }
 
-        // Move 2: from sea1, can EITHER go to adjacent sea OR beach on adjacent land
-        // (landing costs a move, so can't go sea->sea->land in one turn)
-        if (movesRemaining >= 1.5) {
-            QList<QString> neighbors2 = graph->getNeighbors(sea1);
-            for (const QString &dest2 : neighbors2) {
-                if (dest2 == result.startTerritory) continue;  // Don't return to starting land
-                if (graph->isSeaTerritory(dest2) || graph->isLandTerritory(dest2)) {
-                    GalleyMove gm;
-                    gm.galley = galley;
-                    gm.transition1.source = result.startTerritory;
-                    gm.transition1.sink = sea1;
-                    gm.transition2.source = sea1;
-                    gm.transition2.sink = dest2;
-                    result.possibleMoves.append(gm);
+        // Enumerate possible moves from each accessible sea zone
+        for (const QString &sea1 : adjacentSeas) {
+            // Move 1 only (stay at sea1 for move 2)
+            if (movesRemaining >= 0.5) {
+                GalleyMove gm;
+                gm.galley = galley;
+                gm.transition1.source = result.startTerritory;
+                gm.transition1.sink = sea1;
+                gm.transition2.source = sea1;
+                gm.transition2.sink = sea1;
+                result.possibleMoves.append(gm);
+            }
+
+            // Move 2: from sea1, can EITHER go to adjacent sea OR beach on adjacent land
+            // (landing costs a move, so can't go sea->sea->land in one turn)
+            if (movesRemaining >= 1.5) {
+                QList<QString> neighbors2 = graph->getNeighbors(sea1);
+                for (const QString &dest2 : neighbors2) {
+                    if (dest2 == result.startTerritory) continue;  // Don't return to starting land
+                    if (graph->isSeaTerritory(dest2) || graph->isLandTerritory(dest2)) {
+                        GalleyMove gm;
+                        gm.galley = galley;
+                        gm.transition1.source = result.startTerritory;
+                        gm.transition1.sink = sea1;
+                        gm.transition2.source = sea1;
+                        gm.transition2.sink = dest2;
+                        result.possibleMoves.append(gm);
+                    }
                 }
             }
         }
@@ -1335,6 +1346,91 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
         }
     }
 
+    // Count troops that could board beached galleys and travel to destinations
+    // Beached galley can: load troops (free) -> launch to sea (1 move) -> continue (1 move)
+    if (player) {
+        for (const GalleyMoveSet &gms : galleyMoveSets) {
+            if (!gms.galley) continue;
+            if (!gms.isBeached) continue;  // Only process beached galleys
+
+            GalleyPiece *galley = qobject_cast<GalleyPiece*>(gms.galley);
+            if (!galley) continue;
+            if (galley->hasLeaderAboard()) continue;  // Already has troops - handled elsewhere
+
+            QString beachTerritory = gms.startTerritory;
+
+            // Check if there's a general at this beach territory who could board
+            bool hasAvailableGeneral = false;
+            for (CaesarPiece *caesar : player->getCaesars()) {
+                if (caesar->getTerritoryName() == beachTerritory && caesar->getMovesRemaining() >= 1.0) {
+                    hasAvailableGeneral = true;
+                    break;
+                }
+            }
+            if (!hasAvailableGeneral) {
+                for (GeneralPiece *general : player->getGenerals()) {
+                    if (general->getTerritoryName() == beachTerritory && general->getMovesRemaining() >= 1.0) {
+                        hasAvailableGeneral = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasAvailableGeneral) continue;
+
+            // Count troops at this beach territory that could board
+            int infantryCount = 0;
+            int cavalryCount = 0;
+            int catapultCount = 0;
+
+            for (InfantryPiece *inf : player->getInfantry()) {
+                if (inf->getTerritoryName() == beachTerritory && inf->getMovesRemaining() >= 1.0) {
+                    infantryCount++;
+                }
+            }
+            for (CavalryPiece *cav : player->getCavalry()) {
+                if (cav->getTerritoryName() == beachTerritory && cav->getMovesRemaining() >= 1.0) {
+                    cavalryCount++;
+                }
+            }
+            for (CatapultPiece *cat : player->getCatapults()) {
+                if (cat->getTerritoryName() == beachTerritory && cat->getMovesRemaining() >= 1.0) {
+                    catapultCount++;
+                }
+            }
+
+            if (infantryCount == 0 && cavalryCount == 0 && catapultCount == 0) continue;
+
+            // Get all destinations the galley can reach (sea and land)
+            QSet<QString> landDestinations;
+            QSet<QString> seaDestinations;
+
+            for (const GalleyMove &gm : gms.possibleMoves) {
+                QString troopDest = gm.troopDestination();
+                QString galleyDest = gm.endingTerritory();
+
+                if (!troopDest.startsWith("Mare") && !troopDest.startsWith("Oceanus")) {
+                    landDestinations.insert(troopDest);
+                }
+                if (galleyDest.startsWith("Mare") || galleyDest.startsWith("Oceanus")) {
+                    seaDestinations.insert(galleyDest);
+                }
+            }
+
+            // Add troops to each reachable destination
+            for (const QString &territory : landDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
+            for (const QString &territory : seaDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
+        }
+    }
+
     // Count galleys at sea that can reach each territory
     // For land: galleys that can beach there
     // For sea: galleys that can sail there
@@ -1349,6 +1445,77 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
 
         for (const QString &territory : reachable) {
             result[territory].galleysAtSea++;
+        }
+    }
+
+    // Count troops that could be picked up by empty galleys at sea
+    // Galley at sea with 2+ moves can: beach (1 move) -> load troops (free) -> return to sea (1 move)
+    // Troops end up at the sea zone the galley came from
+    if (player) {
+        for (const GalleyMoveSet &gms : galleyMoveSets) {
+            if (!gms.galley) continue;
+            if (gms.isBeached) continue;  // Only process galleys at sea
+
+            GalleyPiece *galley = qobject_cast<GalleyPiece*>(gms.galley);
+            if (!galley) continue;
+            if (galley->hasLeaderAboard()) continue;  // Skip galleys that already have troops
+            if (galley->getMovesRemaining() < 2.0) continue;  // Need 2 moves for beach-load-return
+
+            QString seaZone = gms.startTerritory;
+
+            // Find land territories adjacent to this sea zone where galley could beach
+            for (const GalleyMove &gm : gms.possibleMoves) {
+                QString beachTerritory = gm.endingTerritory();
+                // Only consider moves that end on land (beaching)
+                if (beachTerritory.startsWith("Mare") || beachTerritory.startsWith("Oceanus")) continue;
+
+                // Check if there's a general with full moves at this beach territory
+                bool hasAvailableGeneral = false;
+                for (CaesarPiece *caesar : player->getCaesars()) {
+                    if (caesar->getTerritoryName() == beachTerritory && caesar->getMovesRemaining() >= 2.0) {
+                        hasAvailableGeneral = true;
+                        break;
+                    }
+                }
+                if (!hasAvailableGeneral) {
+                    for (GeneralPiece *general : player->getGenerals()) {
+                        if (general->getTerritoryName() == beachTerritory && general->getMovesRemaining() >= 2.0) {
+                            hasAvailableGeneral = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!hasAvailableGeneral) continue;
+
+                // Count troops with full moves at this beach territory
+                int infantryCount = 0;
+                int cavalryCount = 0;
+                int catapultCount = 0;
+
+                for (InfantryPiece *inf : player->getInfantry()) {
+                    if (inf->getTerritoryName() == beachTerritory && inf->getMovesRemaining() >= 1.0) {
+                        infantryCount++;
+                    }
+                }
+                for (CavalryPiece *cav : player->getCavalry()) {
+                    if (cav->getTerritoryName() == beachTerritory && cav->getMovesRemaining() >= 2.0) {
+                        cavalryCount++;
+                    }
+                }
+                for (CatapultPiece *cat : player->getCatapults()) {
+                    if (cat->getTerritoryName() == beachTerritory && cat->getMovesRemaining() >= 1.0) {
+                        catapultCount++;
+                    }
+                }
+
+                // These troops could end up at the sea zone after pickup
+                if (infantryCount > 0 || cavalryCount > 0 || catapultCount > 0) {
+                    result[seaZone].infantry += infantryCount;
+                    result[seaZone].cavalry += cavalryCount;
+                    result[seaZone].catapults += catapultCount;
+                }
+            }
         }
     }
 
@@ -1505,6 +1672,91 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
         }
     }
 
+    // Count troops that could board beached galleys and travel to destinations
+    // Beached galley can: load troops (free) -> launch to sea (1 move) -> continue (1 move)
+    if (player) {
+        for (const GalleyMoveSet2Turn &gms : galleyMoveSets) {
+            if (!gms.galley) continue;
+            if (!gms.isBeached) continue;  // Only process beached galleys
+
+            GalleyPiece *galley = qobject_cast<GalleyPiece*>(gms.galley);
+            if (!galley) continue;
+            if (galley->hasLeaderAboard()) continue;  // Already has troops - handled elsewhere
+
+            QString beachTerritory = gms.startTerritory;
+
+            // Check if there's a general at this beach territory who could board
+            bool hasAvailableGeneral = false;
+            for (CaesarPiece *caesar : player->getCaesars()) {
+                if (caesar->getTerritoryName() == beachTerritory && caesar->getMovesRemaining() >= 1.0) {
+                    hasAvailableGeneral = true;
+                    break;
+                }
+            }
+            if (!hasAvailableGeneral) {
+                for (GeneralPiece *general : player->getGenerals()) {
+                    if (general->getTerritoryName() == beachTerritory && general->getMovesRemaining() >= 1.0) {
+                        hasAvailableGeneral = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasAvailableGeneral) continue;
+
+            // Count troops at this beach territory that could board
+            int infantryCount = 0;
+            int cavalryCount = 0;
+            int catapultCount = 0;
+
+            for (InfantryPiece *inf : player->getInfantry()) {
+                if (inf->getTerritoryName() == beachTerritory && inf->getMovesRemaining() >= 1.0) {
+                    infantryCount++;
+                }
+            }
+            for (CavalryPiece *cav : player->getCavalry()) {
+                if (cav->getTerritoryName() == beachTerritory && cav->getMovesRemaining() >= 1.0) {
+                    cavalryCount++;
+                }
+            }
+            for (CatapultPiece *cat : player->getCatapults()) {
+                if (cat->getTerritoryName() == beachTerritory && cat->getMovesRemaining() >= 1.0) {
+                    catapultCount++;
+                }
+            }
+
+            if (infantryCount == 0 && cavalryCount == 0 && catapultCount == 0) continue;
+
+            // Get all destinations the galley can reach in 2 turns (sea and land)
+            QSet<QString> landDestinations;
+            QSet<QString> seaDestinations;
+
+            for (const GalleyMove2Turn &gm : gms.possibleMoves) {
+                QString troopDest = gm.troopDestination();
+                QString galleyDest = gm.endingTerritory();
+
+                if (!troopDest.startsWith("Mare") && !troopDest.startsWith("Oceanus")) {
+                    landDestinations.insert(troopDest);
+                }
+                if (galleyDest.startsWith("Mare") || galleyDest.startsWith("Oceanus")) {
+                    seaDestinations.insert(galleyDest);
+                }
+            }
+
+            // Add troops to each reachable destination
+            for (const QString &territory : landDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
+            for (const QString &territory : seaDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
+        }
+    }
+
     // Count galleys at sea that can reach each territory
     // For land: galleys that can beach there
     // For sea: galleys that can sail there
@@ -1519,6 +1771,77 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
 
         for (const QString &territory : reachable) {
             result[territory].galleysAtSea++;
+        }
+    }
+
+    // Count troops that could be picked up by empty galleys at sea
+    // Galley at sea with 2+ moves can: beach (1 move) -> load troops (free) -> return to sea (1 move)
+    // Troops end up at the sea zone the galley came from
+    if (player) {
+        for (const GalleyMoveSet2Turn &gms : galleyMoveSets) {
+            if (!gms.galley) continue;
+            if (gms.isBeached) continue;  // Only process galleys at sea
+
+            GalleyPiece *galley = qobject_cast<GalleyPiece*>(gms.galley);
+            if (!galley) continue;
+            if (galley->hasLeaderAboard()) continue;  // Skip galleys that already have troops
+            if (galley->getMovesRemaining() < 2.0) continue;  // Need 2 moves for beach-load-return
+
+            QString seaZone = gms.startTerritory;
+
+            // Find land territories adjacent to this sea zone where galley could beach
+            for (const GalleyMove2Turn &gm : gms.possibleMoves) {
+                QString beachTerritory = gm.endingTerritory();
+                // Only consider moves that end on land (beaching)
+                if (beachTerritory.startsWith("Mare") || beachTerritory.startsWith("Oceanus")) continue;
+
+                // Check if there's a general with full moves at this beach territory
+                bool hasAvailableGeneral = false;
+                for (CaesarPiece *caesar : player->getCaesars()) {
+                    if (caesar->getTerritoryName() == beachTerritory && caesar->getMovesRemaining() >= 2.0) {
+                        hasAvailableGeneral = true;
+                        break;
+                    }
+                }
+                if (!hasAvailableGeneral) {
+                    for (GeneralPiece *general : player->getGenerals()) {
+                        if (general->getTerritoryName() == beachTerritory && general->getMovesRemaining() >= 2.0) {
+                            hasAvailableGeneral = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!hasAvailableGeneral) continue;
+
+                // Count troops with full moves at this beach territory
+                int infantryCount = 0;
+                int cavalryCount = 0;
+                int catapultCount = 0;
+
+                for (InfantryPiece *inf : player->getInfantry()) {
+                    if (inf->getTerritoryName() == beachTerritory && inf->getMovesRemaining() >= 1.0) {
+                        infantryCount++;
+                    }
+                }
+                for (CavalryPiece *cav : player->getCavalry()) {
+                    if (cav->getTerritoryName() == beachTerritory && cav->getMovesRemaining() >= 2.0) {
+                        cavalryCount++;
+                    }
+                }
+                for (CatapultPiece *cat : player->getCatapults()) {
+                    if (cat->getTerritoryName() == beachTerritory && cat->getMovesRemaining() >= 1.0) {
+                        catapultCount++;
+                    }
+                }
+
+                // These troops could end up at the sea zone after pickup
+                if (infantryCount > 0 || cavalryCount > 0 || catapultCount > 0) {
+                    result[seaZone].infantry += infantryCount;
+                    result[seaZone].cavalry += cavalryCount;
+                    result[seaZone].catapults += catapultCount;
+                }
+            }
         }
     }
 

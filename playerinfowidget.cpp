@@ -4662,6 +4662,7 @@ void PlayerInfoWidget::onEndTurnClicked()
     if (m_mapWidget) {
         m_mapWidget->setCurrentPlayerIndex(nextPlayerIndex);
         m_mapWidget->setAtStartOfTurn(true);  // New turn is starting
+        m_mapWidget->updateHeatMap();  // Recalculate heat map for new player
         m_mapWidget->update();
     }
 

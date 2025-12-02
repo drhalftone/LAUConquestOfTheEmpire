@@ -115,6 +115,12 @@ public:
     // Returns empty list if territory doesn't exist or has no adjacent seas
     QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
 
+    // Get sea zones that share a beach with the given sea zone at a land territory
+    // Neighbors are stored in clockwise order, so consecutive sea zones share a beach
+    // A beached galley from seaZone can launch into any sea zone returned by this function
+    // Returns list including the original seaZone plus any adjacent seas in the neighbor list
+    QList<QString> getConnectedBeachSeaZones(const QString &landTerritory, const QString &seaZone) const;
+
     // === Beach Position Queries (for galley movement) ===
 
     // Get beach position for galley moving between land and sea territory

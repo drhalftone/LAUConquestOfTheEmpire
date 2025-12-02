@@ -303,6 +303,42 @@ QList<QString> MapGraph::getAdjacentSeaTerritories(const QString &landTerritoryN
     return seaTerritories;
 }
 
+QList<QString> MapGraph::getConnectedBeachSeaZones(const QString &landTerritory, const QString &seaZone) const
+{
+    QList<QString> result;
+
+    if (!exists(landTerritory) || !isSeaTerritory(seaZone)) {
+        return result;
+    }
+
+    // Get neighbors in clockwise order
+    QList<QString> neighbors = getNeighbors(landTerritory);
+
+    // Find the index of the seaZone in the neighbor list
+    int seaIndex = neighbors.indexOf(seaZone);
+    if (seaIndex == -1) {
+        // seaZone is not a neighbor of landTerritory
+        return result;
+    }
+
+    // Always include the original sea zone
+    result.append(seaZone);
+
+    // Check the neighbor before (wrap around if needed)
+    int prevIndex = (seaIndex - 1 + neighbors.size()) % neighbors.size();
+    if (isSeaTerritory(neighbors[prevIndex])) {
+        result.append(neighbors[prevIndex]);
+    }
+
+    // Check the neighbor after (wrap around if needed)
+    int nextIndex = (seaIndex + 1) % neighbors.size();
+    if (isSeaTerritory(neighbors[nextIndex])) {
+        result.append(neighbors[nextIndex]);
+    }
+
+    return result;
+}
+
 // === Beach Position Queries ===
 
 QPointF MapGraph::getBeachPosition(const QString &landTerritory, const QString &seaTerritory) const

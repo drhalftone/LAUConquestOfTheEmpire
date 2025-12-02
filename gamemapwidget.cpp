@@ -2477,6 +2477,7 @@ void GameMapWidget::saveGame()
         playerObj["id"] = QString(player->getId());
         playerObj["wallet"] = player->getWallet();
         playerObj["homeName"] = player->getHomeProvinceName();
+        playerObj["isAI"] = player->isAI();
 
         // Save owned territories
         QJsonArray territoriesArray;
@@ -2675,6 +2676,7 @@ void GameMapWidget::loadGame()
         qDebug() << "Loading player" << i << "id:" << playerObj["id"].toString() << "m_player id:" << player->getId();
 
         player->setWallet(playerObj["wallet"].toInt(0));
+        player->setIsAI(playerObj["isAI"].toBool(false));
 
         // Load owned territories (already cleared above)
         QJsonArray territoriesArray = playerObj["ownedTerritories"].toArray();

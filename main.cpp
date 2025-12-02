@@ -470,6 +470,7 @@ int main(int argc, char *argv[])
             }
 
             Player *player = players[i];
+            player->setIsAI(true);  // Mark as AI-controlled
 
             // Create AI player controller
             AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
@@ -501,6 +502,7 @@ int main(int argc, char *argv[])
         // Create AI controller for ALL players (no human)
         for (int i = 0; i < players.size(); ++i) {
             Player *player = players[i];
+            player->setIsAI(true);  // Mark as AI-controlled
 
             // Create AI player controller
             AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
@@ -526,6 +528,34 @@ int main(int argc, char *argv[])
             debugWidget->move(900 + i * 50, 100 + i * 50);
             debugWidget->show();
             debugWidgets.append(debugWidget);
+        }
+    }
+
+    // When loading a saved game, restore AI controllers based on saved isAI flag
+    if (loadGame) {
+        qDebug() << "Restoring AI players from saved game...";
+
+        for (int i = 0; i < players.size(); ++i) {
+            Player *player = players[i];
+
+            if (player->isAI()) {
+                // Create AI player controller
+                AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+                ai->setStrategy(AIPlayer::Strategy::RiskBased);
+                ai->setDelayMs(800);
+                ai->setStepMode(false);
+                aiPlayers.append(ai);
+
+                // Register AI player with PlayerInfoWidget for combat handling
+                infoWidget->registerAIPlayer(player->getId(), ai);
+
+                // Connect player's turn signal to AI execution
+                QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+                qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") restored as AI-controlled";
+            } else {
+                qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is HUMAN";
+            }
         }
     }
 
@@ -608,6 +638,9 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
 
         // Set wallet
         player->setWallet(wallet);
+
+        // Load AI flag
+        player->setIsAI(playerObj["isAI"].toBool(false));
 
         // Load owned territories
         QJsonArray territoriesArray = playerObj["ownedTerritories"].toArray();

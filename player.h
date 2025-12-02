@@ -22,6 +22,8 @@ public:
     // Player identification
     QChar getId() const { return m_id; }
     QColor getColor() const { return m_color; }
+    bool isAI() const { return m_isAI; }
+    void setIsAI(bool isAI) { m_isAI = isAI; }
 
     // Piece inventory management - separate lists for each type
     const QList<CaesarPiece*>& getCaesars() const { return m_caesars; }
@@ -208,6 +210,7 @@ private:
 
     // Turn management
     bool m_isMyTurn;                      // Is it currently this player's turn?
+    bool m_isAI;                          // Is this player controlled by AI?
 
     // Helper function to get color based on player ID
     QColor getColorForPlayer(QChar playerId) const;

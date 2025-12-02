@@ -14,6 +14,7 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
     , m_homeProvinceName(homeProvinceName)
     , m_hasHomeFortifiedCity(!minimalSetup)  // Only if not minimal setup
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()
+    , m_isAI(false)  // Default to human player, set to true when AI is assigned
 {
     qDebug() << "Creating Player" << m_id << "with home province:" << m_homeProvinceName;
 
