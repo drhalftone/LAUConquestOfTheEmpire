@@ -107,6 +107,28 @@ TroopMoveSet MoveEnumerator::enumerateTroopMoves(GamePiece *troop, Player *playe
     result.troop = troop;
     result.startTerritory = troop->getTerritoryName();
 
+    // Skip troops that are on a galley - their movement is handled by galley enumeration
+    if (troop->isOnGalley()) {
+        // Troop can only stay (galley determines actual destinations)
+        GamePiece::Type troopType = troop->getType();
+        if (troopType == GamePiece::Type::Cavalry) {
+            CavalryMove cm;
+            cm.cavalry = troop;
+            cm.transition1.source = result.startTerritory;
+            cm.transition1.sink = result.startTerritory;
+            cm.transition2.source = result.startTerritory;
+            cm.transition2.sink = result.startTerritory;
+            result.possibleCavalryMoves.append(cm);
+        } else {
+            TroopMove tm;
+            tm.troop = troop;
+            tm.transition.source = result.startTerritory;
+            tm.transition.sink = result.startTerritory;
+            result.possibleMoves.append(tm);
+        }
+        return result;
+    }
+
     double movesRemaining = troop->getMovesRemaining();
     GamePiece::Type troopType = troop->getType();
     bool isCavalry = (troopType == GamePiece::Type::Cavalry);
@@ -473,6 +495,19 @@ GalleyMoveSet MoveEnumerator::enumerateGalleyMoves(GamePiece *galley, MapGraph *
                     gm.transition2.source = land;
                     gm.transition2.sink = land;
                     result.possibleMoves.append(gm);
+
+                    // Drop-and-return: beach, unload troops, return to sea (2 moves total)
+                    // Galley ends at sea, troops end on land
+                    if (movesRemaining >= 1.5) {
+                        GalleyMove gmDropReturn;
+                        gmDropReturn.galley = galley;
+                        gmDropReturn.transition1.source = result.startTerritory;
+                        gmDropReturn.transition1.sink = land;
+                        gmDropReturn.transition2.source = land;
+                        gmDropReturn.transition2.sink = result.startTerritory;  // Return to starting sea
+                        gmDropReturn.dropTerritory = land;  // Troops dropped here
+                        result.possibleMoves.append(gmDropReturn);
+                    }
                 }
             }
         }
@@ -1062,6 +1097,11 @@ GalleyMoveSet2Turn MoveEnumerator::enumerateGalleyMoves2Turn(GamePiece *galley, 
     for (const GalleyMove &t1 : turn1Moves.possibleMoves) {
         QString endOfTurn1 = t1.endingTerritory();
 
+        // If turn 1 was a drop-and-return, troops were already unloaded
+        // The galley is empty for turn 2, so we just track galley position
+        // but propagate the turn 1 drop territory for force projection
+        bool turn1WasDropAndReturn = t1.isDropAndReturn();
+
         // Create a temporary "galley" at the end-of-turn-1 position to enumerate turn 2 moves
         // We simulate this by getting reachable positions from endOfTurn1
 
@@ -1077,7 +1117,56 @@ GalleyMoveSet2Turn MoveEnumerator::enumerateGalleyMoves2Turn(GamePiece *galley, 
             gm.slot3.sink = endOfTurn1;
             gm.slot4.source = endOfTurn1;
             gm.slot4.sink = endOfTurn1;
+            // If turn 1 dropped troops, propagate that destination
+            if (turn1WasDropAndReturn) {
+                gm.dropTerritory = t1.dropTerritory;
+            }
             result.possibleMoves.append(gm);
+        }
+
+        // If troops were already dropped in turn 1, skip turn 2 drop-and-return options
+        // (galley is empty, nothing to drop)
+        if (turn1WasDropAndReturn) {
+            // Still enumerate galley movement for turn 2, but keep the turn 1 drop territory
+            if (turn2AtSea) {
+                QList<QString> adjacentSeas = graph->getNeighbors(endOfTurn1);
+                for (const QString &sea3 : adjacentSeas) {
+                    if (!graph->isSeaTerritory(sea3)) continue;
+
+                    // Move 3 only
+                    {
+                        GalleyMove2Turn gm;
+                        gm.galley = galley;
+                        gm.slot1 = t1.transition1;
+                        gm.slot2 = t1.transition2;
+                        gm.slot3.source = endOfTurn1;
+                        gm.slot3.sink = sea3;
+                        gm.slot4.source = sea3;
+                        gm.slot4.sink = sea3;
+                        gm.dropTerritory = t1.dropTerritory;
+                        result.possibleMoves.append(gm);
+                    }
+
+                    // Move 4
+                    QList<QString> neighbors4 = graph->getNeighbors(sea3);
+                    for (const QString &dest4 : neighbors4) {
+                        if (dest4 == endOfTurn1) continue;
+                        if (graph->isSeaTerritory(dest4) || graph->isLandTerritory(dest4)) {
+                            GalleyMove2Turn gm;
+                            gm.galley = galley;
+                            gm.slot1 = t1.transition1;
+                            gm.slot2 = t1.transition2;
+                            gm.slot3.source = endOfTurn1;
+                            gm.slot3.sink = sea3;
+                            gm.slot4.source = sea3;
+                            gm.slot4.sink = dest4;
+                            gm.dropTerritory = t1.dropTerritory;
+                            result.possibleMoves.append(gm);
+                        }
+                    }
+                }
+            }
+            continue;  // Skip to next turn 1 move
         }
 
         if (turn2AtSea) {
@@ -1131,6 +1220,19 @@ GalleyMoveSet2Turn MoveEnumerator::enumerateGalleyMoves2Turn(GamePiece *galley, 
                     gm.slot4.source = land;
                     gm.slot4.sink = land;
                     result.possibleMoves.append(gm);
+
+                    // Drop-and-return: beach, unload, return to sea (turn 2)
+                    // Galley ends at sea, troops end on land
+                    GalleyMove2Turn gmDropReturn;
+                    gmDropReturn.galley = galley;
+                    gmDropReturn.slot1 = t1.transition1;
+                    gmDropReturn.slot2 = t1.transition2;
+                    gmDropReturn.slot3.source = endOfTurn1;
+                    gmDropReturn.slot3.sink = land;
+                    gmDropReturn.slot4.source = land;
+                    gmDropReturn.slot4.sink = endOfTurn1;  // Return to starting sea
+                    gmDropReturn.dropTerritory = land;
+                    result.possibleMoves.append(gmDropReturn);
                 }
             }
         } else {
@@ -1185,6 +1287,9 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
     for (const TroopMoveSet &tms : troopMoveSets) {
         if (!tms.troop) continue;
 
+        // Skip troops on galleys - they are counted separately in the galley section
+        if (tms.troop->isOnGalley()) continue;
+
         GamePiece::Type type = tms.troop->getType();
 
         QSet<QString> reachable;
@@ -1215,7 +1320,7 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
         }
     }
 
-    // Count galleys - only beached galleys can carry NEW troops
+    // Count galleys - beached galleys can carry NEW troops
     for (const GalleyMoveSet &gms : galleyMoveSets) {
         if (!gms.galley) continue;
         if (!gms.isBeached) continue;  // Skip galleys at sea (can't load troops)
@@ -1227,6 +1332,23 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
 
         for (const QString &territory : reachable) {
             result[territory].galleys++;
+        }
+    }
+
+    // Count galleys at sea that can reach each territory
+    // For land: galleys that can beach there
+    // For sea: galleys that can sail there
+    for (const GalleyMoveSet &gms : galleyMoveSets) {
+        if (!gms.galley) continue;
+        if (gms.isBeached) continue;  // Skip beached galleys (already counted above)
+
+        QSet<QString> reachable;
+        for (const GalleyMove &gm : gms.possibleMoves) {
+            reachable.insert(gm.endingTerritory());
+        }
+
+        for (const QString &territory : reachable) {
+            result[territory].galleysAtSea++;
         }
     }
 
@@ -1257,13 +1379,27 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
 
             if (legion.isEmpty()) continue;
 
-            // Get all land territories this galley can reach
+            // Get all territories this galley can reach
+            // For land: use troopDestination() which handles drop-and-return moves
+            // For sea: use endingTerritory() where the galley ends up
             QSet<QString> landDestinations;
+            QSet<QString> seaDestinations;
+
+            // Include current position (galley can stay)
+            QString currentPos = gms.startTerritory;
+            if (currentPos.startsWith("Mare") || currentPos.startsWith("Oceanus")) {
+                seaDestinations.insert(currentPos);
+            }
+
             for (const GalleyMove &gm : gms.possibleMoves) {
-                QString dest = gm.endingTerritory();
-                // Only count land destinations (not sea zones)
-                if (!dest.startsWith("Mare")) {
-                    landDestinations.insert(dest);
+                QString troopDest = gm.troopDestination();
+                QString galleyDest = gm.endingTerritory();
+
+                if (!troopDest.startsWith("Mare") && !troopDest.startsWith("Oceanus")) {
+                    landDestinations.insert(troopDest);
+                }
+                if (galleyDest.startsWith("Mare") || galleyDest.startsWith("Oceanus")) {
+                    seaDestinations.insert(galleyDest);
                 }
             }
 
@@ -1297,6 +1433,13 @@ QMap<QString, ReachabilityBreakdown> TurnMoveEnumeration::getReachabilityBreakdo
                 result[territory].cavalry += cavalryCount;
                 result[territory].catapults += catapultCount;
             }
+
+            // Add these troops to each reachable sea destination
+            for (const QString &territory : seaDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
         }
     }
 
@@ -1310,6 +1453,9 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
     // Count infantry/catapults from troopMoveSets
     for (const TroopMoveSet2Turn &tms : troopMoveSets) {
         if (!tms.troop) continue;
+
+        // Skip troops on galleys - they are counted separately in the galley section
+        if (tms.troop->isOnGalley()) continue;
 
         GamePiece::Type type = tms.troop->getType();
 
@@ -1344,7 +1490,7 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
         }
     }
 
-    // Count galleys from galleyMoveSets - only beached galleys can carry NEW troops
+    // Count galleys from galleyMoveSets - beached galleys can carry NEW troops
     for (const GalleyMoveSet2Turn &gms : galleyMoveSets) {
         if (!gms.galley) continue;
         if (!gms.isBeached) continue;  // Skip galleys at sea (can't load troops)
@@ -1356,6 +1502,23 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
 
         for (const QString &territory : reachable) {
             result[territory].galleys++;
+        }
+    }
+
+    // Count galleys at sea that can reach each territory
+    // For land: galleys that can beach there
+    // For sea: galleys that can sail there
+    for (const GalleyMoveSet2Turn &gms : galleyMoveSets) {
+        if (!gms.galley) continue;
+        if (gms.isBeached) continue;  // Skip beached galleys (already counted above)
+
+        QSet<QString> reachable;
+        for (const GalleyMove2Turn &gm : gms.possibleMoves) {
+            reachable.insert(gm.endingTerritory());
+        }
+
+        for (const QString &territory : reachable) {
+            result[territory].galleysAtSea++;
         }
     }
 
@@ -1386,13 +1549,27 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
 
             if (legion.isEmpty()) continue;
 
-            // Get all land territories this galley can reach in 2 turns
+            // Get all territories this galley can reach in 2 turns
+            // For land: use troopDestination() which handles drop-and-return moves
+            // For sea: use endingTerritory() where the galley ends up
             QSet<QString> landDestinations;
+            QSet<QString> seaDestinations;
+
+            // Include current position (galley can stay)
+            QString currentPos = gms.startTerritory;
+            if (currentPos.startsWith("Mare") || currentPos.startsWith("Oceanus")) {
+                seaDestinations.insert(currentPos);
+            }
+
             for (const GalleyMove2Turn &gm : gms.possibleMoves) {
-                QString dest = gm.endingTerritory();
-                // Only count land destinations (not sea zones)
-                if (!dest.startsWith("Mare")) {
-                    landDestinations.insert(dest);
+                QString troopDest = gm.troopDestination();
+                QString galleyDest = gm.endingTerritory();
+
+                if (!troopDest.startsWith("Mare") && !troopDest.startsWith("Oceanus")) {
+                    landDestinations.insert(troopDest);
+                }
+                if (galleyDest.startsWith("Mare") || galleyDest.startsWith("Oceanus")) {
+                    seaDestinations.insert(galleyDest);
                 }
             }
 
@@ -1422,6 +1599,13 @@ QMap<QString, ReachabilityBreakdown> TwoTurnMoveEnumeration::getReachabilityBrea
 
             // Add these troops to each reachable land destination
             for (const QString &territory : landDestinations) {
+                result[territory].infantry += infantryCount;
+                result[territory].cavalry += cavalryCount;
+                result[territory].catapults += catapultCount;
+            }
+
+            // Add these troops to each reachable sea destination
+            for (const QString &territory : seaDestinations) {
                 result[territory].infantry += infantryCount;
                 result[territory].cavalry += cavalryCount;
                 result[territory].catapults += catapultCount;

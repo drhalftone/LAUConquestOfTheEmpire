@@ -149,7 +149,7 @@ public:
     void clearAllPiecesAndBuildings();
 
     // Turn management
-    void startTurn();  // Called at the beginning of player's turn - resets movement for all pieces
+    void startTurn(bool resetMoves = true);  // Called at the beginning of player's turn - resets movement unless loading mid-turn
     void endTurn();    // Called at the end of player's turn
     bool isMyTurn() const { return m_isMyTurn; }
     void setMyTurn(bool isMyTurn) { m_isMyTurn = isMyTurn; }  // Set turn state without resetting movement

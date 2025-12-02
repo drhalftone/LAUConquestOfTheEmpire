@@ -97,15 +97,30 @@ struct TroopMoveSet {
 };
 
 /**
- * @brief A galley's possible move (2 sea transitions)
+ * @brief A galley's possible move (2 transitions)
  */
 struct GalleyMove {
     GamePiece *galley = nullptr;
-    Transition transition1;  // First sea move (or stay)
-    Transition transition2;  // Second sea move (or stay)
+    Transition transition1;  // First move (sea->sea, sea->land, or land->sea)
+    Transition transition2;  // Second move (sea->sea, sea->land, land->sea, or stay)
+
+    // For "drop and return" moves: galley beaches, unloads, returns to sea
+    // In this case: transition1 = sea->land, transition2 = land->sea
+    // dropTerritory tracks where troops were dropped (empty if no drop)
+    QString dropTerritory;
 
     QString startingTerritory() const { return transition1.source; }
     QString endingTerritory() const { return transition2.sink; }
+
+    // Returns the territory where troops can be dropped (for force projection)
+    // For normal beach: endingTerritory if it's land
+    // For drop-and-return: dropTerritory
+    QString troopDestination() const {
+        if (!dropTerritory.isEmpty()) return dropTerritory;
+        return transition2.sink;
+    }
+
+    bool isDropAndReturn() const { return !dropTerritory.isEmpty(); }
 };
 
 /**
@@ -127,10 +142,12 @@ struct ReachabilityBreakdown {
     int infantry = 0;
     int cavalry = 0;
     int catapults = 0;
-    int galleys = 0;
+    int galleys = 0;           // Beached galleys that can load troops and reach here
+    int galleysAtSea = 0;      // Galleys at sea that can reach here (empty or with troops)
 
     int total() const { return infantry + cavalry + catapults; }
     int totalWithGalleys() const { return infantry + cavalry + catapults + galleys; }
+    int totalGalleys() const { return galleys + galleysAtSea; }
 };
 
 /**
@@ -323,14 +340,26 @@ struct GalleyMove2Turn {
     Transition slot3;  // Turn 2, move 1
     Transition slot4;  // Turn 2, move 2
 
+    // For drop-and-return moves where galley beaches, unloads, and returns to sea
+    QString dropTerritory;
+
     QString startingTerritory() const { return slot1.source; }
     QString endOfTurn1() const { return slot2.sink; }
     QString endingTerritory() const { return slot4.sink; }
 
+    // Returns where troops can be dropped (for force projection)
+    QString troopDestination() const {
+        if (!dropTerritory.isEmpty()) return dropTerritory;
+        return slot4.sink;
+    }
+
+    bool isDropAndReturn() const { return !dropTerritory.isEmpty(); }
+
     bool operator==(const GalleyMove2Turn &other) const {
         return galley == other.galley &&
                slot1 == other.slot1 && slot2 == other.slot2 &&
-               slot3 == other.slot3 && slot4 == other.slot4;
+               slot3 == other.slot3 && slot4 == other.slot4 &&
+               dropTerritory == other.dropTerritory;
     }
 };
 

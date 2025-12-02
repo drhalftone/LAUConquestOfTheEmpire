@@ -1101,6 +1101,41 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
             }
         }
 
+        // Check for beached galleys at the same territory that the leader can board
+        // (Only for Caesar/General not already on a galley)
+        if (!isOnGalley && leader->getType() != GamePiece::Type::Galley) {
+            QList<GalleyPiece*> beachedGalleys;
+            for (GalleyPiece *galley : player->getGalleys()) {
+                if (galley->getTerritoryName() == territoryName &&
+                    galley->isBeached() &&
+                    !galley->hasLeaderAboard() &&
+                    galley->getMovesRemaining() >= 1.0 &&  // Need at least 1 move to launch
+                    galley->hasLastSeaZone()) {  // Must have a sea zone to launch to
+                    beachedGalleys.append(galley);
+                }
+            }
+
+            // Add "Board Galley" options for each beached galley
+            for (GalleyPiece *galley : beachedGalleys) {
+                QString seaZone = galley->getLastSeaZone();
+                QString galleyText = QString("Board Galley %1 → %2 (%3 moves)")
+                    .arg(galley->getSerialNumber())
+                    .arg(seaZone)
+                    .arg(galley->getMovesRemaining());
+                QIcon galleyIcon(":/images/galleyIcon.png");
+                QAction *boardAction = leaderSubmenu->addAction(galleyIcon, galleyText);
+
+                connect(boardAction, &QAction::triggered, [this, leader, galley, seaZone]() {
+                    boardGalleyFromBeach(leader, galley, seaZone);
+                });
+            }
+
+            // Add separator if we added any galley options
+            if (!beachedGalleys.isEmpty()) {
+                leaderSubmenu->addSeparator();
+            }
+        }
+
         // Get neighbors using MapGraph
         QList<QString> neighbors = m_mapWidget->getGraph()->getNeighbors(territoryName);
         qDebug() << "Movement menu: territory=" << territoryName << "neighbors=" << neighbors;
@@ -1127,6 +1162,17 @@ void PlayerInfoWidget::handleTerritoryRightClick(const QString &territoryName, c
             // Use graph-based queries instead of grid-based
             int value = m_mapWidget->getGraph()->getValue(destinationName);
             bool isSea = m_mapWidget->getGraph()->isSeaTerritory(destinationName);
+
+            // For beached galleys, they can only launch into the sea zone they came from
+            if (leader->getType() == GamePiece::Type::Galley && isSea) {
+                GalleyPiece *galley = static_cast<GalleyPiece*>(leader);
+                if (galley->isBeached()) {
+                    // Beached galley - can only go to lastSeaZone
+                    if (!galley->hasLastSeaZone() || destinationName != galley->getLastSeaZone()) {
+                        continue;  // Skip sea zones that aren't the last sea zone
+                    }
+                }
+            }
 
             // Find owner by checking which player owns the territory
             QChar owner = '\0';
@@ -2205,6 +2251,9 @@ void PlayerInfoWidget::moveLeaderToTerritory(GamePiece *leader, const QString &d
         if (m_mapWidget) {
             m_mapWidget->update();
         }
+
+        // Emit signal to notify that a piece moved (triggers heat map update)
+        emit pieceMoved(currentPos.row, currentPos.col, destPos.row, destPos.col);
         return;
     }
 
@@ -2970,15 +3019,15 @@ void PlayerInfoWidget::boardGalleyFromBeach(GamePiece *leader, GalleyPiece *gall
     // Track that leader is on galley
     leader->setOnGalley(galley->getSerialNumber());
 
-    // Deduct 0.5 move from leader for boarding
-    leader->setMovesRemaining(leader->getMovesRemaining() - 0.5);
+    // Boarding consumes ALL of the leader's moves
+    leader->setMovesRemaining(0);
 
     // Move selected troops to sea zone
     for (GamePiece *troop : allTroops) {
         if (selectedTroopIds.contains(troop->getUniqueId())) {
             troop->setTerritoryName(seaZone);
             troop->setOnGalley(galley->getSerialNumber());
-            troop->setMovesRemaining(troop->getMovesRemaining() - 0.5);  // 0.5 move for boarding
+            troop->setMovesRemaining(0);  // Boarding consumes all troop moves
         }
     }
 

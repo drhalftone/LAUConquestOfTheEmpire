@@ -688,98 +688,6 @@ void GameMapWidget::updateHeatMap()
     }
 }
 
-<<<<<<< Updated upstream
-void GameMapWidget::updateHeatMapPlayerReachability()
-{
-    if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
-        return;
-    }
-
-    Player *currentPlayer = m_players[m_currentPlayerIndex];
-    if (!currentPlayer) return;
-
-    makeCurrent();
-
-    // Clear column 1 (reachability) to black
-    for (int row = 0; row < LUT_HEIGHT; row++) {
-        m_ownershipImage.setPixelColor(1, row, Qt::black);
-    }
-
-    // First, mark territories where we already have troops or generals (bright cyan)
-    QSet<QString> occupiedTerritories;
-    QColor occupiedColor(0, 220, 220);  // Bright cyan for occupied
-
-    for (CaesarPiece *caesar : currentPlayer->getCaesars()) {
-        occupiedTerritories.insert(caesar->getTerritoryName());
-    }
-    for (GeneralPiece *general : currentPlayer->getGenerals()) {
-        occupiedTerritories.insert(general->getTerritoryName());
-    }
-    for (InfantryPiece *infantry : currentPlayer->getInfantry()) {
-        occupiedTerritories.insert(infantry->getTerritoryName());
-    }
-    for (CavalryPiece *cavalry : currentPlayer->getCavalry()) {
-        occupiedTerritories.insert(cavalry->getTerritoryName());
-    }
-    for (CatapultPiece *catapult : currentPlayer->getCatapults()) {
-        occupiedTerritories.insert(catapult->getTerritoryName());
-    }
-
-    for (const QString &territoryName : occupiedTerritories) {
-        Territory territory = m_graph->getTerritory(territoryName);
-        if (territory.id > 0 && territory.id <= 60) {
-            int row = territory.id - 1;
-            m_ownershipImage.setPixelColor(1, row, occupiedColor);
-        }
-    }
-
-    // Use reachability calculator to find all reachable territories
-    // useActualMoves=true means use CURRENT movement points, not assumed full moves
-    ReachabilityCalculator calc;
-    QMap<QString, ReachInfo> reachable = calc.getAllReachable(currentPlayer, m_graph, 1, true);
-
-    // Color reachable territories green (brighter = more moves remaining)
-    // Skip territories we already marked as occupied AND territories we already own
-    for (auto it = reachable.begin(); it != reachable.end(); ++it) {
-        const QString &territoryName = it.key();
-        const ReachInfo &info = it.value();
-
-        // Skip if already occupied (those are cyan)
-        if (occupiedTerritories.contains(territoryName)) {
-            continue;
-        }
-
-        // Skip if we already own this territory (can't claim what we own)
-        if (currentPlayer->ownsTerritory(territoryName)) {
-            continue;
-        }
-
-        // Skip if this territory is unowned and we have no troops to claim it
-        // Leaders (Caesar/General) cannot claim territories on their own - they need troops
-        // Troops need a leader to move, so both are required
-        if (info.maxTroopStrength == 0) {
-            // No troops can reach - can't claim an unowned territory
-            // (Leaders alone can move through but can't claim)
-            continue;
-        }
-
-        Territory territory = m_graph->getTerritory(territoryName);
-        if (territory.id > 0 && territory.id <= 60) {
-            int row = territory.id - 1;
-            // Vary intensity based on how many leaders can reach
-            int intensity = qMin(255, 100 + info.leadersWhoCanReach.size() * 50);
-            m_ownershipImage.setPixelColor(1, row, QColor(0, intensity, intensity / 2));
-        }
-    }
-
-    // Upload to texture
-    m_ownershipTexture->setData(QOpenGLTexture::RGB, QOpenGLTexture::UInt8, m_ownershipImage.constBits());
-    doneCurrent();
-
-    qDebug() << "Updated player reachability heat map:" << occupiedTerritories.size() << "occupied,"
-             << reachable.size() << "reachable";
-}
-
 void GameMapWidget::updateHeatMapMaxForce()
 {
     if (m_players.isEmpty() || m_currentPlayerIndex < 0 || m_currentPlayerIndex >= m_players.size()) {
@@ -800,24 +708,16 @@ void GameMapWidget::updateHeatMapMaxForce()
     MoveEnumerator enumerator;
     TurnMoveEnumeration enumeration = enumerator.enumerateAllMoves(currentPlayer, m_players, m_graph);
 
-    // Get the reachability map from the enumeration (land troops)
-    QMap<QString, int> maxForceMap = enumeration.getMaxReachabilityMap();
+    // Get the reachability breakdown (includes troops on galleys)
+    QMap<QString, ReachabilityBreakdown> breakdown = enumeration.getReachabilityBreakdown();
 
-    // Get sea zone troop projection (troops that could be on galleys at sea)
-    QMap<QString, int> seaZoneProjection = enumeration.getSeaZoneTroopProjection();
-
-    // Merge sea zone projection into maxForceMap (only for sea territories)
-    int seaZonesAdded = 0;
-    for (auto it = seaZoneProjection.constBegin(); it != seaZoneProjection.constEnd(); ++it) {
-        const QString &territoryName = it.key();
-        bool isSea = m_graph->isSeaTerritory(territoryName);
-        if (isSea) {
-            maxForceMap[territoryName] = qMax(maxForceMap.value(territoryName, 0), it.value());
-            seaZonesAdded++;
-        }
+    // Convert to simple force map
+    QMap<QString, int> maxForceMap;
+    for (auto it = breakdown.constBegin(); it != breakdown.constEnd(); ++it) {
+        maxForceMap[it.key()] = it.value().total();
     }
 
-    qDebug() << "Force projection (MoveEnumerator): maxForceMap has" << maxForceMap.size() << "territories, added" << seaZonesAdded << "sea zones";
+    qDebug() << "Force projection (MoveEnumerator): maxForceMap has" << maxForceMap.size() << "territories";
 
     // Find max force for color scaling
     int maxForce = 1;
@@ -906,18 +806,13 @@ void GameMapWidget::updateHeatMapMaxForceTwoTurn()
     MoveEnumerator enumerator;
     TwoTurnMoveEnumeration enumeration = enumerator.enumerateAllMoves2Turn(currentPlayer, m_players, m_graph);
 
-    // Get max troops that can reach each territory in 2 turns
-    QMap<QString, int> maxForceMap = enumeration.getMaxReachabilityMap();
+    // Get the reachability breakdown (includes troops on galleys)
+    QMap<QString, ReachabilityBreakdown> breakdown = enumeration.getReachabilityBreakdown();
 
-    // Get sea zone troop projection (troops that could be on galleys at sea)
-    QMap<QString, int> seaZoneProjection = enumeration.getSeaZoneTroopProjection();
-
-    // Merge sea zone projection into maxForceMap (only for sea territories)
-    for (auto it = seaZoneProjection.constBegin(); it != seaZoneProjection.constEnd(); ++it) {
-        const QString &territoryName = it.key();
-        if (m_graph->isSeaTerritory(territoryName)) {
-            maxForceMap[territoryName] = qMax(maxForceMap.value(territoryName, 0), it.value());
-        }
+    // Convert to simple force map
+    QMap<QString, int> maxForceMap;
+    for (auto it = breakdown.constBegin(); it != breakdown.constEnd(); ++it) {
+        maxForceMap[it.key()] = it.value().total();
     }
 
     qDebug() << "Force projection (2-turn): territories:" << maxForceMap.size()
@@ -2866,7 +2761,9 @@ void GameMapWidget::loadGame()
             QString territory = galleyObj["territory"].toString();
 
             GalleyPiece *galley = new GalleyPiece(player->getId(), territory, player);
-            galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
+            double savedMoves = galleyObj["movesRemaining"].toDouble(2);
+            galley->setMovesRemaining(savedMoves);
+            qDebug() << "  Loaded galley at" << territory << "with movesRemaining:" << savedMoves;
             // Note: leaderAboard is not restored since leader IDs change on load
             if (galleyObj["transportedThisTurn"].toBool()) {
                 galley->setTransportedThisTurn(true);
@@ -3218,23 +3115,46 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
                     maxTroops = qMax(maxTroops, seaZoneTroops);
                 }
 
-                if (maxTroops > 0 || currentTroops > 0 || rb.galleys > 0) {
+                int totalGalleys = rb.galleys + rb.galleysAtSea;
+                if (maxTroops > 0 || currentTroops > 0 || totalGalleys > 0) {
                     int displayMax = qMax(currentTroops, maxTroops);
                     lines << QString("<font color='#0066CC'>Max troops: %1</font>").arg(displayMax);
                     if (m_graph->isSeaTerritory(territoryName)) {
                         // Sea zone - show breakdown with galleys that can reach
+                        QString galleyInfo;
+                        if (rb.galleys > 0 && rb.galleysAtSea > 0) {
+                            galleyInfo = QString("%1 beached + %2 at sea").arg(rb.galleys).arg(rb.galleysAtSea);
+                        } else if (rb.galleys > 0) {
+                            galleyInfo = QString("%1 beached").arg(rb.galleys);
+                        } else if (rb.galleysAtSea > 0) {
+                            galleyInfo = QString("%1 at sea").arg(rb.galleysAtSea);
+                        }
                         lines << QString("  Breakdown: I:%1 C:%2 T:%3 (via %4 galley%5)")
                             .arg(rb.infantry)
                             .arg(rb.cavalry)
                             .arg(rb.catapults)
-                            .arg(rb.galleys)
-                            .arg(rb.galleys == 1 ? "" : "s");
+                            .arg(totalGalleys)
+                            .arg(totalGalleys == 1 ? "" : "s");
+                        if (!galleyInfo.isEmpty()) {
+                            lines << QString("  Galleys: %1").arg(galleyInfo);
+                        }
                     } else {
-                        lines << QString("  Breakdown: I:%1 C:%2 T:%3 G:%4")
+                        // Land territory - show troops and galleys separately
+                        lines << QString("  Breakdown: I:%1 C:%2 T:%3")
                             .arg(qMax(currentInfantry, rb.infantry))
                             .arg(qMax(currentCavalry, rb.cavalry))
-                            .arg(qMax(currentCatapults, rb.catapults))
-                            .arg(rb.galleys);
+                            .arg(qMax(currentCatapults, rb.catapults));
+                        if (totalGalleys > 0) {
+                            QString galleyInfo;
+                            if (rb.galleys > 0 && rb.galleysAtSea > 0) {
+                                galleyInfo = QString("%1 beached + %2 at sea").arg(rb.galleys).arg(rb.galleysAtSea);
+                            } else if (rb.galleys > 0) {
+                                galleyInfo = QString("%1 beached").arg(rb.galleys);
+                            } else {
+                                galleyInfo = QString("%1 at sea").arg(rb.galleysAtSea);
+                            }
+                            lines << QString("  Galleys: %1").arg(galleyInfo);
+                        }
                     }
 
                     if (currentTroops > 0) {
@@ -3295,23 +3215,46 @@ QString GameMapWidget::buildTerritoryTooltip(const QString &territoryName) const
                     maxTroops = qMax(maxTroops, seaZoneTroops);
                 }
 
-                if (maxTroops > 0 || currentTroops > 0 || rb.galleys > 0) {
+                int totalGalleys = rb.galleys + rb.galleysAtSea;
+                if (maxTroops > 0 || currentTroops > 0 || totalGalleys > 0) {
                     int displayMax = qMax(currentTroops, maxTroops);
                     lines << QString("<font color='#0066CC'>Max troops (2 turns): %1</font>").arg(displayMax);
                     if (m_graph->isSeaTerritory(territoryName)) {
                         // Sea zone - show breakdown with galleys that can reach
+                        QString galleyInfo;
+                        if (rb.galleys > 0 && rb.galleysAtSea > 0) {
+                            galleyInfo = QString("%1 beached + %2 at sea").arg(rb.galleys).arg(rb.galleysAtSea);
+                        } else if (rb.galleys > 0) {
+                            galleyInfo = QString("%1 beached").arg(rb.galleys);
+                        } else if (rb.galleysAtSea > 0) {
+                            galleyInfo = QString("%1 at sea").arg(rb.galleysAtSea);
+                        }
                         lines << QString("  Breakdown: I:%1 C:%2 T:%3 (via %4 galley%5)")
                             .arg(rb.infantry)
                             .arg(rb.cavalry)
                             .arg(rb.catapults)
-                            .arg(rb.galleys)
-                            .arg(rb.galleys == 1 ? "" : "s");
+                            .arg(totalGalleys)
+                            .arg(totalGalleys == 1 ? "" : "s");
+                        if (!galleyInfo.isEmpty()) {
+                            lines << QString("  Galleys: %1").arg(galleyInfo);
+                        }
                     } else {
-                        lines << QString("  Breakdown: I:%1 C:%2 T:%3 G:%4")
+                        // Land territory - show troops and galleys separately
+                        lines << QString("  Breakdown: I:%1 C:%2 T:%3")
                             .arg(qMax(currentInfantry, rb.infantry))
                             .arg(qMax(currentCavalry, rb.cavalry))
-                            .arg(qMax(currentCatapults, rb.catapults))
-                            .arg(rb.galleys);
+                            .arg(qMax(currentCatapults, rb.catapults));
+                        if (totalGalleys > 0) {
+                            QString galleyInfo;
+                            if (rb.galleys > 0 && rb.galleysAtSea > 0) {
+                                galleyInfo = QString("%1 beached + %2 at sea").arg(rb.galleys).arg(rb.galleysAtSea);
+                            } else if (rb.galleys > 0) {
+                                galleyInfo = QString("%1 beached").arg(rb.galleys);
+                            } else {
+                                galleyInfo = QString("%1 at sea").arg(rb.galleysAtSea);
+                            }
+                            lines << QString("  Galleys: %1").arg(galleyInfo);
+                        }
                     }
 
                     if (currentTroops > 0) {

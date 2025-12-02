@@ -580,42 +580,44 @@ void Player::clearAllPiecesAndBuildings()
 
 // ========== Turn Management ==========
 
-void Player::startTurn()
+void Player::startTurn(bool resetMoves)
 {
     m_isMyTurn = true;
 
-    // Reset movement for all pieces to their default values
-    // Caesars: 2 moves
-    for (CaesarPiece *piece : m_caesars) {
-        piece->setMovesRemaining(2);
-    }
+    if (resetMoves) {
+        // Reset movement for all pieces to their default values
+        // Caesars: 2 moves
+        for (CaesarPiece *piece : m_caesars) {
+            piece->setMovesRemaining(2);
+        }
 
-    // Generals: 2 moves
-    for (GeneralPiece *piece : m_generals) {
-        piece->setMovesRemaining(2);
-    }
+        // Generals: 2 moves
+        for (GeneralPiece *piece : m_generals) {
+            piece->setMovesRemaining(2);
+        }
 
-    // Infantry: 1 move
-    for (InfantryPiece *piece : m_infantry) {
-        piece->setMovesRemaining(1);
-    }
+        // Infantry: 1 move
+        for (InfantryPiece *piece : m_infantry) {
+            piece->setMovesRemaining(1);
+        }
 
-    // Cavalry: 2 moves
-    for (CavalryPiece *piece : m_cavalry) {
-        piece->setMovesRemaining(2);
-    }
+        // Cavalry: 2 moves
+        for (CavalryPiece *piece : m_cavalry) {
+            piece->setMovesRemaining(2);
+        }
 
-    // Catapults: 1 move
-    for (CatapultPiece *piece : m_catapults) {
-        piece->setMovesRemaining(1);
-    }
+        // Catapults: 1 move
+        for (CatapultPiece *piece : m_catapults) {
+            piece->setMovesRemaining(1);
+        }
 
-    // Galleys: 2 moves, and reset transport flag
-    for (GalleyPiece *piece : m_galleys) {
-        piece->setMovesRemaining(2);
-        piece->resetTransportFlag();
-        // Clear any leader aboard from previous turn (they should have disembarked)
-        piece->setLeaderAboard(0);
+        // Galleys: 2 moves, and reset transport flag
+        for (GalleyPiece *piece : m_galleys) {
+            piece->setMovesRemaining(2);
+            piece->resetTransportFlag();
+            // Clear any leader aboard from previous turn (they should have disembarked)
+            piece->setLeaderAboard(0);
+        }
     }
 
     emit turnStarted();

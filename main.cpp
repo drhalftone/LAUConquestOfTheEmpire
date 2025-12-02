@@ -270,6 +270,16 @@ int main(int argc, char *argv[])
     // Connect mapWidget close to infoWidget close
     QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
 
+    // Connect piece movement signal to map widget for redrawing (heat map update)
+    QObject::connect(infoWidget, &PlayerInfoWidget::pieceMoved, mapWidget, [mapWidget](int fromRow, int fromCol, int toRow, int toCol) {
+        Q_UNUSED(fromRow);
+        Q_UNUSED(fromCol);
+        Q_UNUSED(toRow);
+        Q_UNUSED(toCol);
+        mapWidget->updateHeatMap();  // Refresh heat map (reachability/risk/threat)
+        mapWidget->update();  // Redraw the entire map
+    });
+
     infoWidget->show();
 
     ScoreWindow *scoreWindow = nullptr;
@@ -421,10 +431,10 @@ int main(int argc, char *argv[])
     */
 
     // NOW start the current player's turn (after AI connections are set up)
-    // This applies to both new games and loaded games
+    // When loading a saved game, don't reset moves (preserve saved state)
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
         qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
-        players[currentPlayerIndex]->startTurn();
+        players[currentPlayerIndex]->startTurn(!loadGame);  // Don't reset moves when loading saved game
         mapWidget->setAtStartOfTurn(true);
     }
 
@@ -520,9 +530,10 @@ int main(int argc, char *argv[])
     }
 
     // Start the current player's turn
+    // When loading a saved game, don't reset moves (preserve saved state)
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
         qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
-        players[currentPlayerIndex]->startTurn();
+        players[currentPlayerIndex]->startTurn(false);  // Don't reset moves when loading saved game
         mapWidget->setAtStartOfTurn(true);
     }
 
@@ -680,7 +691,10 @@ bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<
             QString territory = galleyObj["territory"].toString();
 
             GalleyPiece *galley = new GalleyPiece(playerId, territory, player);
-            galley->setMovesRemaining(galleyObj["movesRemaining"].toDouble(2));
+            double savedMoves = galleyObj["movesRemaining"].toDouble(2);
+            galley->setMovesRemaining(savedMoves);
+            qDebug() << "  Loaded galley at" << territory << "movesRemaining:" << savedMoves
+                     << "(JSON has key:" << galleyObj.contains("movesRemaining") << ")";
             if (galleyObj["transportedThisTurn"].toBool()) {
                 galley->setTransportedThisTurn(true);
             }
