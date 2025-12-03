@@ -10,6 +10,7 @@
 #include "combatdialog.h"
 #include "purchasedialog.h"
 #include "building.h"
+#include "gamelog.h"
 #include <QDebug>
 #include <QTime>
 #include <QTimer>
@@ -1044,10 +1045,16 @@ void AIPlayer::executeMovementPhaseRiskBased()
     }
 
     // Actually perform the move
+    QString fromTerritory = bestMove.leader->getTerritoryName();
     bool moveSuccess = m_infoWidget->aiMoveLeaderToTerritory(bestMove.leader, bestMove.destination);
 
     if (moveSuccess) {
         log(QString("%1: Moved to %2 successfully!").arg(leaderName).arg(bestMove.destination));
+
+        // Log the movement to game log
+        GAME_LOG.logMovement(QString("Player %1").arg(m_player->getId()),
+                             leaderName, fromTerritory, bestMove.destination,
+                             bestMove.troopsCanBring);
 
         // Check if we moved into combat - if so, consume all moves for leader and legion
         if (m_infoWidget->hasEnemyPiecesAt(bestMove.destination, m_player)) {

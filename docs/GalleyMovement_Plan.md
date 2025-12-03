@@ -1,5 +1,7 @@
 # Galley Movement Implementation Plan
 
+**Status: IMPLEMENTED** - Galley movement, beaching, boarding/disembarking, and AI support are complete.
+
 ## Original Rules Summary
 
 ### Rule 1: Legion Boarding/Disembarking Restriction
@@ -135,3 +137,24 @@ These straits require galley transport - no land route exists:
 **Land combat with docked galleys:**
 - Galleys do not participate in combat
 - After combat resolution, destroy all galleys belonging to losing side in that territory
+
+---
+
+## Implementation Status
+
+### Completed ✓
+- [x] Galley 2-movement system
+- [x] Beaching mechanics (galleys can beach on coastal provinces)
+- [x] Boarding/disembarking troops
+- [x] Movement tracking (`m_movesRemaining`, `m_hasMovedThisTurn`)
+- [x] AI galley movement support
+- [x] AI galley purchasing logic
+- [x] AI galley boarding dialog (auto-mode)
+- [x] Galley movement in MoveEnumerator for force projection
+- [x] Save/load support for galley state
+- [x] Heat map troop projection for troops aboard galleys
+
+### Notes
+- Beached galleys can transport troops to adjacent sea zones
+- Stranded troop handling has been fixed
+- 2-turn heat map projection includes galley transport

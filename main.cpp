@@ -10,6 +10,7 @@
 #include "combatdialog.h"
 #include "aiplayer.h"
 #include "aidebugwidget.h"
+#include "gamelog.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
@@ -185,6 +186,20 @@ int main(int argc, char *argv[])
 
     // Reset the piece counter for a fresh game
     GamePiece::resetCounter();
+
+    // Start the game log
+    QString gameDescription;
+    if (singlePlayerMode) {
+        gameDescription = "Single Player Mode (Combat Disabled)";
+    } else if (aiTestMode) {
+        gameDescription = QString("AI Test Mode (%1 AI players)").arg(numPlayers);
+    } else if (loadGame) {
+        gameDescription = "Loaded Game";
+    } else {
+        gameDescription = QString("New Game (%1 players)").arg(numPlayers);
+    }
+    GAME_LOG.startNewGame(gameDescription);
+    qDebug() << "Game log started at:" << GAME_LOG.getLogFilePath();
 
 #ifdef USE_OPENGL_MAP
     GameMapWidget *mapWidget = nullptr;
@@ -565,9 +580,15 @@ int main(int argc, char *argv[])
         qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
         players[currentPlayerIndex]->startTurn(false);  // Don't reset moves when loading saved game
         mapWidget->setAtStartOfTurn(true);
+
+        // Log the first turn
+        GAME_LOG.logTurnStart(QString("Player %1").arg(players[currentPlayerIndex]->getId()), 1);
     }
 
     int result = a.exec();
+
+    // End the game log
+    GAME_LOG.endGame();
 
     // Clean up
     qDeleteAll(aiPlayers);

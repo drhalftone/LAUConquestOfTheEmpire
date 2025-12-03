@@ -1,5 +1,7 @@
 # Move Enumeration Feature Plan
 
+**Status: IMPLEMENTED** - See `ai/moveenumerator.h` and `ai/moveenumerator.cpp`
+
 ## Overview
 
 This plan describes a system to enumerate all possible moves that a player could make on a given turn. The output is a list of **move pairs** for each general, where each pair represents two transitions (source → sink, source → sink).
@@ -813,7 +815,24 @@ For 2-turn projection:
 5. Add `getMaxReachabilityMap2Turn()` - count troops reaching each territory
 6. Update heat map to use 2-turn projection
 
-## Open Questions
+## Implementation Status
+
+The following has been implemented in `ai/moveenumerator.h` and `ai/moveenumerator.cpp`:
+
+### Completed ✓
+- [x] Core data structures (Transition, GeneralMove, TroopMove, CavalryMove, GalleyMove)
+- [x] `enumerateGeneralMoves()` - enumerate all 2-transition move pairs for generals
+- [x] `enumerateTroopMoves()` - infantry/catapult single transitions
+- [x] `enumerateCavalryMoves()` - cavalry 2-transition moves
+- [x] `enumerateGalleyMoves()` - galley movement including troops aboard
+- [x] Road network support
+- [x] Galley transport support
+- [x] Escort validation (generals need troops for enemy/unclaimed territories)
+- [x] 2-turn projection (`enumerateGeneralMoves2Turn()`, `getMaxReachabilityMap2Turn()`)
+- [x] Heat map integration for force/threat projection
+- [x] `MoveEnumeratorWidget` for visualization/debugging
+
+### Open Questions
 
 1. **Opponent moves**: Should we enumerate opponent moves for threat analysis?
 2. **Combined moves**: Should we enumerate combinations of all generals' moves together? (Exponential in number of generals)

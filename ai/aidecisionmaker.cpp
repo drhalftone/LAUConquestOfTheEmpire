@@ -1159,100 +1159,378 @@ AIPurchaseDecision AIDecisionMaker::decidePurchases(
         // Don't build new cities at medium risk - too likely to be captured
     }
 
-    // === PRIORITY 3: Build cities to extend road network ===
-    // Cities create roads - prioritize:
-    // 1. Cities adjacent to existing cities (extend network)
-    // 2. Cities that bridge disconnected networks
-    // 3. Cities on path to at-risk territories
+    // === PRIORITY 3: Build cities strategically ===
+    //
+    // City placement strategy:
+    // 1. Find the territory most at risk (HIGH > MEDIUM, closer to home wins ties)
+    // 2. Find shortest path from home city to that territory
+    // 3. Place UNFORTIFIED cities along this path, starting from home and extending outward
+    // 4. FORTIFIED cities can be placed standalone for defense at threatened locations
+    //
+    // Rules:
+    // - UNFORTIFIED cities = Road network extenders (must be adjacent to existing city)
+    // - FORTIFIED cities = Defensive strongholds (can be standalone for protection)
 
     // Find all territories with our cities
     QSet<QString> territoriesWithCities;
     for (City *city : player->getCities()) {
         territoriesWithCities.insert(city->getTerritoryName());
     }
+    // Also include cities we've already decided to build this turn
+    for (auto it = decision.cities.begin(); it != decision.cities.end(); ++it) {
+        territoriesWithCities.insert(it.key());
+    }
 
-    // Score each potential city location for road network value
-    struct CityCandidate {
+    // Get territories connected to home via road network
+    QStringList homeRoadNetwork = graph->getRoadConnectedTerritories(homeProvince, player);
+    QSet<QString> connectedToHome(homeRoadNetwork.begin(), homeRoadNetwork.end());
+    connectedToHome.insert(homeProvince);
+
+    // === STEP 1: Find the most at-risk territory we own ===
+    // Priority: HIGH risk first, then MEDIUM risk
+    // Tie-breaker: Closer to home (shorter path = higher priority)
+    struct RiskTarget {
         QString territory;
-        int roadScore;      // How many existing cities it connects to
-        bool bridgesNetworks; // Does it connect two previously disconnected areas?
         RiskLevel risk;
+        int distanceFromHome;
+        int enemyForce;
+        int ourForce;
     };
-    QList<CityCandidate> roadCityCandidates;
+    QList<RiskTarget> riskTargets;
 
-    for (const QString &territory : territoriesForCities) {
-        if (decision.cities.contains(territory)) continue;  // Already planned
+    for (const QString &territory : ownedTerritories) {
         if (!riskMap.contains(territory)) continue;
 
-        CityCandidate candidate;
-        candidate.territory = territory;
-        candidate.risk = riskMap[territory].risk;
-        candidate.roadScore = 0;
-        candidate.bridgesNetworks = false;
+        RiskLevel risk = riskMap[territory].risk;
+        if (risk == RiskLevel::High || risk == RiskLevel::Medium) {
+            RiskTarget target;
+            target.territory = territory;
+            target.risk = risk;
+            target.enemyForce = riskMap[territory].enemyMaxForce;
+            target.ourForce = riskMap[territory].ourMaxForce;
 
-        // Count adjacent cities (our cities only)
-        QStringList neighbors = graph->getNeighbors(territory);
-        QSet<QString> adjacentCityTerritories;
-        for (const QString &neighbor : neighbors) {
-            if (territoriesWithCities.contains(neighbor)) {
-                candidate.roadScore += 10;  // Each adjacent city is valuable
-                adjacentCityTerritories.insert(neighbor);
+            // Calculate distance from home (or from nearest city on road network)
+            if (connectedToHome.contains(territory)) {
+                target.distanceFromHome = 0;  // Already on road network
+            } else {
+                // Find shortest path from any city on road network to this territory
+                int minDistance = INT_MAX;
+                for (const QString &cityTerritory : territoriesWithCities) {
+                    if (!ownedSet.contains(cityTerritory)) continue;  // Must own both endpoints
+                    int dist = graph->getDistance(cityTerritory, territory);
+                    if (dist >= 0 && dist < minDistance) {
+                        minDistance = dist;
+                    }
+                }
+                target.distanceFromHome = (minDistance == INT_MAX) ? 999 : minDistance;
             }
+
+            riskTargets.append(target);
+        }
+    }
+
+    // Sort: HIGH risk first, then by distance (closer = higher priority)
+    std::sort(riskTargets.begin(), riskTargets.end(),
+              [](const RiskTarget &a, const RiskTarget &b) {
+                  if (a.risk != b.risk) {
+                      return a.risk == RiskLevel::High;  // HIGH before MEDIUM
+                  }
+                  return a.distanceFromHome < b.distanceFromHome;  // Closer first
+              });
+
+    // === STEP 2: Find the best path to extend roads toward the riskiest territory ===
+    // For each at-risk territory, find the shortest path from the nearest city
+    // The first territory on that path (adjacent to a city) is where we should build
+
+    QList<QString> pathToRiskiest;
+    QString riskiestTarget;
+
+    for (const RiskTarget &target : riskTargets) {
+        if (connectedToHome.contains(target.territory)) {
+            continue;  // Already connected - no need to build road cities
         }
 
-        // Check if this would bridge two disconnected road networks
-        if (adjacentCityTerritories.size() >= 2) {
-            // Check if any two adjacent cities are NOT already road-connected
-            QList<QString> adjList = adjacentCityTerritories.values();
-            for (int i = 0; i < adjList.size(); i++) {
-                for (int j = i + 1; j < adjList.size(); j++) {
-                    QStringList network1 = graph->getRoadConnectedTerritories(adjList[i], player);
-                    if (!network1.contains(adjList[j])) {
-                        candidate.bridgesNetworks = true;
-                        candidate.roadScore += 50;  // Big bonus for bridging networks
+        // Find shortest path from any existing city to this target
+        // We want to extend from the road network toward the target
+        int bestPathLength = INT_MAX;
+        QList<QString> bestPath;
+        QString bestStartCity;
+
+        for (const QString &cityTerritory : territoriesWithCities) {
+            if (!ownedSet.contains(cityTerritory)) continue;
+
+            QList<QString> path = graph->findPath(cityTerritory, target.territory);
+            if (!path.isEmpty() && path.size() < bestPathLength) {
+                // Verify the path only goes through territories we own
+                bool validPath = true;
+                for (const QString &step : path) {
+                    if (!ownedSet.contains(step)) {
+                        validPath = false;
                         break;
                     }
                 }
-                if (candidate.bridgesNetworks) break;
+                if (validPath) {
+                    bestPathLength = path.size();
+                    bestPath = path;
+                    bestStartCity = cityTerritory;
+                }
             }
         }
 
-        // Only consider if it has road network value (adjacent to existing city)
-        if (candidate.roadScore > 0) {
-            roadCityCandidates.append(candidate);
+        if (!bestPath.isEmpty() && bestPath.size() > 1) {
+            pathToRiskiest = bestPath;
+            riskiestTarget = target.territory;
+            break;  // Use the first (highest priority) target with a valid path
         }
     }
 
-    // Sort by road score descending
-    std::sort(roadCityCandidates.begin(), roadCityCandidates.end(),
-              [](const CityCandidate &a, const CityCandidate &b) {
-                  return a.roadScore > b.roadScore;
-              });
+    // === PHASE 1: Build fortified cities for defense (can be standalone) ===
+    // Fortified cities provide +1 defense, useful at threatened locations with troops
+    int fortifiedCitiesBuilt = 0;
 
-    // Build road network cities - ONLY if they bridge disconnected networks
-    // Be conservative: only 1 road city per turn, and only if it truly connects networks
-    for (const CityCandidate &candidate : roadCityCandidates) {
-        if (decision.cities.size() >= 1) break;  // Limit to 1 city per turn total (conservative)
+    for (const RiskTarget &target : riskTargets) {
+        if (fortifiedCitiesBuilt >= 1) break;
+        if (remaining < fortifiedCityPrice) break;
+        if (!territoriesForCities.contains(target.territory)) continue;  // Can't build here
+        if (decision.cities.contains(target.territory)) continue;  // Already planned
 
-        // Only build if this city bridges disconnected networks - that's the real strategic value
-        if (!candidate.bridgesNetworks) continue;
+        // Only build fortified city if:
+        // 1. Territory is at risk (already filtered above)
+        // 2. We have troops there that need protection
+        // 3. Fortification would make a difference (close battle)
+        bool hasTroops = (target.ourForce > 0);
+        bool fortHelps = (target.ourForce >= target.enemyForce - 2 &&
+                          target.ourForce < target.enemyForce);
 
-        bool isSafe = (candidate.risk == RiskLevel::Safe || candidate.risk == RiskLevel::Low);
-
-        if (isSafe && remaining >= cityPrice) {
-            // Safe location - build unfortified
-            decision.cities[candidate.territory] = false;
-            remaining -= cityPrice;
-            decision.totalCost += cityPrice;
-            decision.reason += QString(" | Road city at %1 (bridges networks!)").arg(candidate.territory);
-        } else if (remaining >= fortifiedCityPrice) {
-            // Risky but bridges networks - build fortified for protection
-            decision.cities[candidate.territory] = true;
+        if (hasTroops && fortHelps) {
+            decision.cities[target.territory] = true;  // Fortified
             remaining -= fortifiedCityPrice;
             decision.totalCost += fortifiedCityPrice;
-            decision.reason += QString(" | Fortified road city at %1 (bridges networks)").arg(candidate.territory);
+            fortifiedCitiesBuilt++;
+
+            // Track that this city exists now
+            territoriesWithCities.insert(target.territory);
+
+            decision.reason += QString(" | Fortified city at %1 (defense: %2 vs enemy %3)")
+                .arg(target.territory).arg(target.ourForce).arg(target.enemyForce);
+
+            // If this is the riskiest target and we just built there, no need for road
+            if (target.territory == riskiestTarget) {
+                pathToRiskiest.clear();  // No longer need to build road to it
+            }
         }
     }
+
+    // === PHASE 2: Build unfortified cities along the path to riskiest territory ===
+    // Start from the city end of the path and work toward the target
+    // Each city must be adjacent to an existing city (the previous one in the path)
+
+    int unfortifiedCitiesBuilt = 0;
+    int maxUnfortifiedPerTurn = 2;  // Can build up to 2 road cities per turn
+
+    if (!pathToRiskiest.isEmpty()) {
+        // pathToRiskiest is: [startCity, step1, step2, ..., targetTerritory]
+        // We want to build at step1 first (adjacent to startCity), then step2, etc.
+
+        for (int i = 1; i < pathToRiskiest.size() && unfortifiedCitiesBuilt < maxUnfortifiedPerTurn; i++) {
+            QString stepTerritory = pathToRiskiest[i];
+
+            if (remaining < cityPrice) break;
+            if (decision.cities.contains(stepTerritory)) continue;  // Already planned
+            if (territoriesWithCities.contains(stepTerritory)) continue;  // Already have city
+            if (!territoriesForCities.contains(stepTerritory)) continue;  // Can't build here
+
+            // Verify this territory is adjacent to an existing city
+            bool adjacentToCity = false;
+            QStringList neighbors = graph->getNeighbors(stepTerritory);
+            for (const QString &neighbor : neighbors) {
+                if (territoriesWithCities.contains(neighbor)) {
+                    adjacentToCity = true;
+                    break;
+                }
+            }
+
+            if (!adjacentToCity) {
+                continue;  // Skip - unfortified cities must connect to road network
+            }
+
+            // Check risk level - prefer safe territories but build anyway if on path
+            bool isSafeEnough = true;
+            if (riskMap.contains(stepTerritory)) {
+                RiskLevel risk = riskMap[stepTerritory].risk;
+                isSafeEnough = (risk == RiskLevel::Safe || risk == RiskLevel::Low ||
+                                risk == RiskLevel::Unreachable);
+            }
+
+            // Build the road city
+            decision.cities[stepTerritory] = false;  // Unfortified
+            remaining -= cityPrice;
+            decision.totalCost += cityPrice;
+            unfortifiedCitiesBuilt++;
+
+            // Track this city so the next step can be adjacent to it
+            territoriesWithCities.insert(stepTerritory);
+
+            decision.reason += QString(" | Road city at %1 (path to %2)")
+                .arg(stepTerritory).arg(riskiestTarget);
+        }
+    }
+
+    // === PHASE 2b: Connect isolated fortified cities back to home road network ===
+    // If we have fortified cities that aren't connected to the home city network,
+    // build unfortified cities to connect them
+    QString homeProvinceName = player->getHomeProvinceName();
+
+    // Find all fortified cities that are NOT connected to home
+    QList<QString> isolatedFortifiedCities;
+    for (City *city : player->getCities()) {
+        if (!city->isFortified()) continue;
+        QString cityTerritory = city->getTerritoryName();
+        if (cityTerritory == homeProvinceName) continue;  // Home is always connected
+
+        // Check if this fortified city is connected to home via road network
+        // BFS from this city - can we reach home through cities only?
+        QSet<QString> visited;
+        QList<QString> toVisit;
+        toVisit.append(cityTerritory);
+        visited.insert(cityTerritory);
+        bool connectedToHome = false;
+
+        while (!toVisit.isEmpty() && !connectedToHome) {
+            QString current = toVisit.takeFirst();
+            QStringList neighbors = graph->getNeighbors(current);
+            for (const QString &neighbor : neighbors) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+                if (visited.contains(neighbor)) continue;
+                if (!territoriesWithCities.contains(neighbor)) continue;  // Must travel through cities
+
+                if (neighbor == homeProvinceName) {
+                    connectedToHome = true;
+                    break;
+                }
+                visited.insert(neighbor);
+                toVisit.append(neighbor);
+            }
+        }
+
+        if (!connectedToHome) {
+            isolatedFortifiedCities.append(cityTerritory);
+        }
+    }
+
+    // For each isolated fortified city, find path to nearest connected city and build road
+    for (const QString &isolatedCity : isolatedFortifiedCities) {
+        if (unfortifiedCitiesBuilt >= maxUnfortifiedPerTurn) break;
+        if (remaining < cityPrice) break;
+
+        // BFS from isolated city to find shortest path to any connected city (home network)
+        QMap<QString, QString> cameFrom;
+        QList<QString> toVisit;
+        QSet<QString> visited;
+        toVisit.append(isolatedCity);
+        visited.insert(isolatedCity);
+        cameFrom[isolatedCity] = "";
+
+        QString targetCity;  // First city we find that's connected to home
+        bool found = false;
+
+        while (!toVisit.isEmpty() && !found) {
+            QString current = toVisit.takeFirst();
+            QStringList neighbors = graph->getNeighbors(current);
+            for (const QString &neighbor : neighbors) {
+                if (graph->isSeaTerritory(neighbor)) continue;
+                if (visited.contains(neighbor)) continue;
+                if (!player->ownsTerritory(neighbor)) continue;  // Must own territory
+
+                visited.insert(neighbor);
+                cameFrom[neighbor] = current;
+                toVisit.append(neighbor);
+
+                // Check if this neighbor is connected to home (has city that's part of home network)
+                if (territoriesWithCities.contains(neighbor) && neighbor != isolatedCity) {
+                    // Verify it's actually connected to home
+                    QSet<QString> homeCheck;
+                    QList<QString> homeVisit;
+                    homeVisit.append(neighbor);
+                    homeCheck.insert(neighbor);
+                    bool reachesHome = (neighbor == homeProvinceName);
+
+                    while (!homeVisit.isEmpty() && !reachesHome) {
+                        QString hc = homeVisit.takeFirst();
+                        for (const QString &hn : graph->getNeighbors(hc)) {
+                            if (graph->isSeaTerritory(hn)) continue;
+                            if (homeCheck.contains(hn)) continue;
+                            if (!territoriesWithCities.contains(hn)) continue;
+                            if (hn == homeProvinceName) {
+                                reachesHome = true;
+                                break;
+                            }
+                            homeCheck.insert(hn);
+                            homeVisit.append(hn);
+                        }
+                    }
+
+                    if (reachesHome) {
+                        targetCity = neighbor;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (found && !targetCity.isEmpty()) {
+            // Trace back path from targetCity to isolatedCity
+            QList<QString> path;
+            QString step = targetCity;
+            while (!step.isEmpty() && step != isolatedCity) {
+                path.prepend(step);
+                step = cameFrom.value(step, "");
+            }
+            path.prepend(isolatedCity);
+
+            // Build cities along path, starting from the connected end (targetCity side)
+            // path is [isolatedCity, ..., territory_before_targetCity, targetCity]
+            // We want to build from targetCity backwards toward isolatedCity
+            for (int i = path.size() - 2; i >= 1; i--) {  // Skip targetCity (already has city) and isolatedCity
+                if (unfortifiedCitiesBuilt >= maxUnfortifiedPerTurn) break;
+                if (remaining < cityPrice) break;
+
+                QString stepTerritory = path[i];
+                if (decision.cities.contains(stepTerritory)) continue;
+                if (territoriesWithCities.contains(stepTerritory)) continue;
+                if (!territoriesForCities.contains(stepTerritory)) continue;
+
+                // Verify adjacent to existing city
+                bool adjacentToCity = false;
+                for (const QString &neighbor : graph->getNeighbors(stepTerritory)) {
+                    if (territoriesWithCities.contains(neighbor)) {
+                        adjacentToCity = true;
+                        break;
+                    }
+                }
+                if (!adjacentToCity) continue;
+
+                decision.cities[stepTerritory] = false;  // Unfortified
+                remaining -= cityPrice;
+                decision.totalCost += cityPrice;
+                unfortifiedCitiesBuilt++;
+                territoriesWithCities.insert(stepTerritory);
+
+                decision.reason += QString(" | Road city at %1 (connecting %2 to home)")
+                    .arg(stepTerritory).arg(isolatedCity);
+            }
+        }
+    }
+
+    // === NO PHASE 3: Don't build cities "just because" ===
+    // Cities should ONLY be built to:
+    // 1. Extend roads toward at-risk territories (Phase 2)
+    // 2. Connect isolated fortified cities to home (Phase 2b)
+    // 3. Provide fortified defense at threatened locations (Phase 1)
+    //
+    // If there are no at-risk territories, there's no reason to buy a city.
+    // The money is better spent on troops.
 
     // === PRIORITY 4: Buy troops for defense/expansion ===
     // More troops if we have at-risk territories, fewer if everything is safe
@@ -1341,13 +1619,27 @@ AIPurchaseDecision AIDecisionMaker::decidePurchases(
     // === PRIORITY 5: Build income cities in SAFE territories ===
     // Only if we have plenty of troops AND a significant budget surplus
     // Be very conservative - troops are more important than cities early game
+    // RULE: Income cities are unfortified, so they MUST be adjacent to existing city
+    // RULE: Prefer territories where we have a general stationed for protection
     int minBudgetForIncomeCity = 40;  // Must have at least 40 remaining after other purchases
     if (currentTroops >= 8 && remaining >= minBudgetForIncomeCity && decision.cities.isEmpty()) {
         // Find high-value safe territories without cities
         // Only consider 10-value territories - they pay off faster
-        QList<QPair<QString, int>> cityCandidates;
+        // Score: value + 100 bonus if general present (strongly prefer protected territories)
+        QList<QPair<QString, int>> incomeCityCandidates;
         for (const QString &territory : territoriesForCities) {
             if (decision.cities.contains(territory)) continue;  // Already planning to build
+
+            // RULE: Unfortified cities must be adjacent to an existing city
+            bool adjacentToCity = false;
+            QStringList neighbors = graph->getNeighbors(territory);
+            for (const QString &neighbor : neighbors) {
+                if (territoriesWithCities.contains(neighbor)) {
+                    adjacentToCity = true;
+                    break;
+                }
+            }
+            if (!adjacentToCity) continue;  // Skip - must connect to road network
 
             int value = graph->getValue(territory);
             if (value < 10) continue;  // Only build on high-value territories for income
@@ -1356,22 +1648,33 @@ AIPurchaseDecision AIDecisionMaker::decidePurchases(
                 RiskLevel risk = riskMap[territory].risk;
                 // Only SAFE territories - not even low risk
                 if (risk == RiskLevel::Safe) {
-                    cityCandidates.append({territory, value});
+                    // Check if we have a general in this territory for protection
+                    bool hasGeneralHere = false;
+                    for (GeneralPiece *gen : player->getGenerals()) {
+                        if (gen->getTerritoryName() == territory) {
+                            hasGeneralHere = true;
+                            break;
+                        }
+                    }
+                    // Score: base value + 100 bonus if general present
+                    int score = value + (hasGeneralHere ? 100 : 0);
+                    incomeCityCandidates.append({territory, score});
                 }
             }
         }
 
-        // Sort by value descending (prefer 10-value territories)
-        std::sort(cityCandidates.begin(), cityCandidates.end(),
+        // Sort by score descending (prefer territories with generals, then by value)
+        std::sort(incomeCityCandidates.begin(), incomeCityCandidates.end(),
                   [](const auto &a, const auto &b) { return a.second > b.second; });
 
         // Build at most 1 income city per turn
-        if (!cityCandidates.isEmpty() && remaining >= cityPrice) {
-            const auto &candidate = cityCandidates.first();
-            decision.cities[candidate.first] = false;  // Unfortified
+        if (!incomeCityCandidates.isEmpty() && remaining >= cityPrice) {
+            const auto &incomeCandidate = incomeCityCandidates.first();
+            decision.cities[incomeCandidate.first] = false;  // Unfortified
             remaining -= cityPrice;
             decision.totalCost += cityPrice;
-            decision.reason += QString(" | Income city at %1 (val=%2)").arg(candidate.first).arg(candidate.second);
+            territoriesWithCities.insert(incomeCandidate.first);  // Track for future adjacency checks
+            decision.reason += QString(" | Income city at %1 (val=%2)").arg(incomeCandidate.first).arg(incomeCandidate.second);
         }
     }
 
@@ -2165,11 +2468,46 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     };
 
     // Helper: BFS to find the first step toward a distant territory
-    // Only returns target directly if galley is available at 'from' territory
-    auto findFirstStepToward = [&graph, &hasGalleyAtTerritory](const QString &from, const QString &target) -> QString {
+    // Considers roads: if target is on our road network, go directly there
+    // Otherwise find the best road exit point toward target
+    auto findFirstStepToward = [&graph, &hasGalleyAtTerritory, &player](const QString &from, const QString &target) -> QString {
         if (from == target) return QString();
 
-        // BFS to find shortest path by land
+        // === ROAD NETWORK CHECK ===
+        // If we're at a city on our road network, check if target is also on it
+        QStringList roadConnected = graph->getRoadConnectedTerritories(from, player);
+        if (!roadConnected.isEmpty()) {
+            // Target is directly on our road network - go straight there!
+            if (roadConnected.contains(target)) {
+                return target;
+            }
+
+            // Target is NOT on road network - find the best road exit point
+            // This is the road-connected territory closest to the target
+            QString bestRoadExit;
+            int bestDistanceFromExit = 999;
+
+            for (const QString &roadTerritory : roadConnected) {
+                // Calculate distance from this road territory to the target
+                int distToTarget = graph->getDistance(roadTerritory, target);
+                if (distToTarget > 0 && distToTarget < bestDistanceFromExit) {
+                    bestDistanceFromExit = distToTarget;
+                    bestRoadExit = roadTerritory;
+                }
+            }
+
+            // Also check if going directly (without using road) would be shorter
+            // Sometimes the target is adjacent to 'from' but not on roads
+            int directDist = graph->getDistance(from, target);
+            if (directDist > 0 && directDist <= bestDistanceFromExit) {
+                // Direct route is same or shorter - use standard BFS below
+            } else if (!bestRoadExit.isEmpty()) {
+                // Road route is shorter - take road to exit point
+                return bestRoadExit;
+            }
+        }
+
+        // === STANDARD BFS (no road advantage, or direct route is shorter) ===
         QMap<QString, QString> cameFrom;  // territory -> previous territory
         QList<QString> queue;
         queue.append(from);
@@ -2207,31 +2545,76 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
     };
 
     // Helper: Calculate distance (in hops) between two territories
-    // Returns 2 for galley-reachable territories (only if galley is available at source)
-    auto getDistance = [&graph, &hasGalleyAtTerritory](const QString &from, const QString &target) -> int {
+    // Considers: roads (1 move for entire network), land adjacency, galley routes
+    auto getDistance = [&graph, &hasGalleyAtTerritory, &player](const QString &from, const QString &target) -> int {
         if (from == target) return 0;
 
-        QMap<QString, int> dist;
-        QList<QString> queue;
-        queue.append(from);
-        dist[from] = 0;
-
-        while (!queue.isEmpty()) {
-            QString current = queue.takeFirst();
-
-            if (current == target) {
-                return dist[current];
+        // === ROAD NETWORK CHECK ===
+        // If we're at a city on our road network, we can reach any other city on the network in 1 move
+        QStringList roadConnected = graph->getRoadConnectedTerritories(from, player);
+        if (!roadConnected.isEmpty()) {
+            // Target is directly on our road network - 1 move!
+            if (roadConnected.contains(target)) {
+                return 1;
             }
 
-            for (const QString &neighbor : graph->getNeighbors(current)) {
-                if (graph->isSeaTerritory(neighbor)) continue;
-                if (dist.contains(neighbor)) continue;
+            // Target is NOT on road network - find closest road exit point
+            // BFS from all road-connected territories to find shortest path to target
+            QMap<QString, int> dist;
+            QList<QString> queue;
 
-                dist[neighbor] = dist[current] + 1;
-                queue.append(neighbor);
+            // Start BFS from all road-connected territories (including 'from')
+            // All of these are distance 1 from 'from' via roads
+            dist[from] = 0;  // Starting point
+            for (const QString &roadTerritory : roadConnected) {
+                dist[roadTerritory] = 1;  // 1 move to reach via road
+                queue.append(roadTerritory);
+            }
 
-                // Limit search depth
-                if (dist[neighbor] > 5) continue;
+            while (!queue.isEmpty()) {
+                QString current = queue.takeFirst();
+
+                if (current == target) {
+                    return dist[current];
+                }
+
+                for (const QString &neighbor : graph->getNeighbors(current)) {
+                    if (graph->isSeaTerritory(neighbor)) continue;
+                    if (dist.contains(neighbor)) continue;
+
+                    dist[neighbor] = dist[current] + 1;
+                    queue.append(neighbor);
+
+                    // Limit search depth
+                    if (dist[neighbor] > 5) continue;
+                }
+            }
+
+            // If we reached here, target might be galley-reachable (checked below)
+        } else {
+            // === NO ROAD NETWORK - Standard BFS ===
+            QMap<QString, int> dist;
+            QList<QString> queue;
+            queue.append(from);
+            dist[from] = 0;
+
+            while (!queue.isEmpty()) {
+                QString current = queue.takeFirst();
+
+                if (current == target) {
+                    return dist[current];
+                }
+
+                for (const QString &neighbor : graph->getNeighbors(current)) {
+                    if (graph->isSeaTerritory(neighbor)) continue;
+                    if (dist.contains(neighbor)) continue;
+
+                    dist[neighbor] = dist[current] + 1;
+                    queue.append(neighbor);
+
+                    // Limit search depth
+                    if (dist[neighbor] > 5) continue;
+                }
             }
         }
 
@@ -2593,16 +2976,43 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         generalsByTerritory[gen->getTerritoryName()].append(gen);
     }
 
+    // Calculate average legion size to determine what counts as "small"
+    // In early game with 4 troops and 4 generals, average is 1 - so 1 troop is NOT small
+    // Later with 20 troops and 6 generals, average is ~3 - so 1 troop IS small
+    int totalTroopsInLegions = 0;
+    int generalsWithTroops = 0;
+    for (GeneralPiece *gen : availableGenerals) {
+        int legionSize = gen->getLegion().size();
+        totalTroopsInLegions += legionSize;
+        if (legionSize > 0) {
+            generalsWithTroops++;
+        }
+    }
+    double averageLegionSize = (generalsWithTroops > 0) ?
+        static_cast<double>(totalTroopsInLegions) / generalsWithTroops : 0.0;
+    qDebug() << "Average legion size:" << averageLegionSize
+             << "(total troops:" << totalTroopsInLegions << ", generals with troops:" << generalsWithTroops << ")";
+
     // For each territory with generals, assign them to DIFFERENT destinations
     for (auto it = generalsByTerritory.begin(); it != generalsByTerritory.end(); ++it) {
         QString fromTerritory = it.key();
         QList<GeneralPiece*> generalsHere = it.value();
 
-        // Count available troops at this territory
+        // Count available troops at this territory that are NOT already in a general's legion
+        // First, build a set of troop IDs that are in any general's legion at this territory
+        QSet<int> troopsInLegions;
+        for (GeneralPiece *gen : generalsHere) {
+            for (int troopId : gen->getLegion()) {
+                troopsInLegions.insert(troopId);
+            }
+        }
+
         QList<int> troopsAtThisTerritory;
         for (int i = 0; i < availableTroops.size(); i++) {
             const TroopInfo &troop = availableTroops[i];
-            if (troop.territory == fromTerritory && !assignedTroopIds.contains(troop.piece->getUniqueId())) {
+            if (troop.territory == fromTerritory &&
+                !assignedTroopIds.contains(troop.piece->getUniqueId()) &&
+                !troopsInLegions.contains(troop.piece->getUniqueId())) {
                 troopsAtThisTerritory.append(i);
             }
         }
@@ -2625,6 +3035,70 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
         for (GeneralPiece *gen : generalsHere) {
             if (assignedGenerals.contains(gen)) continue;
 
+            // RULE: Never leave troops behind unless another general here will take them
+            //
+            // If multiple generals are at a high-risk territory:
+            // - Merge legions (one general takes all troops up to max 5)
+            // - Extra generals with 0 troops return home to get out of harm's way
+            //
+            // If a general is alone with troops, they keep their troops and act normally
+            int existingLegion = gen->getLegion().size();
+
+            // Check if there are multiple generals here and we should consolidate
+            if (numGenerals > 1 && totalTroopsHere == 0) {
+                // Multiple generals, no free troops - consider consolidation
+                // Find if another general here can take our troops
+                GeneralPiece *recipientGeneral = nullptr;
+                for (GeneralPiece *otherGen : generalsHere) {
+                    if (otherGen == gen) continue;
+                    if (assignedGenerals.contains(otherGen)) continue;
+                    int otherLegionSize = otherGen->getLegion().size();
+                    // Other general has room for our troops (max legion = 5)
+                    if (otherLegionSize + existingLegion <= 5) {
+                        recipientGeneral = otherGen;
+                        break;
+                    }
+                }
+
+                if (recipientGeneral != nullptr && existingLegion > 0) {
+                    // Transfer troops to the other general and return home
+                    qDebug() << "  General #" << gen->getNumber() << "at" << fromTerritory
+                             << "transferring" << existingLegion << "troops to General #"
+                             << recipientGeneral->getNumber() << "and returning home";
+
+                    GeneralAssignment transferAssignment;
+                    transferAssignment.general = gen;
+                    transferAssignment.targetTerritory = homeProvince;
+                    transferAssignment.missionType = "TransferAndReturnHome";
+                    transferAssignment.priority = 50;
+                    transferAssignment.troopsToTake = 0;  // Giving away troops, not taking
+                    transferAssignment.reason = QString("Transfer troops to General #%1, return home for more")
+                        .arg(recipientGeneral->getNumber());
+                    plan.assignments.append(transferAssignment);
+                    assignedGenerals.insert(gen);
+                    continue;
+                }
+            }
+
+            // General with 0 troops (and no one to receive troops from) should return home
+            if (existingLegion == 0 && totalTroopsHere == 0) {
+                int distToHome = getDistance(fromTerritory, homeProvince);
+                if (distToHome > 0 && distToHome <= 4 && fromTerritory != homeProvince) {
+                    qDebug() << "  General #" << gen->getNumber() << "at" << fromTerritory
+                             << "has no troops -> returning home";
+                    GeneralAssignment returnAssignment;
+                    returnAssignment.general = gen;
+                    returnAssignment.targetTerritory = homeProvince;
+                    returnAssignment.missionType = "ReturnHome";
+                    returnAssignment.priority = 50;
+                    returnAssignment.troopsToTake = 0;
+                    returnAssignment.reason = "No troops, returning home for reinforcements";
+                    plan.assignments.append(returnAssignment);
+                    assignedGenerals.insert(gen);
+                    continue;
+                }
+            }
+
             // Find best unassigned destination reachable from here
             // IMPORTANT: Prefer UNCLAIMED or ENEMY territories over our own
             QString bestDest;
@@ -2640,13 +3114,41 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
                 // Skip if it's our current territory
                 if (destName == fromTerritory) continue;
 
-                // Skip territories we already own UNLESS they're threatened or have high defense value
+                // Skip if we already have a general stationed at this destination
+                // This prevents multiple generals converging on the same territory
+                // Exception: home province - multiple generals CAN return home to pick up troops
+                // Note: homeProvince is already defined earlier in this function
+                if (destName != homeProvince) {
+                    bool generalAlreadyThere = false;
+                    for (GeneralPiece *otherGen : availableGenerals) {
+                        if (otherGen == gen) continue;  // Skip self
+                        if (otherGen->getTerritoryName() == destName) {
+                            generalAlreadyThere = true;
+                            break;
+                        }
+                    }
+                    if (generalAlreadyThere) {
+                        qDebug() << "    Skipping" << destName << "- another general already stationed there";
+                        continue;
+                    }
+                }
+
+                // Skip territories we already own UNLESS they're threatened AND we have enough troops to help
                 // We want to EXPAND, not shuffle troops between owned territories
+                // A general with 1-2 troops can't meaningfully reinforce a threatened territory
                 bool weOwnIt = player->ownsTerritory(destName);
                 if (weOwnIt) {
-                    // Only go to our own territory if it's threatened
-                    if (!threatenedTerritories.contains(destName)) {
-                        continue;  // Skip - we don't need to go to safe owned territory
+                    // Check how many troops this general would bring
+                    int troopsWeCanBring = gen->getLegion().size();
+                    if (troopsWeCanBring < totalTroopsHere) {
+                        // We might pick up more troops here
+                        troopsWeCanBring = qMin(5, totalTroopsHere);
+                    }
+
+                    // Only reinforce threatened territory if we have meaningful force (3+ troops)
+                    bool isThreatened = threatenedTerritories.contains(destName);
+                    if (!isThreatened || troopsWeCanBring < 3) {
+                        continue;  // Skip - either not threatened, or we're too weak to help
                     }
                 }
 
@@ -2707,9 +3209,20 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             troopIndex += troopsToTake;
             assignment.troopsToTake = assignment.troopIds.size();
 
-            if (assignment.troopsToTake == 0 && totalTroopsHere > 0) {
-                qDebug() << "  General #" << gen->getNumber() << "- no troops left to assign";
+            // Check if general already has troops in their legion (from previous moves this turn)
+            int existingLegionSize = gen->getLegion().size();
+
+            // Don't create assignments with 0 troops UNLESS the general already has troops in their legion
+            if (assignment.troopsToTake == 0 && existingLegionSize == 0) {
+                qDebug() << "  General #" << gen->getNumber() << "- no troops to assign (total here:" << totalTroopsHere << ")";
                 continue;
+            }
+
+            // If general has existing legion, they can still move even without new troops
+            if (assignment.troopsToTake == 0 && existingLegionSize > 0) {
+                assignment.troopsToTake = existingLegionSize;  // Will move with existing legion
+                assignment.missionType = "ContinueWithLegion";
+                qDebug() << "  General #" << gen->getNumber() << "has existing legion of" << existingLegionSize;
             }
 
             assignment.reason = QString("Move %1 troops from %2 to %3 (risk score: %4)")
@@ -2815,6 +3328,63 @@ MovementPlan AIDecisionMaker::planMovement(Player *player, const QList<Player*> 
             qDebug() << "  No general within" << maxDistance << "moves to pick up" << troopCount
                      << "troops at" << strandedTerritory;
         }
+    }
+
+    // Step 7b: Generals without troops should return to home city to pick up purchases
+    // These are generals who weren't assigned in Step 6 because they had no troops at their location
+    // Note: homeProvince is already defined earlier in this function
+    qDebug() << "=== RETURN-HOME CHECK (generals without troops) ===";
+
+    for (GeneralPiece *gen : availableGenerals) {
+        if (assignedGenerals.contains(gen)) continue;
+
+        QString genTerritory = gen->getTerritoryName();
+        int legionSize = gen->getLegion().size();
+
+        // Only applies to generals with ZERO troops
+        // Generals with even 1 troop should stay and expand/collect taxes, not return home
+        if (legionSize > 0) {
+            qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                     << "has" << legionSize << "troops - staying to expand";
+            continue;
+        }
+
+        // Skip if already at home
+        if (genTerritory == homeProvince) {
+            qDebug() << "  General #" << gen->getNumber() << "already at home" << homeProvince;
+            continue;
+        }
+
+        // Check if we can reach home
+        int distToHome = getDistance(genTerritory, homeProvince);
+        if (distToHome == 0 || distToHome > 4) {
+            qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                     << "cannot reach home (distance=" << distToHome << ")";
+            continue;
+        }
+
+        // Check if galley is needed and available
+        bool needsGalley = requiresGalley(genTerritory, homeProvince);
+        if (needsGalley && !hasGalleyAtTerritory(genTerritory)) {
+            qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                     << "needs galley to reach home but none available";
+            continue;
+        }
+
+        // Create assignment to return home
+        GeneralAssignment assignment;
+        assignment.general = gen;
+        assignment.targetTerritory = homeProvince;
+        assignment.missionType = "ReturnHome";
+        assignment.priority = 100;  // Medium priority - get troops for next turn
+        assignment.troopsToTake = 0;
+        assignment.reason = QString("Return to %1 to pick up purchased troops").arg(homeProvince);
+
+        plan.assignments.append(assignment);
+        assignedGenerals.insert(gen);
+
+        qDebug() << "  General #" << gen->getNumber() << "at" << genTerritory
+                 << "returning home to" << homeProvince << "(distance=" << distToHome << ")";
     }
 
     // Step 8: Check if under-strength generals should RETREAT due to enemy threat
@@ -3024,6 +3594,26 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
         // Skip "StayHome" missions
         if (assignment.missionType == "StayHome") continue;
 
+        // CRITICAL: Don't move generals without troops unless they're going to pick some up
+        // A general without troops cannot capture territory or fight - they're useless
+        // Exception: "PickupTroops", "Retreat", or "ReturnHome" missions where the general is going TO get troops
+        // NOTE: Check actual legion size, not assignment.troopsToTake, because the general may already
+        // have troops from a previous move in this turn
+        bool isTroopPickupMission = (assignment.missionType == "PickupTroops" ||
+                                     assignment.missionType == "Retreat" ||
+                                     assignment.missionType == "ReturnHome" ||
+                                     assignment.missionType == "ContinueWithLegion" ||
+                                     assignment.missionType == "TransferAndReturnHome");
+        int actualLegionSize = 0;
+        if (general->getType() == GamePiece::Type::General) {
+            actualLegionSize = static_cast<GeneralPiece*>(general)->getLegion().size();
+        }
+        if (actualLegionSize == 0 && assignment.troopsToTake == 0 && !isTroopPickupMission) {
+            qDebug() << "Skipping General #" << static_cast<GeneralPiece*>(general)->getNumber()
+                     << "- has no troops and mission is" << assignment.missionType;
+            continue;
+        }
+
         // Check if target is adjacent (reachable in one move)
         QList<QString> neighbors = graph->getNeighbors(currentTerritory);
         bool targetIsAdjacent = false;
@@ -3189,6 +3779,21 @@ ScoredMove AIDecisionMaker::getNextMoveFromPlan(const MovementPlan &plan, Player
                     continue;
                 }
             }
+        }
+
+        // Check if nextStep already has one of our generals - if so, skip this assignment
+        // This prevents multiple generals from converging on the same territory
+        bool generalAlreadyAtNextStep = false;
+        for (GeneralPiece *otherGen : player->getGenerals()) {
+            if (otherGen == general) continue;
+            if (otherGen->getTerritoryName() == nextStep) {
+                generalAlreadyAtNextStep = true;
+                qDebug() << "Skipping move to" << nextStep << "- another general already there";
+                break;
+            }
+        }
+        if (generalAlreadyAtNextStep) {
+            continue;  // Skip to next assignment in plan
         }
 
         // This general needs to move - return this as the next move

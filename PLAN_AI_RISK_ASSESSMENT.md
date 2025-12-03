@@ -1,5 +1,7 @@
 # AI Risk Assessment System Plan
 
+**Status: LARGELY IMPLEMENTED** - See `ai/reachabilitycalculator.cpp`, `ai/moveenumerator.cpp`, and `ai/aidecisionmaker.cpp`
+
 This document outlines the plan for improving AI decision-making through reachability analysis and risk assessment.
 
 ---
@@ -202,5 +204,27 @@ These items are noted but not part of the current plan:
 
 ---
 
+## Implementation Status
+
+### Completed ✓
+- [x] `getReachableTerritories()` via `MoveEnumerator`
+- [x] Reachability maps for current player and enemies
+- [x] Force projection heat maps (1-turn and 2-turn)
+- [x] Threat assessment heat maps
+- [x] Risk-based territory classification
+- [x] Integration with AI decision-making loop
+- [x] Galley transport in reachability calculations
+- [x] Road network support
+
+### Partially Implemented
+- [ ] Multi-turn lookahead beyond 2 turns
+- [ ] Territory valuation (strategic position, chokepoints)
+
+### Not Yet Implemented
+- [ ] Fortification effects on battle outcome prediction
+
+---
+
 *Created: November 2024*
-*Status: Planning Phase*
+*Updated: December 2024*
+*Status: Largely Implemented*

@@ -20,6 +20,7 @@ SOURCES += \
     gamepiece.cpp \
     player.cpp \
     building.cpp \
+    gamelog.cpp \
     ai/reachabilitycalculator.cpp \
     ai/aidecisionmaker.cpp \
     ai/moveenumerator.cpp
@@ -31,6 +32,7 @@ HEADERS += \
     player.h \
     building.h \
     common.h \
+    gamelog.h \
     ai/reachabilitycalculator.h \
     ai/aidecisionmaker.h \
     ai/moveenumerator.h

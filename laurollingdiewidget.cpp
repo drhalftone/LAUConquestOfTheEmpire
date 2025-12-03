@@ -23,6 +23,11 @@ LAURollingDieWidget::LAURollingDieWidget(int numDice, QWidget *parent)
     resize(numDice * dieSize + (numDice + 1) * spacing, dieSize + 2 * spacing);
     rollTimer = new QTimer(this);
     connect(rollTimer, &QTimer::timeout, this, &LAURollingDieWidget::onRollTimer);
+
+    // Setup click sound for die rolling
+    m_clickSound = new QSoundEffect(this);
+    m_clickSound->setSource(QUrl("qrc:/images/click.wav"));
+    m_clickSound->setVolume(0.5f);
 }
 
 LAURollingDieWidget::~LAURollingDieWidget() {}
@@ -99,7 +104,12 @@ void LAURollingDieWidget::onRollTimer() {
         diceValues[i] = QRandomGenerator::global()->bounded(1, 7);
         diceOrientations[i] = QRandomGenerator::global()->bounded(0, 4);
     }
-    QApplication::beep(); update(); rollCount++;
+    if (m_clickSound->isPlaying()) {
+        m_clickSound->stop();
+    }
+    m_clickSound->play();
+    update();
+    rollCount++;
     if (rollCount > 10) rollTimer->setInterval(20 + (rollCount - 10) * 15);
     if (rollCount >= maxRolls) {
         rollTimer->stop(); isRolling = false;

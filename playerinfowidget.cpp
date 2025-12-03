@@ -8,6 +8,7 @@
 #include "building.h"
 #include "aiplayer.h"
 #include "ai/reachabilitycalculator.h"
+#include "gamelog.h"
 #include <QScrollArea>
 #include <QRegularExpression>
 #include <QTimer>
@@ -3477,6 +3478,11 @@ void PlayerInfoWidget::moveLeaderWithTroops(GamePiece *leader, int rowDelta, int
     }
     qDebug() << "Finished moving all troops";
 
+    // Log the movement
+    GAME_LOG.logMovement(QString("Player %1").arg(owningPlayer->getId()),
+                         leaderName, currentTerritory, destTerritory,
+                         selectedTroopIds.size());
+
     // If we entered combat, consume all remaining moves for the leader
     if (hasEnemies) {
         leader->setMovesRemaining(0);
@@ -4550,8 +4556,12 @@ void PlayerInfoWidget::onEndTurnClicked()
 
             if (cityPurchase.fortified) {
                 qDebug() << "Player" << currentPlayer->getId() << "placed fortified city at" << cityPurchase.territoryName;
+                GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                     "Fortified City", cityPurchase.territoryName, 15 * m_mapWidget->getInflationMultiplier());
             } else {
                 qDebug() << "Player" << currentPlayer->getId() << "placed city at" << cityPurchase.territoryName;
+                GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                     "City", cityPurchase.territoryName, 5 * m_mapWidget->getInflationMultiplier());
             }
         }
 
@@ -4563,6 +4573,8 @@ void PlayerInfoWidget::onEndTurnClicked()
                 if (city->getTerritoryName() == territoryName && !city->isFortified()) {
                     city->addFortification();
                     qDebug() << "Player" << currentPlayer->getId() << "fortified city at" << territoryName;
+                    GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                         "Fortification", territoryName, 10 * m_mapWidget->getInflationMultiplier());
                     break;
                 }
             }
@@ -4578,6 +4590,9 @@ void PlayerInfoWidget::onEndTurnClicked()
         }
         if (result.infantry > 0) {
             qDebug() << "Player" << currentPlayer->getId() << "created" << result.infantry << "infantry at" << homeProvince;
+            GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                 QString("%1 Infantry").arg(result.infantry), homeProvince,
+                                 result.infantry * 5 * m_mapWidget->getInflationMultiplier());
         }
 
         // Create cavalry
@@ -4587,6 +4602,9 @@ void PlayerInfoWidget::onEndTurnClicked()
         }
         if (result.cavalry > 0) {
             qDebug() << "Player" << currentPlayer->getId() << "created" << result.cavalry << "cavalry at" << homeProvince;
+            GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                 QString("%1 Cavalry").arg(result.cavalry), homeProvince,
+                                 result.cavalry * 10 * m_mapWidget->getInflationMultiplier());
         }
 
         // Create catapults
@@ -4596,6 +4614,9 @@ void PlayerInfoWidget::onEndTurnClicked()
         }
         if (result.catapults > 0) {
             qDebug() << "Player" << currentPlayer->getId() << "created" << result.catapults << "catapults at" << homeProvince;
+            GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                 QString("%1 Catapults").arg(result.catapults), homeProvince,
+                                 result.catapults * 10 * m_mapWidget->getInflationMultiplier());
         }
 
         // Create galleys beached at home province, associated with selected sea zone
@@ -4609,6 +4630,10 @@ void PlayerInfoWidget::onEndTurnClicked()
 
             qDebug() << "Player" << currentPlayer->getId() << "created" << galleyPurchase.count
                      << "galleys at" << homeProvince << "facing" << galleyPurchase.seaTerritoryName;
+            GAME_LOG.logPurchase(QString("Player %1").arg(currentPlayer->getId()),
+                                 QString("%1 Galley(s)").arg(galleyPurchase.count),
+                                 QString("%1 -> %2").arg(homeProvince).arg(galleyPurchase.seaTerritoryName),
+                                 galleyPurchase.count * 5 * m_mapWidget->getInflationMultiplier());
         }
 
         // Destroy selected cities
@@ -4616,6 +4641,8 @@ void PlayerInfoWidget::onEndTurnClicked()
         for (City *city : result.citiesToDestroy) {
             qDebug() << "  Destroying city at" << city->getTerritoryName()
                      << "(" << city->getPosition().row << "," << city->getPosition().col << ")";
+            GAME_LOG.logCityDestroyed(QString("Player %1").arg(currentPlayer->getId()),
+                                      city->getTerritoryName(), "voluntary destruction");
 
             Position cityPosition = city->getPosition();
 
@@ -4646,11 +4673,21 @@ void PlayerInfoWidget::onEndTurnClicked()
     }  // End while (!purchaseConfirmed)
 
     // End current player's turn
+    GAME_LOG.logTurnEnd(QString("Player %1").arg(currentPlayer->getId()),
+                        taxesCollected, currentPlayer->getWallet());
     currentPlayer->endTurn();
 
     // Start next player's turn (wrap around to first player after last)
     int nextPlayerIndex = (currentPlayerIndex + 1) % m_players.size();
-    m_players[nextPlayerIndex]->startTurn();
+    Player *nextPlayer = m_players[nextPlayerIndex];
+    nextPlayer->startTurn();
+
+    // Log the new turn (calculate turn number based on how many times we've wrapped around)
+    static int s_turnNumber = 1;
+    if (nextPlayerIndex == 0) {
+        s_turnNumber++;  // New round
+    }
+    GAME_LOG.logTurnStart(QString("Player %1").arg(nextPlayer->getId()), s_turnNumber);
 
     // Update all player displays
     updateAllPlayers();

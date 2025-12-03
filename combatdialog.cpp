@@ -1,5 +1,6 @@
 #include "combatdialog.h"
 #include "aiplayer.h"
+#include "gamelog.h"
 #include <QDebug>
 #include <QMessageBox>
 #include <QSet>
@@ -82,6 +83,11 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
             break;
         }
     }
+
+    // Log combat start
+    GAME_LOG.logCombatStart(combatTerritoryName,
+                            QString("Player %1").arg(attackingPlayer->getId()),
+                            QString("Player %1").arg(defendingPlayer->getId()));
 
     // If defender has no troops (only leaders), attacker wins automatically
     if (!defenderHasTroops && attackerHasTroops) {
@@ -956,6 +962,10 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         }
 
         if (isHit) {
+            QString pieceTypeName = defendingPiece->getType() == GamePiece::Type::Infantry ? "Infantry" :
+                                    defendingPiece->getType() == GamePiece::Type::Cavalry ? "Cavalry" : "Catapult";
+            GAME_LOG.logCombatCasualty(QString("Player %1").arg(m_defendingPlayer->getId()),
+                                       pieceTypeName, m_combatTerritoryName);
             QString galleySerial = defendingPiece->isOnGalley() ? defendingPiece->getOnGalley() : QString();
             removeTroopButton(clickedButton);
             if (defendingPiece->getType() == GamePiece::Type::Infantry) {
@@ -1007,6 +1017,10 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         }
 
         if (isHit) {
+            QString pieceTypeName = attackingPiece->getType() == GamePiece::Type::Infantry ? "Infantry" :
+                                    attackingPiece->getType() == GamePiece::Type::Cavalry ? "Cavalry" : "Catapult";
+            GAME_LOG.logCombatCasualty(QString("Player %1").arg(m_attackingPlayer->getId()),
+                                       pieceTypeName, m_combatTerritoryName);
             QString galleySerial = attackingPiece->isOnGalley() ? attackingPiece->getOnGalley() : QString();
             removeTroopButton(clickedButton);
             if (attackingPiece->getType() == GamePiece::Type::Infantry) {
@@ -1194,6 +1208,10 @@ void CombatDialog::onRetreatClicked()
         m_attackingPlayer->unclaimTerritory(m_combatTerritoryName);
     }
 
+    // Log the retreat
+    GAME_LOG.logCombatRetreat(QString("Player %1").arg(m_attackingPlayer->getId()),
+                              m_combatTerritoryName, "previous territory");
+
     QMessageBox retreatMsg(this);
     retreatMsg.setWindowTitle("Retreat");
     retreatMsg.setText("Attacker has retreated! Surviving troops have returned to their previous territory.");
@@ -1352,6 +1370,8 @@ bool CombatDialog::checkCombatEnd()
     // In land combat, defender is defeated when they have no troops - galleys don't protect them
     if (!defenderHasTroops && !defenderHasGalleys) {
         qDebug() << "Defender defeated - processing victory";
+        GAME_LOG.logCombatEnd(m_combatTerritoryName,
+                              QString("Player %1 (attacker)").arg(m_attackingPlayer->getId()));
 
         // Remove all defeated defending troops first
         qDebug() << "Attacker wins - removing all defeated defending troops";
@@ -1687,6 +1707,8 @@ bool CombatDialog::checkCombatEnd()
     if (!attackerHasTroops && !attackerHasGalleys) {
         // Defender wins - remove all defeated attacking troops first
         qDebug() << "Defender wins - removing all defeated attacking troops";
+        GAME_LOG.logCombatEnd(m_combatTerritoryName,
+                              QString("Player %1 (defender)").arg(m_defendingPlayer->getId()));
 
         // Remove all defeated troops (they were already eliminated during combat)
         // We need to check fresh lists from the player since m_attackingTroopButtons may be stale
