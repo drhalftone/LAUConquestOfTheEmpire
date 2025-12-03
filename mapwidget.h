@@ -23,13 +23,6 @@ public:
     static constexpr int DEFAULT_COLUMNS = 7;
     static constexpr int DEFAULT_ROWS = 5;
 
-    // Dynamic map size accessors
-    int rows() const { return m_rows; }
-    int cols() const { return m_cols; }
-
-    // Set map size (must be called before initializeMap or when loading)
-    void setMapSize(int rows, int cols);
-
     enum class TileType {
         Land,
         Sea
@@ -56,24 +49,6 @@ public:
 
     QMap<QChar, int> calculateScores() const;
 
-    // Get territory name at position
-    QString getTerritoryNameAt(int row, int col) const;
-
-    // Get territory owner at position ('\0' if unowned)
-    QChar getTerritoryOwnerAt(int row, int col) const;
-
-    // Get territory tax value at position
-    int getTerritoryValueAt(int row, int col) const;
-
-    // Check if a tile is sea
-    bool isSeaTerritory(int row, int col) const;
-
-    // Get adjacent sea territories for a given position
-    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
-
-    // Check if there are enemy pieces at position
-    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
-
     // Get player color
     QColor getPlayerColor(QChar player) const;
 
@@ -85,7 +60,7 @@ public:
     QVector<HomeProvinceInfo> getRandomHomeProvinces();
 
     // Set player list for querying pieces and ownership
-    void setPlayers(const QList<Player*> &players) { m_players = players; }
+    void setPlayers(const QList<Player*> &players);
 
     // Set current player turn index
     void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
@@ -94,22 +69,12 @@ public:
     // Set PlayerInfoWidget reference for handling territory clicks
     void setPlayerInfoWidget(PlayerInfoWidget *widget) { m_playerInfoWidget = widget; }
 
-    // Set territory data (for loading saved games)
-    void setTerritoryAt(int row, int col, const QString &name, int value, bool isLand);
-    void clearMap();  // Clear existing map before loading
-
-    // Remove city and fortification at specific position
-    void removeCityAt(int row, int col);
-    void removeFortificationAt(int row, int col);
+    // Clear existing map before loading
+    void clearMap();
 
     // Update scores display
     void updateScores(const QMap<QChar, int> &scores);
 
-    // Check and create roads between adjacent cities owned by the same player
-    void updateRoads();
-
-    // Get all territories reachable via roads from a starting position for a player
-    QList<Position> getTerritoriesConnectedByRoad(const Position &startPos, QChar playerId);
 
     // Check if we're at the start of a turn (no moves made yet)
     bool isAtStartOfTurn() const { return m_isAtStartOfTurn; }
@@ -134,6 +99,25 @@ public:
 
     // Build graph from grid (for loading saved games)
     void buildGraphFromGrid();
+
+    // Highlight a territory by name (for UI feedback)
+    void setHighlightedTerritory(const QString &territoryName);
+    void clearHighlightedTerritory();
+
+    // === Grid-based functions (for MapWidget compatibility) ===
+    // Note: These are being phased out in favor of graph-based access via territory names
+    int rows() const { return m_rows; }
+    int cols() const { return m_cols; }
+    void setMapSize(int rows, int cols);
+    QString getTerritoryNameAt(int row, int col) const;
+    QChar getTerritoryOwnerAt(int row, int col) const;
+    int getTerritoryValueAt(int row, int col) const;
+    bool isSeaTerritory(int row, int col) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
+    void setTerritoryAt(int row, int col, const QString &name, int value, bool isLand);
+    void removeCityAt(int row, int col);
+    void removeFortificationAt(int row, int col);
 
 public slots:
     void saveGame();
@@ -170,6 +154,21 @@ private:
     Piece* getPieceAt(const QPoint &pos, QChar player);
     QVector<Piece*> getPiecesAtPosition(const Position &pos, QChar player);
     void createMenuBar();
+
+    // === Grid-based functions (internal use only) ===
+    // External code should use MapGraph and territory names instead
+    int rows() const { return m_rows; }
+    int cols() const { return m_cols; }
+    void setMapSize(int rows, int cols);
+    QString getTerritoryNameAt(int row, int col) const;
+    QChar getTerritoryOwnerAt(int row, int col) const;
+    int getTerritoryValueAt(int row, int col) const;
+    bool isSeaTerritory(int row, int col) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
+    void setTerritoryAt(int row, int col, const QString &name, int value, bool isLand);
+    void removeCityAt(int row, int col);
+    void removeFortificationAt(int row, int col);
 
     // Dynamic map dimensions
     int m_rows;
@@ -216,6 +215,9 @@ private:
     // Graph-based map system
     MapGraph *m_graph;  // Graph representation of the map (coexists with grid during migration)
     bool m_graphDebugMode;  // Show graph visualization overlay
+
+    // Territory highlighting (for UI feedback like city destruction selection)
+    QString m_highlightedTerritory;  // Territory to highlight with a special border
 };
 
 #endif // MAPWIDGET_H

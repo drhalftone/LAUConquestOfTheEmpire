@@ -22,6 +22,8 @@ public:
     // Player identification
     QChar getId() const { return m_id; }
     QColor getColor() const { return m_color; }
+    bool isAI() const { return m_isAI; }
+    void setIsAI(bool isAI) { m_isAI = isAI; }
 
     // Piece inventory management - separate lists for each type
     const QList<CaesarPiece*>& getCaesars() const { return m_caesars; }
@@ -34,7 +36,6 @@ public:
 
     // Building inventory management
     const QList<City*>& getCities() const { return m_cities; }
-    const QList<Road*>& getRoads() const { return m_roads; }
 
     // Get all pieces (combined from all lists)
     QList<GamePiece*> getAllPieces() const;
@@ -53,7 +54,6 @@ public:
 
     // Add buildings to inventory
     void addCity(City *city);
-    void addRoad(Road *road);
 
     // Remove pieces from inventory
     bool removeCaesar(CaesarPiece *piece);
@@ -66,7 +66,6 @@ public:
 
     // Remove buildings from inventory
     bool removeCity(City *city);
-    bool removeRoad(Road *road);
 
     // Query pieces by location (territory name)
     QList<GamePiece*> getPiecesAtTerritory(const QString &territoryName) const;
@@ -80,7 +79,6 @@ public:
     // Query buildings by location (territory name)
     QList<Building*> getBuildingsAtTerritory(const QString &territoryName) const;
     QList<City*> getCitiesAtTerritory(const QString &territoryName) const;
-    QList<Road*> getRoadsAtTerritory(const QString &territoryName) const;
     City* getCityAtTerritory(const QString &territoryName) const;  // Returns first city found or nullptr
 
     // Count pieces
@@ -96,7 +94,6 @@ public:
     // Count buildings
     int getTotalBuildingCount() const;
     int getCityCount() const { return m_cities.size(); }
-    int getRoadCount() const { return m_roads.size(); }
 
     // Count pieces at a specific location
     int getPieceCountAtTerritory(const QString &territoryName) const;
@@ -150,18 +147,21 @@ public:
     // Clear all owned territories (for conquest/defeat scenarios)
     void clearAllTerritories();
 
+    // Clear all pieces and buildings (for loading saved games)
+    void clearAllPiecesAndBuildings();
+
     // Turn management
-    void startTurn();  // Called at the beginning of player's turn - resets movement for all pieces
+    void startTurn(bool resetMoves = true);  // Called at the beginning of player's turn - resets movement unless loading mid-turn
     void endTurn();    // Called at the end of player's turn
     bool isMyTurn() const { return m_isMyTurn; }
     void setMyTurn(bool isMyTurn) { m_isMyTurn = isMyTurn; }  // Set turn state without resetting movement
 
     // Tax collection - called at end of turn to collect taxes from owned territories
     // Returns the amount collected
-    int collectTaxes(class MapWidget *mapWidget);
+    int collectTaxes(MapWidget *mapWidget);
 
     // Calculate income without collecting (for inflation threshold checks)
-    int calculateIncome(class MapWidget *mapWidget) const;
+    int calculateIncome(MapWidget *mapWidget) const;
 
 signals:
     void turnStarted();
@@ -197,7 +197,6 @@ private:
 
     // Building inventory lists
     QList<City*> m_cities;                // Can have many cities
-    QList<Road*> m_roads;                 // Can have many roads
 
     // Economic data
     int m_wallet;                         // Accumulated wealth in talents
@@ -211,6 +210,7 @@ private:
 
     // Turn management
     bool m_isMyTurn;                      // Is it currently this player's turn?
+    bool m_isAI;                          // Is this player controlled by AI?
 
     // Helper function to get color based on player ID
     QColor getColorForPlayer(QChar playerId) const;

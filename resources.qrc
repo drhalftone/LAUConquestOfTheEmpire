@@ -1,5 +1,13 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
+    <qresource prefix="/shaders">
+        <file>shaders/map.vert</file>
+        <file>shaders/map.frag</file>
+        <file>shaders/screen.vert</file>
+        <file>shaders/screen.frag</file>
+        <file>shaders/icon.vert</file>
+        <file>shaders/icon.frag</file>
+    </qresource>
     <qresource>
         <file>images/coeIcon.png</file>
         <file>images/newCityIcon.png</file>
@@ -23,5 +31,46 @@
         <file>images/retreatIcon.png</file>
         <file>images/captureIcon.png</file>
         <file>images/walledCityIcon.png</file>
+        <file>images/colored/infantryIcon_red.png</file>
+        <file>images/colored/infantryIcon_blue.png</file>
+        <file>images/colored/infantryIcon_green.png</file>
+        <file>images/colored/infantryIcon_yellow.png</file>
+        <file>images/colored/infantryIcon_orange.png</file>
+        <file>images/colored/infantryIcon_black.png</file>
+        <file>images/colored/cavalryIcon_red.png</file>
+        <file>images/colored/cavalryIcon_blue.png</file>
+        <file>images/colored/cavalryIcon_green.png</file>
+        <file>images/colored/cavalryIcon_yellow.png</file>
+        <file>images/colored/cavalryIcon_orange.png</file>
+        <file>images/colored/cavalryIcon_black.png</file>
+        <file>images/colored/catapultIcon_red.png</file>
+        <file>images/colored/catapultIcon_blue.png</file>
+        <file>images/colored/catapultIcon_green.png</file>
+        <file>images/colored/catapultIcon_yellow.png</file>
+        <file>images/colored/catapultIcon_orange.png</file>
+        <file>images/colored/catapultIcon_black.png</file>
+        <file>images/colored/generalIcon_red.png</file>
+        <file>images/colored/generalIcon_blue.png</file>
+        <file>images/colored/generalIcon_green.png</file>
+        <file>images/colored/generalIcon_yellow.png</file>
+        <file>images/colored/generalIcon_orange.png</file>
+        <file>images/colored/generalIcon_black.png</file>
+        <file>images/colored/ceasarIcon_red.png</file>
+        <file>images/colored/ceasarIcon_blue.png</file>
+        <file>images/colored/ceasarIcon_green.png</file>
+        <file>images/colored/ceasarIcon_yellow.png</file>
+        <file>images/colored/ceasarIcon_orange.png</file>
+        <file>images/colored/ceasarIcon_black.png</file>
+        <file>images/colored/galleyIcon_red.png</file>
+        <file>images/colored/galleyIcon_blue.png</file>
+        <file>images/colored/galleyIcon_green.png</file>
+        <file>images/colored/galleyIcon_yellow.png</file>
+        <file>images/colored/galleyIcon_orange.png</file>
+        <file>images/colored/galleyIcon_black.png</file>
+        <file>images/Map.jpg</file>
+        <file>images/territories_index.png</file>
+        <file>images/territories.csv</file>
+        <file>images/beach_positions.csv</file>
+        <file>images/click.wav</file>
     </qresource>
 </RCC>

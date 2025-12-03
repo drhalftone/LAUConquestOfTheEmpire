@@ -177,6 +177,24 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 QChar owner = getTerritoryOwnerAt(row, col);
                 if (owner != '\0') {
                     QColor ownerColor = getPlayerColor(owner);
+
+                    // Darken the color if it's not this player's turn
+                    Player *ownerPlayer = nullptr;
+                    for (Player *player : m_players) {
+                        if (player->getId() == owner) {
+                            ownerPlayer = player;
+                            break;
+                        }
+                    }
+                    if (ownerPlayer && !ownerPlayer->isMyTurn()) {
+                        // Make it darker (multiply RGB by 0.65 for a dimmed effect)
+                        ownerColor = QColor(
+                            static_cast<int>(ownerColor.red() * 0.65),
+                            static_cast<int>(ownerColor.green() * 0.65),
+                            static_cast<int>(ownerColor.blue() * 0.65)
+                        );
+                    }
+
                     painter.setPen(QPen(ownerColor, 8));  // Thicker border
                     painter.drawRect(x + 4, y + 4, m_tileWidth - 8, m_tileHeight - 8);
                 }
@@ -187,6 +205,12 @@ void MapWidget::paintEvent(QPaintEvent *event)
             bool isDisputed = false;
             QChar firstPlayer = '\0';
             QString territoryName = getTerritoryNameAt(row, col);
+
+            // Draw special highlight for selected territory (e.g., city destruction selection)
+            if (!m_highlightedTerritory.isEmpty() && territoryName == m_highlightedTerritory) {
+                painter.setPen(QPen(QColor(255, 80, 0), 10));  // Bright orange, very thick
+                painter.drawRect(x + 2, y + 2, m_tileWidth - 4, m_tileHeight - 4);
+            }
             for (Player *player : m_players) {
                 QList<GamePiece*> pieces = player->getPiecesAtTerritory(territoryName);
 
@@ -285,11 +309,23 @@ void MapWidget::paintEvent(QPaintEvent *event)
     // Draw roads for all players
     for (Player *player : m_players) {
         QColor playerColor = getPlayerColor(player->getId());
+
+        // Darken the color if it's not this player's turn
+        if (!player->isMyTurn()) {
+            playerColor = QColor(
+                static_cast<int>(playerColor.red() * 0.65),
+                static_cast<int>(playerColor.green() * 0.65),
+                static_cast<int>(playerColor.blue() * 0.65)
+            );
+        }
+
         painter.setPen(QPen(playerColor, 4));  // Thick line in player color
 
-        for (Road *road : player->getRoads()) {
-            ::Position from = road->getFromPosition();  // Road uses global Position
-            ::Position to = road->getToPosition();
+        // Get road segments computed on-the-fly from city positions
+        QList<QPair<QString, QString>> roadSegments = m_graph->getRoadSegments(player);
+        for (const auto &segment : roadSegments) {
+            ::Position from = territoryNameToPosition(segment.first);
+            ::Position to = territoryNameToPosition(segment.second);
 
             // Calculate center points of tiles
             int fromX = from.col * m_tileWidth + m_tileWidth / 2;
@@ -391,9 +427,6 @@ void MapWidget::paintEvent(QPaintEvent *event)
 
                 // Draw as ghost if not current player's turn
                 bool isGhost = !player->isMyTurn();
-                if (isGhost) {
-                    painter.setOpacity(0.3);
-                }
 
                 // Get player color (gray for black player so icon is visible)
                 QColor playerColor = getPlayerColor(playerId);
@@ -405,8 +438,36 @@ void MapWidget::paintEvent(QPaintEvent *event)
                 QPixmap icon(iconPath);
                 if (!icon.isNull()) {
                     // Scale icon to fit (about 70% of diameter)
-                    int iconSize = static_cast<int>(radius * 1.4);
+                    int baseIconSize = static_cast<int>(radius * 1.4);
+
+                    // Apply type-specific scaling
+                    // Caesar/General: 20% smaller (0.8x), Troops: 20% larger (1.2x)
+                    float typeScale = 1.0f;
+                    if (pieceType == GamePiece::Type::Caesar || pieceType == GamePiece::Type::General) {
+                        typeScale = 0.8f;
+                    } else if (pieceType == GamePiece::Type::Infantry ||
+                               pieceType == GamePiece::Type::Cavalry ||
+                               pieceType == GamePiece::Type::Catapult) {
+                        typeScale = 1.2f;
+                    }
+                    int iconSize = static_cast<int>(baseIconSize * typeScale);
+
                     QPixmap scaledIcon = icon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+                    // Darken icon if not current player's turn
+                    if (isGhost) {
+                        QImage image = scaledIcon.toImage().convertToFormat(QImage::Format_ARGB32);
+                        for (int y = 0; y < image.height(); ++y) {
+                            for (int x = 0; x < image.width(); ++x) {
+                                QRgb pixel = image.pixel(x, y);
+                                int r = static_cast<int>(qRed(pixel) * 0.65);
+                                int g = static_cast<int>(qGreen(pixel) * 0.65);
+                                int b = static_cast<int>(qBlue(pixel) * 0.65);
+                                image.setPixel(x, y, qRgba(r, g, b, qAlpha(pixel)));
+                            }
+                        }
+                        scaledIcon = QPixmap::fromImage(image);
+                    }
 
                     // Draw flat oval pedestal at bottom of icon (35% height, 80% width)
                     int ovalHeight = static_cast<int>(scaledIcon.height() * 0.35);
@@ -420,10 +481,6 @@ void MapWidget::paintEvent(QPaintEvent *event)
                     int iconX = centerX - scaledIcon.width() / 2;
                     int iconY = centerY - scaledIcon.height() / 2;
                     painter.drawPixmap(iconX, iconY, scaledIcon);
-                }
-
-                if (isGhost) {
-                    painter.setOpacity(1.0);
                 }
             }
         }
@@ -492,23 +549,8 @@ void MapWidget::paintEvent(QPaintEvent *event)
         painter.save();
 
         // Draw territory boundaries (polygons)
-        painter.setPen(QPen(QColor(255, 0, 255), 2));  // Magenta borders
-        painter.setBrush(Qt::NoBrush);
-
-        QList<QString> territoryNames = m_graph->getTerritoryNames();
-        for (const QString &name : territoryNames) {
-            QPolygonF boundary = m_graph->getBoundary(name);
-            if (!boundary.isEmpty()) {
-                // Offset by menu bar
-                QPolygonF offsetBoundary;
-                for (const QPointF &point : boundary) {
-                    offsetBoundary << QPointF(point.x(), point.y() + menuBarHeight);
-                }
-                painter.drawPolygon(offsetBoundary);
-            }
-        }
-
         // Draw neighbor connections (lines between centroids)
+        QList<QString> territoryNames = m_graph->getTerritoryNames();
         painter.setPen(QPen(QColor(255, 165, 0), 1));  // Orange lines
         QSet<QString> drawnConnections;  // Avoid drawing each edge twice
 
@@ -1392,10 +1434,21 @@ void MapWidget::createMenuBar()
         QApplication::style()->standardIcon(QStyle::SP_DialogCloseButton),
         "E&xit"
     );
-    connect(exitAction, &QAction::triggered, qApp, &QApplication::quit);
+    connect(exitAction, &QAction::triggered, this, &MapWidget::close);
 
     // View menu (for debug options)
     QMenu *viewMenu = m_menuBar->addMenu("&View");
+
+    QAction *showPlayerViewerAction = viewMenu->addAction("Show &Player Viewer");
+    connect(showPlayerViewerAction, &QAction::triggered, this, [this]() {
+        if (m_playerInfoWidget) {
+            m_playerInfoWidget->show();
+            m_playerInfoWidget->raise();
+            m_playerInfoWidget->activateWindow();
+        }
+    });
+
+    viewMenu->addSeparator();
 
     QAction *graphDebugAction = viewMenu->addAction("Show &Graph Debug Overlay");
     graphDebugAction->setCheckable(true);
@@ -1475,6 +1528,33 @@ void MapWidget::closeEvent(QCloseEvent *event)
     }
 }
 
+void MapWidget::setPlayers(const QList<Player*> &players)
+{
+    m_players = players;
+
+    // Connect to each player's turn signals to update border colors when turn state changes
+    for (Player *player : m_players) {
+        connect(player, &Player::turnStarted, this, [this]() {
+            update();  // Trigger repaint to update border colors
+        });
+        connect(player, &Player::turnEnded, this, [this]() {
+            update();  // Trigger repaint to update border colors
+        });
+    }
+}
+
+void MapWidget::setHighlightedTerritory(const QString &territoryName)
+{
+    m_highlightedTerritory = territoryName;
+    update();
+}
+
+void MapWidget::clearHighlightedTerritory()
+{
+    m_highlightedTerritory.clear();
+    update();
+}
+
 void MapWidget::saveGame()
 {
     // Check if we're at the start of a turn
@@ -1552,8 +1632,6 @@ void MapWidget::saveGame()
         for (CaesarPiece *caesar : player->getCaesars()) {
             QJsonObject caesarObj;
             caesarObj["serialNumber"] = caesar->getSerialNumber();
-            caesarObj["row"] = caesar->getPosition().row;
-            caesarObj["col"] = caesar->getPosition().col;
             caesarObj["territory"] = caesar->getTerritoryName();
             caesarObj["movesRemaining"] = caesar->getMovesRemaining();
             caesarObj["onGalley"] = caesar->getOnGalley();
@@ -1567,8 +1645,7 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (caesar->hasLastTerritory()) {
-                caesarObj["lastTerritoryRow"] = caesar->getLastTerritory().row;
-                caesarObj["lastTerritoryCol"] = caesar->getLastTerritory().col;
+                caesarObj["lastTerritoryName"] = caesar->getLastTerritoryName();
             }
 
             caesarsArray.append(caesarObj);
@@ -1581,8 +1658,6 @@ void MapWidget::saveGame()
             QJsonObject generalObj;
             generalObj["serialNumber"] = general->getSerialNumber();
             generalObj["number"] = general->getNumber();
-            generalObj["row"] = general->getPosition().row;
-            generalObj["col"] = general->getPosition().col;
             generalObj["territory"] = general->getTerritoryName();
             generalObj["movesRemaining"] = general->getMovesRemaining();
             generalObj["onGalley"] = general->getOnGalley();
@@ -1596,8 +1671,7 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (general->hasLastTerritory()) {
-                generalObj["lastTerritoryRow"] = general->getLastTerritory().row;
-                generalObj["lastTerritoryCol"] = general->getLastTerritory().col;
+                generalObj["lastTerritoryName"] = general->getLastTerritoryName();
             }
 
             generalsArray.append(generalObj);
@@ -1611,8 +1685,6 @@ void MapWidget::saveGame()
             generalObj["serialNumber"] = general->getSerialNumber();
             generalObj["originalPlayer"] = QString(general->getPlayer());
             generalObj["number"] = general->getNumber();
-            generalObj["row"] = general->getPosition().row;
-            generalObj["col"] = general->getPosition().col;
             generalObj["territory"] = general->getTerritoryName();
             generalObj["movesRemaining"] = general->getMovesRemaining();
             generalObj["onGalley"] = general->getOnGalley();
@@ -1625,8 +1697,6 @@ void MapWidget::saveGame()
         for (InfantryPiece *infantry : player->getInfantry()) {
             QJsonObject infantryObj;
             infantryObj["serialNumber"] = infantry->getSerialNumber();
-            infantryObj["row"] = infantry->getPosition().row;
-            infantryObj["col"] = infantry->getPosition().col;
             infantryObj["territory"] = infantry->getTerritoryName();
             infantryObj["movesRemaining"] = infantry->getMovesRemaining();
             infantryObj["onGalley"] = infantry->getOnGalley();
@@ -1639,8 +1709,6 @@ void MapWidget::saveGame()
         for (CavalryPiece *cavalry : player->getCavalry()) {
             QJsonObject cavalryObj;
             cavalryObj["serialNumber"] = cavalry->getSerialNumber();
-            cavalryObj["row"] = cavalry->getPosition().row;
-            cavalryObj["col"] = cavalry->getPosition().col;
             cavalryObj["territory"] = cavalry->getTerritoryName();
             cavalryObj["movesRemaining"] = cavalry->getMovesRemaining();
             cavalryObj["onGalley"] = cavalry->getOnGalley();
@@ -1653,8 +1721,6 @@ void MapWidget::saveGame()
         for (CatapultPiece *catapult : player->getCatapults()) {
             QJsonObject catapultObj;
             catapultObj["serialNumber"] = catapult->getSerialNumber();
-            catapultObj["row"] = catapult->getPosition().row;
-            catapultObj["col"] = catapult->getPosition().col;
             catapultObj["territory"] = catapult->getTerritoryName();
             catapultObj["movesRemaining"] = catapult->getMovesRemaining();
             catapultObj["onGalley"] = catapult->getOnGalley();
@@ -1667,8 +1733,6 @@ void MapWidget::saveGame()
         for (GalleyPiece *galley : player->getGalleys()) {
             QJsonObject galleyObj;
             galleyObj["serialNumber"] = galley->getSerialNumber();
-            galleyObj["row"] = galley->getPosition().row;
-            galleyObj["col"] = galley->getPosition().col;
             galleyObj["territory"] = galley->getTerritoryName();
             galleyObj["movesRemaining"] = galley->getMovesRemaining();
 
@@ -1681,8 +1745,12 @@ void MapWidget::saveGame()
 
             // Save last territory
             if (galley->hasLastTerritory()) {
-                galleyObj["lastTerritoryRow"] = galley->getLastTerritory().row;
-                galleyObj["lastTerritoryCol"] = galley->getLastTerritory().col;
+                galleyObj["lastTerritoryName"] = galley->getLastTerritoryName();
+            }
+
+            // Save last sea zone (for beach positioning)
+            if (galley->hasLastSeaZone()) {
+                galleyObj["lastSeaZone"] = galley->getLastSeaZone();
             }
 
             galleysArray.append(galleyObj);
@@ -1907,175 +1975,6 @@ void MapWidget::updateScores(const QMap<QChar, int> &scores)
     update();  // Trigger repaint to show updated scores
 }
 
-QList<Position> MapWidget::getTerritoriesConnectedByRoad(const Position &startPos, QChar playerId)
-{
-    QList<Position> connectedTerritories;
-
-    // Find the player
-    Player *player = nullptr;
-    for (Player *p : m_players) {
-        if (p->getId() == playerId) {
-            player = p;
-            break;
-        }
-    }
-
-    if (!player) {
-        return connectedTerritories;
-    }
-
-    // Use breadth-first search to find all territories connected by roads
-    QList<Position> toVisit;
-    QSet<QString> visited;  // Use position string as key (row,col)
-
-    toVisit.append(startPos);
-    visited.insert(QString("%1,%2").arg(startPos.row).arg(startPos.col));
-
-    while (!toVisit.isEmpty()) {
-        Position current = toVisit.takeFirst();
-
-        // Look through all roads for this player
-        for (Road *road : player->getRoads()) {
-            ::Position from = road->getFromPosition();  // Road uses global Position
-            ::Position to = road->getToPosition();
-
-            Position next;
-            bool foundNext = false;
-
-            // Check if current position matches one end of the road
-            if (from.row == current.row && from.col == current.col) {
-                next.row = to.row;
-                next.col = to.col;
-                foundNext = true;
-            } else if (to.row == current.row && to.col == current.col) {
-                next.row = from.row;
-                next.col = from.col;
-                foundNext = true;
-            }
-
-            if (foundNext) {
-                QString nextKey = QString("%1,%2").arg(next.row).arg(next.col);
-                if (!visited.contains(nextKey)) {
-                    visited.insert(nextKey);
-                    toVisit.append(next);
-                    connectedTerritories.append(next);
-                }
-            }
-        }
-    }
-
-    return connectedTerritories;
-}
-
-void MapWidget::updateRoads()
-{
-    if (m_players.isEmpty()) {
-        return;
-    }
-
-    // For each player, first REMOVE invalid roads, then create new ones
-    for (Player *player : m_players) {
-        // Remove roads where either endpoint is no longer owned by this player
-        // or no longer has a city owned by this player
-        QList<Road*> roadsToRemove;
-        for (Road *road : player->getRoads()) {
-            QString territory1 = road->getTerritoryName();
-            ::Position toPos = road->getToPosition();
-            QString territory2 = getTerritoryNameAt(toPos.row, toPos.col);
-
-            // Check if player still owns both territories
-            bool ownsTerritory1 = player->ownsTerritory(territory1);
-            bool ownsTerritory2 = player->ownsTerritory(territory2);
-
-            // Check if player still has cities at both endpoints
-            bool hasCity1 = (player->getCityAtTerritory(territory1) != nullptr);
-            bool hasCity2 = (player->getCityAtTerritory(territory2) != nullptr);
-
-            // Road is invalid if player doesn't own both territories OR doesn't have cities at both
-            if (!ownsTerritory1 || !ownsTerritory2 || !hasCity1 || !hasCity2) {
-                roadsToRemove.append(road);
-            }
-        }
-
-        // Remove invalid roads
-        for (Road *road : roadsToRemove) {
-            player->removeRoad(road);
-            delete road;
-        }
-
-        // Now create new roads between adjacent cities
-        QList<City*> cities = player->getCities();
-
-        // Check each pair of cities to see if they're adjacent
-        for (int i = 0; i < cities.size(); ++i) {
-            City *city1 = cities[i];
-            QString territory1 = city1->getTerritoryName();
-
-            // Get position from territory name (MapWidget knows the grid layout)
-            ::Position pos1 = territoryNameToPosition(territory1);
-
-            for (int j = i + 1; j < cities.size(); ++j) {
-                City *city2 = cities[j];
-                QString territory2 = city2->getTerritoryName();
-
-                // Get position from territory name
-                ::Position pos2 = territoryNameToPosition(territory2);
-
-                // Check if territories are different (roads connect different territories)
-                if (territory1 == territory2) {
-                    continue;
-                }
-
-                // Check if positions are adjacent (horizontally or vertically, not diagonally)
-                bool isAdjacent = false;
-                if ((qAbs(pos1.row - pos2.row) == 1 && pos1.col == pos2.col) ||  // Vertical
-                    (qAbs(pos1.col - pos2.col) == 1 && pos1.row == pos2.row)) {  // Horizontal
-                    isAdjacent = true;
-                }
-
-                if (!isAdjacent) {
-                    continue;
-                }
-
-                // Check if both territories are owned by this player
-                if (!player->ownsTerritory(territory1) || !player->ownsTerritory(territory2)) {
-                    continue;
-                }
-
-                // Check if either position is a sea territory - roads can't be built in sea
-                if (isSeaTerritory(pos1.row, pos1.col) || isSeaTerritory(pos2.row, pos2.col)) {
-                    continue;
-                }
-
-                // Check if road already exists between these two positions
-                bool roadExists = false;
-                for (Road *road : player->getRoads()) {
-                    ::Position from = road->getFromPosition();  // Road uses global Position
-                    ::Position to = road->getToPosition();
-
-                    // Check both directions
-                    if ((from.row == pos1.row && from.col == pos1.col &&
-                         to.row == pos2.row && to.col == pos2.col) ||
-                        (from.row == pos2.row && from.col == pos2.col &&
-                         to.row == pos1.row && to.col == pos1.col)) {
-                        roadExists = true;
-                        break;
-                    }
-                }
-
-                if (!roadExists) {
-                    // Create a new road
-                    Road *road = new Road(player->getId(), pos1, territory1, player);
-                    road->setToPosition(pos2);
-                    player->addRoad(road);
-                }
-            }
-        }
-    }
-
-    update();  // Redraw map to show roads
-}
-
 // === Graph-based Map System (Phase 2) ===
 
 void MapWidget::buildGraphFromGrid()
@@ -2093,27 +1992,15 @@ void MapWidget::buildGraphFromGrid()
             // Use actual territory name from m_territories array
             QString territoryName = m_territories[row][col].name;
 
-            // Create territory
+            // Create territory for legacy grid system
             Territory territory;
+            territory.id = row * m_cols + col + 1;  // Generate an ID
             territory.name = territoryName;
 
             // Calculate centroid (center of the grid cell in pixel coordinates)
             qreal centerX = (col + 0.5) * m_tileWidth;
             qreal centerY = (row + 0.5) * m_tileHeight;
             territory.centroid = QPointF(centerX, centerY);
-            territory.labelPosition = territory.centroid;
-
-            // Create rectangular boundary polygon for this cell
-            qreal left = col * m_tileWidth;
-            qreal right = (col + 1) * m_tileWidth;
-            qreal top = row * m_tileHeight;
-            qreal bottom = (row + 1) * m_tileHeight;
-
-            territory.boundary = QPolygonF()
-                << QPointF(left, top)
-                << QPointF(right, top)
-                << QPointF(right, bottom)
-                << QPointF(left, bottom);
 
             // Set territory type based on grid tile type
             if (row < m_tiles.size() && col < m_tiles[row].size()) {
@@ -2124,10 +2011,8 @@ void MapWidget::buildGraphFromGrid()
                 territory.type = TerritoryType::Land;
             }
 
-            // Add optional color based on type
-            territory.color = (territory.type == TerritoryType::Sea)
-                ? QColor(100, 150, 200)  // Blue for sea
-                : QColor(200, 180, 150);  // Tan for land
+            // Set value based on grid territory info
+            territory.value = m_territories[row][col].value;
 
             // Add territory to graph
             m_graph->addTerritory(territory);

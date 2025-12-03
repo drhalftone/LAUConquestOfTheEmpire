@@ -3,45 +3,45 @@
 
 #include <QString>
 #include <QPointF>
-#include <QPolygonF>
 #include <QList>
 #include <QMap>
-#include <QColor>
+#include <QPair>
 #include <QJsonObject>
 
-// Territory type classification
+// Forward declarations
+class Player;
+
+// Territory type classification (Land or Sea only)
 enum class TerritoryType {
     Land,
-    Sea,
-    Mountain,
-    Impassable
+    Sea
 };
 
 // Represents a single territory on the map
 struct Territory {
-    QString name;                   // Unique identifier (e.g., "Rome", "Egypt")
+    int id;                         // Territory ID (1-60)
+    QString name;                   // Territory name (e.g., "Roma", "Aegyptus")
     QPointF centroid;               // Center point for rendering pieces/labels
-    QPolygonF boundary;             // Polygon defining territory shape for hit detection
     QList<QString> neighbors;       // List of adjacent territory names
-    TerritoryType type;             // Classification (land, sea, etc.)
-
-    // Optional rendering properties
-    QColor color;                   // Visual distinction color
-    QPointF labelPosition;          // Where to draw territory name (defaults to centroid if not set)
+    TerritoryType type;             // Land or Sea
+    int value;                      // Tax value (0 for sea, 5/10/20 for land)
+    int area;                       // Area in pixels (from CSV)
 
     // Constructor with defaults
     Territory()
-        : type(TerritoryType::Land)
-        , color(Qt::white)
-        , labelPosition(0, 0)
+        : id(0)
+        , type(TerritoryType::Land)
+        , value(0)
+        , area(0)
     {}
 
-    Territory(const QString &n, const QPointF &c, TerritoryType t = TerritoryType::Land)
-        : name(n)
+    Territory(int i, const QString &n, const QPointF &c, TerritoryType t, int v, int a = 0)
+        : id(i)
+        , name(n)
         , centroid(c)
         , type(t)
-        , color(Qt::white)
-        , labelPosition(c)  // Default label position to centroid
+        , value(v)
+        , area(a)
     {}
 };
 
@@ -88,18 +88,14 @@ public:
 
     // === Spatial Queries ===
 
-    // Find which territory contains the given point (for click detection)
-    // Returns empty string if point is not in any territory
-    QString getTerritoryAt(const QPointF &point) const;
-
     // Get the centroid of a territory
     QPointF getCentroid(const QString &name) const;
 
-    // Get the boundary polygon of a territory
-    QPolygonF getBoundary(const QString &name) const;
+    // Get territory by ID (1-60)
+    Territory getTerritoryById(int id) const;
 
-    // Get the label position for a territory
-    QPointF getLabelPosition(const QString &name) const;
+    // Get territory name by ID
+    QString getTerritoryNameById(int id) const;
 
     // === Type Queries ===
 
@@ -111,6 +107,46 @@ public:
 
     // Get the type of a territory
     TerritoryType getType(const QString &name) const;
+
+    // Get the tax value of a territory (0 for sea)
+    int getValue(const QString &name) const;
+
+    // Get list of adjacent sea territory names for a land territory
+    // Returns empty list if territory doesn't exist or has no adjacent seas
+    QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
+
+    // Get sea zones that share a beach with the given sea zone at a land territory
+    // Neighbors are stored in clockwise order, so consecutive sea zones share a beach
+    // A beached galley from seaZone can launch into any sea zone returned by this function
+    // Returns list including the original seaZone plus any adjacent seas in the neighbor list
+    QList<QString> getConnectedBeachSeaZones(const QString &landTerritory, const QString &seaZone) const;
+
+    // === Beach Position Queries (for galley movement) ===
+
+    // Get beach position for galley moving between land and sea territory
+    // Returns the position where a galley should be displayed when beached
+    // Returns QPointF(0,0) if no beach position exists for this pair
+    QPointF getBeachPosition(const QString &landTerritory, const QString &seaTerritory) const;
+
+    // Check if a beach position exists for a land/sea pair
+    bool hasBeachPosition(const QString &landTerritory, const QString &seaTerritory) const;
+
+    // Get all sea zones accessible from a specific beach position on a land territory
+    // This is useful for determining which seas a beached galley can launch into
+    QList<QString> getSeaZonesAtBeach(const QString &landTerritory, const QPointF &beachPos) const;
+
+    // === Road Queries (computed on-the-fly from city positions) ===
+
+    // Get all territories reachable via roads from startTerritory for given player
+    // Roads exist between adjacent territories where the same player owns both
+    // territories AND has cities in both territories.
+    // Returns list of territory names (excludes startTerritory itself)
+    QStringList getRoadConnectedTerritories(const QString &startTerritory, const Player *player) const;
+
+    // Get all road segments for a player (for rendering)
+    // Returns list of territory name pairs representing road connections
+    // Each pair appears only once (no duplicates for bidirectional roads)
+    QList<QPair<QString, QString>> getRoadSegments(const Player *player) const;
 
     // === Pathfinding ===
 
@@ -151,8 +187,21 @@ public:
     QJsonObject saveToJsonObject() const;
 
 private:
+    // Load territories from CSV resource file
+    void loadFromCSV();
+
+    // Load beach positions from CSV resource file
+    void loadBeachPositions();
+
     // Internal storage: map from territory name to Territory data
     QMap<QString, Territory> m_territories;
+
+    // Map from territory ID to name (for neighbor resolution)
+    QMap<int, QString> m_idToName;
+
+    // Beach positions: (landName, seaName) -> beach position
+    // Key is "landName|seaName" for efficient lookup
+    QMap<QString, QPointF> m_beachPositions;
 
     // Helper function for BFS pathfinding
     QList<QString> breadthFirstSearch(const QString &from, const QString &to) const;

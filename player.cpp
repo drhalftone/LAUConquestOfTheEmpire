@@ -1,5 +1,9 @@
 #include "player.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include <QDebug>
 
 Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool minimalSetup)
@@ -10,16 +14,16 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
     , m_homeProvinceName(homeProvinceName)
     , m_hasHomeFortifiedCity(!minimalSetup)  // Only if not minimal setup
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()
+    , m_isAI(false)  // Default to human player, set to true when AI is assigned
 {
     qDebug() << "Creating Player" << m_id << "with home province:" << m_homeProvinceName;
 
-    // TEMPORARY: Create dummy position for piece/building constructors
-    // This will be removed when GamePiece/Building are updated to not need Position
+    // TEMPORARY: Create dummy position for Building constructor
+    // This will be removed when Building is updated to not need Position
     Position tempPos = {0, 0};
 
     // Create Caesar at home province
-    CaesarPiece *caesar = new CaesarPiece(m_id, tempPos, this);
-    caesar->setTerritoryName(m_homeProvinceName);
+    CaesarPiece *caesar = new CaesarPiece(m_id, m_homeProvinceName, this);
     qDebug() << "  Caesar created, territory name:" << caesar->getTerritoryName();
     m_caesars.append(caesar);
 
@@ -30,15 +34,13 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
 
     // Create 6 Generals at home province (per 1984 rules)
     for (int i = 1; i <= 6; ++i) {
-        GeneralPiece *general = new GeneralPiece(m_id, tempPos, i, this);
-        general->setTerritoryName(m_homeProvinceName);
+        GeneralPiece *general = new GeneralPiece(m_id, m_homeProvinceName, i, this);
         m_generals.append(general);
     }
 
     // Create 4 Infantry at home province (per 1984 rules)
     for (int i = 1; i <= 4; ++i) {
-        InfantryPiece *infantry = new InfantryPiece(m_id, tempPos, this);
-        infantry->setTerritoryName(m_homeProvinceName);
+        InfantryPiece *infantry = new InfantryPiece(m_id, m_homeProvinceName, this);
         m_infantry.append(infantry);
     }
 
@@ -65,7 +67,6 @@ Player::~Player()
 
     // Clean up all buildings - we own them
     qDeleteAll(m_cities);
-    qDeleteAll(m_roads);
 }
 
 QColor Player::getColorForPlayer(QChar playerId) const
@@ -75,7 +76,7 @@ QColor Player::getColorForPlayer(QChar playerId) const
         case 'B': return Qt::green;
         case 'C': return Qt::blue;
         case 'D': return Qt::yellow;
-        case 'E': return Qt::black;
+        case 'E': return QColor(128, 128, 128); // Gray (Black would be invisible)
         case 'F': return QColor(255, 165, 0); // Orange
         default: return Qt::gray;
     }
@@ -126,11 +127,6 @@ QList<Building*> Player::getAllBuildings() const
 
     // Add all cities
     for (City *building : m_cities) {
-        allBuildings.append(building);
-    }
-
-    // Add all roads
-    for (Road *building : m_roads) {
         allBuildings.append(building);
     }
 
@@ -206,14 +202,6 @@ void Player::addCity(City *city)
     }
 }
 
-void Player::addRoad(Road *road)
-{
-    if (road && road->getOwner() == m_id) {
-        m_roads.append(road);
-        emit buildingAdded(road);
-    }
-}
-
 // ========== Remove Pieces ==========
 
 bool Player::removeCaesar(CaesarPiece *piece)
@@ -285,15 +273,6 @@ bool Player::removeCity(City *city)
 {
     if (m_cities.removeOne(city)) {
         emit buildingRemoved(city);
-        return true;
-    }
-    return false;
-}
-
-bool Player::removeRoad(Road *road)
-{
-    if (m_roads.removeOne(road)) {
-        emit buildingRemoved(road);
         return true;
     }
     return false;
@@ -424,13 +403,6 @@ QList<Building*> Player::getBuildingsAtTerritory(const QString &territoryName) c
         }
     }
 
-    // Check roads
-    for (Road *road : m_roads) {
-        if (road->getTerritoryName() == territoryName) {
-            buildings.append(road);
-        }
-    }
-
     return buildings;
 }
 
@@ -443,17 +415,6 @@ QList<City*> Player::getCitiesAtTerritory(const QString &territoryName) const
         }
     }
     return cities;
-}
-
-QList<Road*> Player::getRoadsAtTerritory(const QString &territoryName) const
-{
-    QList<Road*> roads;
-    for (Road *road : m_roads) {
-        if (road->getTerritoryName() == territoryName) {
-            roads.append(road);
-        }
-    }
-    return roads;
 }
 
 City* Player::getCityAtTerritory(const QString &territoryName) const
@@ -481,7 +442,7 @@ int Player::getTotalPieceCount() const
 
 int Player::getTotalBuildingCount() const
 {
-    return m_cities.size() + m_roads.size();
+    return m_cities.size();
 }
 
 int Player::getPieceCountAtTerritory(const QString &territoryName) const
@@ -595,13 +556,83 @@ void Player::clearAllTerritories()
     emit territoriesCleared();
 }
 
+void Player::clearAllPiecesAndBuildings()
+{
+    // Delete and clear all pieces
+    qDeleteAll(m_caesars);
+    m_caesars.clear();
+    qDeleteAll(m_generals);
+    m_generals.clear();
+    qDeleteAll(m_capturedGenerals);
+    m_capturedGenerals.clear();
+    qDeleteAll(m_infantry);
+    m_infantry.clear();
+    qDeleteAll(m_cavalry);
+    m_cavalry.clear();
+    qDeleteAll(m_catapults);
+    m_catapults.clear();
+    qDeleteAll(m_galleys);
+    m_galleys.clear();
+
+    // Delete and clear all buildings
+    qDeleteAll(m_cities);
+    m_cities.clear();
+}
+
 // ========== Turn Management ==========
 
-void Player::startTurn()
+void Player::startTurn(bool resetMoves)
 {
     m_isMyTurn = true;
 
-    // Reset movement for all pieces to their default values
+    if (resetMoves) {
+        // Reset movement for all pieces to their default values
+        // Caesars: 2 moves
+        for (CaesarPiece *piece : m_caesars) {
+            piece->setMovesRemaining(2);
+        }
+
+        // Generals: 2 moves
+        for (GeneralPiece *piece : m_generals) {
+            piece->setMovesRemaining(2);
+        }
+
+        // Infantry: 1 move
+        for (InfantryPiece *piece : m_infantry) {
+            piece->setMovesRemaining(1);
+        }
+
+        // Cavalry: 2 moves
+        for (CavalryPiece *piece : m_cavalry) {
+            piece->setMovesRemaining(2);
+        }
+
+        // Catapults: 1 move
+        for (CatapultPiece *piece : m_catapults) {
+            piece->setMovesRemaining(1);
+        }
+
+        // Galleys: 2 moves, and reset transport flag
+        for (GalleyPiece *piece : m_galleys) {
+            piece->setMovesRemaining(2);
+            piece->resetTransportFlag();
+            // Clear any leader aboard from previous turn (they should have disembarked)
+            piece->setLeaderAboard(0);
+        }
+    }
+
+    emit turnStarted();
+}
+
+void Player::endTurn()
+{
+    m_isMyTurn = false;
+
+    // Reset movement for all pieces to their default values at end of turn
+    // This ensures pieces always show full moves when it's not their turn,
+    // which makes threat assessment calculations work correctly
+    // (startTurn will also reset, but this keeps state clean between turns)
+
     // Caesars: 2 moves
     for (CaesarPiece *piece : m_caesars) {
         piece->setMovesRemaining(2);
@@ -627,21 +658,11 @@ void Player::startTurn()
         piece->setMovesRemaining(1);
     }
 
-    // Galleys: 2 moves, and reset transport flag
+    // Galleys: 2 moves
     for (GalleyPiece *piece : m_galleys) {
         piece->setMovesRemaining(2);
-        piece->resetTransportFlag();
-        // Clear any leader aboard from previous turn (they should have disembarked)
-        piece->setLeaderAboard(0);
     }
 
-    emit turnStarted();
-}
-
-void Player::endTurn()
-{
-    m_isMyTurn = false;
-    // Future: Could add end-of-turn logic here (cleanup, etc.)
     emit turnEnded();
 }
 
@@ -655,15 +676,10 @@ int Player::collectTaxes(MapWidget *mapWidget)
 
     // Iterate through all owned territories and sum their tax values
     for (const QString &territoryName : m_ownedTerritories) {
-        // Find the territory on the map and get its value
-        for (int row = 0; row < 8; ++row) {
-            for (int col = 0; col < 12; ++col) {
-                if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                    int territoryValue = mapWidget->getTerritoryValueAt(row, col);
-                    totalTaxes += territoryValue;
-                    break; // Found the territory, move to next one
-                }
-            }
+        // Use MapGraph to get territory value (works for both grid and OpenGL maps)
+        if (mapWidget->getGraph()) {
+            int territoryValue = mapWidget->getGraph()->getValue(territoryName);
+            totalTaxes += territoryValue;
         }
     }
 
@@ -687,16 +703,11 @@ int Player::calculateIncome(MapWidget *mapWidget) const
 
     int totalIncome = 0;
 
-    // Sum territory values
+    // Sum territory values using MapGraph (works for both grid and OpenGL maps)
     for (const QString &territoryName : m_ownedTerritories) {
-        for (int row = 0; row < 8; ++row) {
-            for (int col = 0; col < 12; ++col) {
-                if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                    int territoryValue = mapWidget->getTerritoryValueAt(row, col);
-                    totalIncome += territoryValue;
-                    break;
-                }
-            }
+        if (mapWidget->getGraph()) {
+            int territoryValue = mapWidget->getGraph()->getValue(territoryName);
+            totalIncome += territoryValue;
         }
     }
 

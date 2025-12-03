@@ -34,4 +34,15 @@ struct TerritoryLocation {
     }
 };
 
+// Map widget type selection
+// When USE_OPENGL_MAP is defined, we use GameMapWidget, otherwise MapWidget
+#ifdef USE_OPENGL_MAP
+    // Forward declare GameMapWidget and create alias
+    class GameMapWidget;
+    typedef GameMapWidget MapWidget;
+#else
+    // Forward declare MapWidget
+    class MapWidget;
+#endif
+
 #endif // COMMON_H

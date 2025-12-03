@@ -13,8 +13,7 @@ class Building : public QObject
 
 public:
     enum class Type {
-        City,
-        Road
+        City
     };
 
     explicit Building(QChar owner, const Position &position, const QString &territoryName, QObject *parent = nullptr);
@@ -63,26 +62,6 @@ public:
 private:
     bool m_isFortified;  // Does this city have walls/fortification?
     bool m_markedForDestruction;  // Is this city marked for destruction at end of turn?
-};
-
-// Road class - connects territories
-class Road : public Building
-{
-    Q_OBJECT
-
-public:
-    explicit Road(QChar owner, const Position &position, const QString &territoryName, QObject *parent = nullptr);
-
-    void paint(QPainter &painter, int x, int y, int width, int height) const override;
-    Type getType() const override { return Type::Road; }
-
-    // Road endpoints (for roads connecting two positions)
-    Position getFromPosition() const { return m_position; }  // Use base position as "from"
-    Position getToPosition() const { return m_toPosition; }
-    void setToPosition(const Position &pos) { m_toPosition = pos; }
-
-private:
-    Position m_toPosition;  // Second endpoint of the road
 };
 
 #endif // BUILDING_H

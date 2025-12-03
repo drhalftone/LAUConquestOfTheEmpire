@@ -37,6 +37,7 @@
 #include <QTimer>
 #include <QRandomGenerator>
 #include <QVector>
+#include <QSoundEffect>
 
 class LAURollingDieWidget : public QWidget
 {
@@ -89,6 +90,9 @@ private:
 
     // Store the sender object to return with roll result
     QObject *m_rollSender;
+
+    // Click sound effect for die rolling
+    QSoundEffect *m_clickSound;
 };
 
 #endif // LAUROLLINGDIEWIDGET_H

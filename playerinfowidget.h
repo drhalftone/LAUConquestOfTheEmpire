@@ -8,8 +8,16 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QGroupBox>
+#include <QSoundEffect>
+#include <QElapsedTimer>
 #include "player.h"
+#include "common.h"
+
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 
 class AIPlayer;  // Forward declaration
 
@@ -26,7 +34,11 @@ public:
     void setPlayers(const QList<Player*> &players);
 
     // Set map widget reference for territory lookups
+#ifdef USE_OPENGL_MAP
+    void setMapWidget(GameMapWidget *mapWidget) { m_mapWidget = mapWidget; }
+#else
     void setMapWidget(MapWidget *mapWidget) { m_mapWidget = mapWidget; }
+#endif
 
     // Update display for specific player
     void updatePlayerInfo(Player *player);
@@ -75,6 +87,11 @@ public:
     // Get player by ID
     Player* getPlayerById(QChar playerId) const;
 
+    // === Test Mode ===
+    // When enabled, combat is skipped (for testing movement and roads)
+    void setCombatDisabled(bool disabled) { m_combatDisabled = disabled; }
+    bool isCombatDisabled() const { return m_combatDisabled; }
+
     // === AI Auto-Mode ===
     // When enabled, dialogs will auto-dismiss after a delay
     void setAIAutoMode(bool enabled, int delayMs = 1000);
@@ -97,6 +114,9 @@ public:
         bool hasCombat;             // True if enemy pieces present or enemy-owned
         bool hasCity;               // True if there's a city there
         bool isViaRoad;             // True if reachable via road (costs 1 move for whole trip)
+        bool isViaGalley;           // True if reachable via galley transport
+        GalleyPiece *galley;        // Galley to use for transport (if isViaGalley)
+        QString seaZone;            // Sea zone to sail through (if isViaGalley)
         bool isSea;                 // True if sea territory (generals can't go here)
         QString troopInfo;          // Description of troops there (e.g., "2 Inf, 1 Cav")
     };
@@ -108,6 +128,19 @@ public:
     // Returns true if move was successful
     bool aiMoveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
 
+    // Check if there are enemy pieces at a territory (for combat detection)
+    bool hasEnemyPiecesAt(const QString &territory, Player *excludePlayer) const;
+
+    // Move a leader to a territory (shows legion composition dialog)
+    // This is the user-initiated movement method
+    void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);
+
+    // Board a beached galley from the same territory, launching it to sea
+    void boardGalleyFromBeach(GamePiece *leader, GalleyPiece *galley, const QString &seaZone);
+
+    // Disembark from a galley to land
+    void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);
+
 signals:
     void pieceMoved(int fromRow, int fromCol, int toRow, int toCol);
 
@@ -116,6 +149,8 @@ protected:
 
 private slots:
     void onEndTurnClicked();
+    void onReachabilityClicked();
+    void onRiskClicked();
 
 private:
     // Create a tab for a single player
@@ -142,22 +177,22 @@ private:
 
     // Leader movement with troops
     void moveLeaderWithTroops(GamePiece *leader, int rowDelta, int colDelta);
-    void moveLeaderToTerritory(GamePiece *leader, const QString &destinationTerritory);  // Territory-based movement
+    // moveLeaderToTerritory moved to public section
 
     // Galley transport functions
     void boardGalley(GamePiece *leader, const QString &seaTerritory, Player *player);  // Leader boards galley (auto-select)
     void boardGalleySpecific(GamePiece *leader, const QString &seaTerritory, Player *player, GalleyPiece *galley);  // Leader boards specific galley
-    void disembarkFromGalley(GamePiece *leader, const QString &landTerritory, GalleyPiece *galley, Player *player);  // Leader disembarks
     void showDisembarkDialog(GamePiece *leader, GalleyPiece *galley, Player *player);  // Show dialog to choose disembark location
 
     // Leader movement via road (only costs 1 movement point)
-    void moveLeaderViaRoad(GamePiece *leader, const Position &destination);
+    void moveLeaderViaRoad(GamePiece *leader, const QString &destinationTerritory);
 
     // Helper to get territory name at position
     QString getTerritoryNameAt(int row, int col) const;
 
-    // Helper to get troop information at a position
+    // Helper to get troop information at a position or territory
     QString getTroopInfoAt(int row, int col) const;
+    QString getTroopInfoAtTerritory(const QString &territoryName) const;
 
     // Handle territory conquest: unclaim from previous owner, transfer/destroy buildings, claim for new owner
     void conquestTerritory(const QString &territoryName, Player *newOwner);
@@ -169,20 +204,35 @@ private:
     void saveSettings();
     void loadSettings();
 
+    // Play click sound (only once per different action)
+    void playMenuClickSound(QAction *action);
+
     QTabWidget *m_tabWidget;
     QMap<Player*, QWidget*> m_playerTabs;  // Map player to their tab widget
     QList<Player*> m_players;
+#ifdef USE_OPENGL_MAP
+    GameMapWidget *m_mapWidget;  // Reference to map for territory lookups
+#else
     MapWidget *m_mapWidget;  // Reference to map for territory lookups
+#endif
 
     // Global captured generals section
     QGroupBox *m_capturedGeneralsGroupBox;
     QTableWidget *m_capturedGeneralsTable;
+
+    // Test mode settings
+    bool m_combatDisabled = false;  // Skip combat for testing
 
     // AI Auto-Mode settings
     bool m_aiAutoMode = false;
     int m_aiAutoModeDelayMs = 1000;
     AIPlayer *m_aiPlayer = nullptr;  // Reference to AI player for decision-making
     QMap<QChar, AIPlayer*> m_aiPlayers;  // Map of player ID to AI controller
+
+    // Audio for context menus
+    QSoundEffect *m_clickSound = nullptr;
+    QAction *m_lastHoveredAction = nullptr;  // Track last hovered action to play click only once per item
+    QElapsedTimer m_clickTimer;  // Throttle click sounds
 };
 
 #endif // PLAYERINFOWIDGET_H

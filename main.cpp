@@ -1,11 +1,16 @@
 #include "playerinfowidget.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include "player.h"
 #include "scorewindow.h"
 #include "walletwindow.h"
 #include "combatdialog.h"
 #include "aiplayer.h"
 #include "aidebugwidget.h"
+#include "gamelog.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
@@ -17,18 +22,59 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSet>
+#include <QInputDialog>
+#include <QSurfaceFormat>
+
+// Home provinces by player count (from Conquest of the Empire Classic Rules)
+// Six provinces: Hispania, Italia, Macedonia, Numidia, Egyptus, Galatia
+// Turn order follows clockwise around Mediterranean: Macedonia, Galatia, Egyptus, Numidia, Hispania, Italia
+// Provinces are ordered clockwise - first in list goes first
+QStringList getHomeProvincesForPlayerCount(int numPlayers)
+{
+    switch (numPlayers) {
+        case 2:
+            // Egyptus goes first (clockwise before Hispania)
+            return {"Egyptus", "Hispania"};
+        case 3:
+            // Macedonia, then clockwise: Egyptus, Hispania
+            return {"Macedonia", "Egyptus", "Hispania"};
+        case 4:
+            // Ordered clockwise: Macedonia, Galatia, Numidia, Hispania
+            return {"Macedonia", "Galatia", "Numidia", "Hispania"};
+        case 5:
+            // Ordered clockwise: Macedonia, Galatia, Egyptus, Hispania, Italia
+            return {"Macedonia", "Galatia", "Egyptus", "Hispania", "Italia"};
+        case 6:
+            // All six provinces ordered clockwise: Macedonia, Galatia, Egyptus, Numidia, Hispania, Italia
+            return {"Macedonia", "Galatia", "Egyptus", "Numidia", "Hispania", "Italia"};
+        default:
+            return {"Egyptus", "Hispania"};  // Default to 2 players
+    }
+}
 
 // Forward declaration
+#ifdef USE_OPENGL_MAP
+bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex);
+#else
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex);
+#endif
 
 int main(int argc, char *argv[])
 {
+    // Set OpenGL version to 3.3 Core Profile (required for GLSL 330 shaders)
+#ifdef USE_OPENGL_MAP
+    QSurfaceFormat format;
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(format);
+#endif
+
     QApplication a(argc, argv);
 
     // Set application icon
     a.setWindowIcon(QIcon(":/images/coeIcon.png"));
 
-    // Show startup dialog: New Game or Load Game
+    // Show startup dialog: New Game, Single Player, or Load Game
     QMessageBox startupDialog;
     startupDialog.setWindowTitle("Conquest of the Empire");
     startupDialog.setText("Welcome to Conquest of the Empire!");
@@ -36,6 +82,8 @@ int main(int argc, char *argv[])
     startupDialog.setIconPixmap(QPixmap(":/images/coeIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     QPushButton *newGameButton = startupDialog.addButton("New Game", QMessageBox::AcceptRole);
+    QPushButton *singlePlayerButton = startupDialog.addButton("Single Player", QMessageBox::AcceptRole);
+    QPushButton *aiTestButton = startupDialog.addButton("AI Test", QMessageBox::AcceptRole);
     QPushButton *loadGameButton = startupDialog.addButton("Load Game", QMessageBox::ActionRole);
     QPushButton *exitButton = startupDialog.addButton("Exit", QMessageBox::RejectRole);
 
@@ -43,8 +91,55 @@ int main(int argc, char *argv[])
 
     QString loadFileName;
     bool loadGame = false;
+    bool singlePlayerMode = false;
+    bool aiTestMode = false;  // All AI players, no human
+    int humanPlayerIndex = 0;  // Index of the human player (0 = Macedonia in single player)
 
-    if (startupDialog.clickedButton() == loadGameButton) {
+    int numPlayers = 2;  // Default
+
+    if (startupDialog.clickedButton() == singlePlayerButton) {
+        // Single player TEST mode - you play as Macedonia with AI opponents, no combat
+        singlePlayerMode = true;
+        numPlayers = 3;  // Macedonia + 2 AI opponents (Egyptus, Hispania)
+
+        QMessageBox::information(nullptr, "Test Mode",
+            "Starting TEST MODE:\n\n"
+            "- You play as Macedonia (Red)\n"
+            "- 2 AI opponents (Egyptus, Hispania)\n"
+            "- Combat is DISABLED for testing movement and roads\n\n"
+            "Use this to test movement, road drawing, and AI behavior.");
+
+        qDebug() << "Starting single player TEST mode with 3 players (combat disabled)";
+    } else if (startupDialog.clickedButton() == aiTestButton) {
+        // AI Test mode - all AI players, human just watches
+        aiTestMode = true;
+
+        // Ask for number of AI players
+        QStringList playerOptions = {"1 AI Player", "2 AI Players", "3 AI Players"};
+        bool ok;
+        QString selection = QInputDialog::getItem(nullptr,
+                                                  "AI Test Mode",
+                                                  "Select number of AI players:",
+                                                  playerOptions,
+                                                  0,  // Default to 1 AI
+                                                  false,  // Not editable
+                                                  &ok);
+        if (!ok) {
+            return 0;  // User cancelled
+        }
+
+        numPlayers = selection.left(1).toInt();
+
+        QMessageBox::information(nullptr, "AI Test Mode",
+            QString("Starting AI TEST MODE:\n\n"
+            "- %1 AI player(s) will play automatically\n"
+            "- You can watch the AI make decisions\n"
+            "- Combat is ENABLED\n"
+            "- Use End Turn in player widget to advance turns\n\n"
+            "Watch the AI expand and interact!").arg(numPlayers));
+
+        qDebug() << "Starting AI TEST mode with" << numPlayers << "AI players";
+    } else if (startupDialog.clickedButton() == loadGameButton) {
         // Get last used directory from settings, default to Documents folder
         QSettings settings("ConquestOfTheEmpire", "MapWidget");
         QString lastDir = settings.value("lastSaveDirectory",
@@ -65,16 +160,52 @@ int main(int argc, char *argv[])
         settings.setValue("lastSaveDirectory", fileInfo.absolutePath());
 
         loadGame = true;
+    } else if (startupDialog.clickedButton() == newGameButton) {
+        // Ask for number of players
+        QStringList playerOptions = {"2 Players", "3 Players", "4 Players", "5 Players", "6 Players"};
+        bool ok;
+        QString selection = QInputDialog::getItem(nullptr,
+                                                  "New Game",
+                                                  "Select number of players:",
+                                                  playerOptions,
+                                                  0,  // Default to 2 players
+                                                  false,  // Not editable
+                                                  &ok);
+        if (!ok) {
+            // User cancelled, exit application
+            return 0;
+        }
+
+        // Parse selection to get number
+        numPlayers = selection.left(1).toInt();
+        qDebug() << "Starting new game with" << numPlayers << "players";
     } else if (startupDialog.clickedButton() == exitButton) {
         // User chose to exit
         return 0;
     }
-    // else: New Game button was clicked, continue with normal initialization
 
     // Reset the piece counter for a fresh game
     GamePiece::resetCounter();
 
+    // Start the game log
+    QString gameDescription;
+    if (singlePlayerMode) {
+        gameDescription = "Single Player Mode (Combat Disabled)";
+    } else if (aiTestMode) {
+        gameDescription = QString("AI Test Mode (%1 AI players)").arg(numPlayers);
+    } else if (loadGame) {
+        gameDescription = "Loaded Game";
+    } else {
+        gameDescription = QString("New Game (%1 players)").arg(numPlayers);
+    }
+    GAME_LOG.startNewGame(gameDescription);
+    qDebug() << "Game log started at:" << GAME_LOG.getLogFilePath();
+
+#ifdef USE_OPENGL_MAP
+    GameMapWidget *mapWidget = nullptr;
+#else
     MapWidget *mapWidget = nullptr;
+#endif
     QList<Player*> players;
     int currentPlayerIndex = 0;
 
@@ -93,23 +224,26 @@ int main(int argc, char *argv[])
 
     // If not loading or load failed, create new game
     if (!loadGame) {
-        // Create the map widget first - it will initialize the random map
+        // Create the map widget
+#ifdef USE_OPENGL_MAP
+        mapWidget = new GameMapWidget();
+#else
         mapWidget = new MapWidget();
+#endif
 
-        // Get random home provinces from the map
-        QVector<MapWidget::HomeProvinceInfo> homeProvinces = mapWidget->getRandomHomeProvinces();
+        // Get home provinces for the selected number of players
+        QStringList homeProvinces = getHomeProvincesForPlayerCount(numPlayers);
 
-        // Create players with the home provinces from the map
-        // DEBUG: Only 1 player for testing AI movement (original: 6 players)
+        // Create players with the correct starting territories
         QList<QChar> playerIds = {'A', 'B', 'C', 'D', 'E', 'F'};
-        int numPlayers = 1;  // DEBUG: reduced to 1 for AI testing
 
         for (int i = 0; i < numPlayers && i < homeProvinces.size(); ++i) {
             Player *player = new Player(
                 playerIds[i],
-                homeProvinces[i].name  // Only need territory name now
+                homeProvinces[i]  // Home province name from rules
             );
             players.append(player);
+            qDebug() << "Player" << playerIds[i] << "starts in" << homeProvinces[i];
         }
 
         currentPlayerIndex = 0;
@@ -118,6 +252,8 @@ int main(int argc, char *argv[])
     // Give the map a reference to the players so it can query them
     mapWidget->setPlayers(players);
     mapWidget->show();
+    mapWidget->raise();
+    mapWidget->activateWindow();
 
     // NOTE: We delay startTurn() until after AI setup so the signal connection exists
     // Just set up the current player index for now
@@ -132,11 +268,48 @@ int main(int argc, char *argv[])
     // Update the map to show initial territory ownership
     mapWidget->update();
 
+#ifdef USE_OPENGL_MAP
+    // OpenGL map - with PlayerInfoWidget for game controls
+    PlayerInfoWidget *infoWidget = new PlayerInfoWidget();
+    infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
+    infoWidget->setPlayers(players);
+    mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget
+    infoWidget->setAttribute(Qt::WA_QuitOnClose, false);  // Don't quit app when this closes
+
+    // Disable combat in single player test mode
+    if (singlePlayerMode) {
+        infoWidget->setCombatDisabled(true);
+        qDebug() << "Combat DISABLED for test mode";
+    }
+
+    // Connect mapWidget close to infoWidget close
+    QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
+
+    // Connect piece movement signal to map widget for redrawing (heat map update)
+    QObject::connect(infoWidget, &PlayerInfoWidget::pieceMoved, mapWidget, [mapWidget](int fromRow, int fromCol, int toRow, int toCol) {
+        Q_UNUSED(fromRow);
+        Q_UNUSED(fromCol);
+        Q_UNUSED(toRow);
+        Q_UNUSED(toCol);
+        mapWidget->updateHeatMap();  // Refresh heat map (reachability/risk/threat)
+        mapWidget->update();  // Redraw the entire map
+    });
+
+    infoWidget->show();
+
+    ScoreWindow *scoreWindow = nullptr;
+    WalletWindow *walletWindow = nullptr;
+#else
     // Create and show the player info widget
     PlayerInfoWidget *infoWidget = new PlayerInfoWidget();
     infoWidget->setMapWidget(mapWidget);  // Connect to map for territory lookups
     infoWidget->setPlayers(players);
     mapWidget->setPlayerInfoWidget(infoWidget);  // Connect map to info widget for right-click movement
+    infoWidget->setAttribute(Qt::WA_QuitOnClose, false);  // Don't quit app when this closes
+
+    // Connect mapWidget close to infoWidget close
+    QObject::connect(mapWidget, &QWidget::destroyed, infoWidget, &QWidget::deleteLater);
+
     infoWidget->show();
 
     // Create score window (kept for backward compatibility but can be removed)
@@ -152,23 +325,18 @@ int main(int argc, char *argv[])
     walletWindow->setWindowTitle("Player Wallets");
     // Don't show it by default since wallets are in player info widget now
     // walletWindow->show();
+#endif
 
-    // Initialize scores and wallets
+#ifndef USE_OPENGL_MAP
+    // Initialize scores and wallets (grid-based only)
     QMap<QChar, int> initialScores;
     QMap<QChar, int> initialWallets;
     for (Player *player : players) {
-        // Calculate total tax value for owned territories
+        // Calculate total tax value for owned territories using MapGraph
         int totalTaxValue = 0;
         const QList<QString> &territories = player->getOwnedTerritories();
         for (const QString &territoryName : territories) {
-            for (int row = 0; row < 8; ++row) {
-                for (int col = 0; col < 12; ++col) {
-                    if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                        totalTaxValue += mapWidget->getTerritoryValueAt(row, col);
-                        break;
-                    }
-                }
-            }
+            totalTaxValue += mapWidget->getGraph()->getValue(territoryName);
         }
         // Add 5 for each city owned
         totalTaxValue += player->getCityCount() * 5;
@@ -185,6 +353,7 @@ int main(int argc, char *argv[])
         Q_UNUSED(fromCol);
         Q_UNUSED(toRow);
         Q_UNUSED(toCol);
+        mapWidget->updateHeatMap();  // Refresh heat map (reachability/risk/threat)
         mapWidget->update();  // Redraw the entire map
     });
 
@@ -209,14 +378,8 @@ int main(int argc, char *argv[])
             int totalTaxValue = 0;
             const QList<QString> &territories = player->getOwnedTerritories();
             for (const QString &territoryName : territories) {
-                for (int row = 0; row < 8; ++row) {
-                    for (int col = 0; col < 12; ++col) {
-                        if (mapWidget->getTerritoryNameAt(row, col) == territoryName) {
-                            totalTaxValue += mapWidget->getTerritoryValueAt(row, col);
-                            break;
-                        }
-                    }
-                }
+                // Use MapGraph for territory values (works for both grid and OpenGL)
+                totalTaxValue += mapWidget->getGraph()->getValue(territoryName);
             }
             // Add 5 for each city owned
             totalTaxValue += player->getCityCount() * 5;
@@ -242,20 +405,24 @@ int main(int argc, char *argv[])
         // Note: Roads are updated at start of turn, not when territory ownership changes mid-turn
         // This prevents roads from appearing before combat is resolved
     }
+#endif // !USE_OPENGL_MAP
 
+#ifndef USE_OPENGL_MAP
     // ========================================================================
-    // AI PLAYER SETUP (for testing)
+    // AI PLAYER SETUP (for testing) - grid-based only
     // ========================================================================
+    // DISABLED: AI players are currently disabled for manual play
     QList<AIPlayer*> aiPlayers;
     QList<AIDebugWidget*> debugWidgets;
 
     // Create AI controller and debug widget for each player
+    /*
     for (int i = 0; i < players.size(); ++i) {
         Player *player = players[i];
 
         // Create AI player controller
         AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
-        ai->setStrategy(AIPlayer::Strategy::Economic);  // Prioritize highest value territories
+        ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
         ai->setDelayMs(1000);   // 1 second delay so you can see dialogs
         ai->setStepMode(true);  // Step mode - click "Step" button to advance
         aiPlayers.append(ai);
@@ -276,12 +443,13 @@ int main(int argc, char *argv[])
 
         qDebug() << "Created AI player and debug widget for Player" << player->getId();
     }
+    */
 
     // NOW start the current player's turn (after AI connections are set up)
-    // This applies to both new games and loaded games
+    // When loading a saved game, don't reset moves (preserve saved state)
     if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
         qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
-        players[currentPlayerIndex]->startTurn();
+        players[currentPlayerIndex]->startTurn(!loadGame);  // Don't reset moves when loading saved game
         mapWidget->setAtStartOfTurn(true);
     }
 
@@ -297,8 +465,450 @@ int main(int argc, char *argv[])
     delete walletWindow;
 
     return result;
+#else
+    // ========================================================================
+    // OpenGL MAP - with PlayerInfoWidget
+    // ========================================================================
+
+    // AI players for single player mode
+    QList<AIPlayer*> aiPlayers;
+    QList<AIDebugWidget*> debugWidgets;
+
+    if (singlePlayerMode) {
+        qDebug() << "Setting up AI players for single player mode...";
+
+        // Create AI controller for each non-human player
+        for (int i = 0; i < players.size(); ++i) {
+            if (i == humanPlayerIndex) {
+                qDebug() << "Player" << players[i]->getId() << "(" << players[i]->getHomeProvinceName() << ") is HUMAN";
+                continue;  // Skip human player
+            }
+
+            Player *player = players[i];
+            player->setIsAI(true);  // Mark as AI-controlled
+
+            // Create AI player controller
+            AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+            ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
+            ai->setDelayMs(800);   // Delay so player can see AI actions
+            ai->setStepMode(false);  // Auto-run, no stepping
+            aiPlayers.append(ai);
+
+            // Register AI player with PlayerInfoWidget for combat handling
+            infoWidget->registerAIPlayer(player->getId(), ai);
+
+            // Connect player's turn signal to AI execution
+            QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+            qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is AI-controlled";
+
+            // Optionally create debug widget for AI (uncomment to see AI decision-making)
+            /*
+            AIDebugWidget *debugWidget = new AIDebugWidget();
+            debugWidget->setAIPlayer(ai);
+            debugWidget->move(900 + i * 50, 100 + i * 50);
+            debugWidget->show();
+            debugWidgets.append(debugWidget);
+            */
+        }
+    } else if (aiTestMode) {
+        qDebug() << "Setting up AI players for AI test mode...";
+
+        // Create AI controller for ALL players (no human)
+        for (int i = 0; i < players.size(); ++i) {
+            Player *player = players[i];
+            player->setIsAI(true);  // Mark as AI-controlled
+
+            // Create AI player controller
+            AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+            ai->setStrategy(AIPlayer::Strategy::RiskBased);  // Use risk assessment for smart decisions
+            ai->setDelayMs(1000);   // Slower delay so user can watch AI decisions
+            ai->setStepMode(false);  // Auto-run, no stepping
+            aiPlayers.append(ai);
+
+            // Register AI player with PlayerInfoWidget for combat handling
+            infoWidget->registerAIPlayer(player->getId(), ai);
+
+            // Connect player's turn signal to AI execution
+            QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+            qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is AI-controlled";
+
+            // Create debug widget for AI in test mode (so we can see decision-making)
+            AIDebugWidget *debugWidget = new AIDebugWidget();
+            debugWidget->setAIPlayer(ai);
+            debugWidget->setWindowTitle(QString("AI Debug - Player %1 (%2)")
+                .arg(player->getId())
+                .arg(player->getHomeProvinceName()));
+            debugWidget->move(900 + i * 50, 100 + i * 50);
+            debugWidget->show();
+            debugWidgets.append(debugWidget);
+        }
+    }
+
+    // When loading a saved game, restore AI controllers based on saved isAI flag
+    if (loadGame) {
+        qDebug() << "Restoring AI players from saved game...";
+
+        for (int i = 0; i < players.size(); ++i) {
+            Player *player = players[i];
+
+            if (player->isAI()) {
+                // Create AI player controller
+                AIPlayer *ai = new AIPlayer(player, infoWidget, mapWidget);
+                ai->setStrategy(AIPlayer::Strategy::RiskBased);
+                ai->setDelayMs(800);
+                ai->setStepMode(false);
+                aiPlayers.append(ai);
+
+                // Register AI player with PlayerInfoWidget for combat handling
+                infoWidget->registerAIPlayer(player->getId(), ai);
+
+                // Connect player's turn signal to AI execution
+                QObject::connect(player, &Player::turnStarted, ai, &AIPlayer::executeTurn);
+
+                qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") restored as AI-controlled";
+            } else {
+                qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is HUMAN";
+            }
+        }
+    }
+
+    // Start the current player's turn
+    // When loading a saved game, don't reset moves (preserve saved state)
+    if (!players.isEmpty() && currentPlayerIndex >= 0 && currentPlayerIndex < players.size()) {
+        qDebug() << "Starting player's turn (Player" << players[currentPlayerIndex]->getId() << ")";
+        players[currentPlayerIndex]->startTurn(false);  // Don't reset moves when loading saved game
+        mapWidget->setAtStartOfTurn(true);
+
+        // Log the first turn
+        GAME_LOG.logTurnStart(QString("Player %1").arg(players[currentPlayerIndex]->getId()), 1);
+    }
+
+    int result = a.exec();
+
+    // End the game log
+    GAME_LOG.endGame();
+
+    // Clean up
+    qDeleteAll(aiPlayers);
+    qDeleteAll(debugWidgets);
+    qDeleteAll(players);
+    delete infoWidget;
+    delete mapWidget;
+
+    return result;
+#endif // !USE_OPENGL_MAP
 }
 
+#ifdef USE_OPENGL_MAP
+// OpenGL map doesn't support loading grid-based save files yet
+bool loadGameFromFile(const QString &fileName, GameMapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
+{
+    // Open and parse JSON file
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qDebug() << "Failed to open file:" << fileName;
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        qDebug() << "Failed to parse JSON:" << parseError.errorString();
+        return false;
+    }
+
+    if (!doc.isObject()) {
+        qDebug() << "JSON is not an object";
+        return false;
+    }
+
+    QJsonObject gameState = doc.object();
+
+    // Get current player index
+    currentPlayerIndex = gameState["currentPlayerIndex"].toInt(0);
+
+    // Create map widget
+    mapWidget = new GameMapWidget();
+
+    // Load players
+    QJsonArray playersArray = gameState["players"].toArray();
+    qDebug() << "Loading" << playersArray.size() << "players from save file";
+
+    for (const QJsonValue &playerValue : playersArray) {
+        QJsonObject playerObj = playerValue.toObject();
+
+        QChar playerId = playerObj["id"].toString().at(0);
+        QString homeName = playerObj["homeName"].toString();
+        int wallet = playerObj["wallet"].toInt(100);
+
+        qDebug() << "Creating player" << playerId << "with home" << homeName;
+
+        // Create player with minimal setup (we'll recreate pieces from save)
+        Player *player = new Player(playerId, homeName, nullptr, true);  // minimalSetup=true
+
+        // Remove the auto-created Caesar (constructor always creates one)
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            player->removeCaesar(caesar);
+            delete caesar;
+        }
+
+        // Set wallet
+        player->setWallet(wallet);
+
+        // Load AI flag
+        player->setIsAI(playerObj["isAI"].toBool(false));
+
+        // Load owned territories
+        QJsonArray territoriesArray = playerObj["ownedTerritories"].toArray();
+        for (const QJsonValue &territoryValue : territoriesArray) {
+            player->claimTerritory(territoryValue.toString());
+        }
+
+        // Load Caesars
+        QJsonArray caesarsArray = playerObj["caesars"].toArray();
+        for (const QJsonValue &caesarValue : caesarsArray) {
+            QJsonObject caesarObj = caesarValue.toObject();
+            QString territory = caesarObj["territory"].toString();
+
+            CaesarPiece *caesar = new CaesarPiece(playerId, territory, player);
+            caesar->setMovesRemaining(caesarObj["movesRemaining"].toDouble(2));
+            caesar->setOnGalley(caesarObj["onGalley"].toString());
+
+            player->addCaesar(caesar);
+            qDebug() << "  Added Caesar at" << territory;
+        }
+
+        // Load Generals
+        QJsonArray generalsArray = playerObj["generals"].toArray();
+        for (const QJsonValue &generalValue : generalsArray) {
+            QJsonObject generalObj = generalValue.toObject();
+            QString territory = generalObj["territory"].toString();
+            int number = generalObj["number"].toInt(1);
+
+            GeneralPiece *general = new GeneralPiece(playerId, territory, number, player);
+            general->setMovesRemaining(generalObj["movesRemaining"].toDouble(2));
+            general->setOnGalley(generalObj["onGalley"].toString());
+
+            player->addGeneral(general);
+        }
+        qDebug() << "  Added" << player->getGeneralCount() << "generals";
+
+        // Load Infantry
+        QJsonArray infantryArray = playerObj["infantry"].toArray();
+        for (const QJsonValue &infantryValue : infantryArray) {
+            QJsonObject infantryObj = infantryValue.toObject();
+            QString territory = infantryObj["territory"].toString();
+
+            InfantryPiece *infantry = new InfantryPiece(playerId, territory, player);
+            infantry->setMovesRemaining(infantryObj["movesRemaining"].toDouble(1));
+            infantry->setOnGalley(infantryObj["onGalley"].toString());
+
+            player->addInfantry(infantry);
+        }
+        qDebug() << "  Added" << player->getInfantryCount() << "infantry";
+
+        // Load Cavalry
+        QJsonArray cavalryArray = playerObj["cavalry"].toArray();
+        for (const QJsonValue &cavalryValue : cavalryArray) {
+            QJsonObject cavalryObj = cavalryValue.toObject();
+            QString territory = cavalryObj["territory"].toString();
+
+            CavalryPiece *cavalry = new CavalryPiece(playerId, territory, player);
+            cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toDouble(2));
+            cavalry->setOnGalley(cavalryObj["onGalley"].toString());
+
+            player->addCavalry(cavalry);
+        }
+
+        // Load Catapults
+        QJsonArray catapultsArray = playerObj["catapults"].toArray();
+        for (const QJsonValue &catapultValue : catapultsArray) {
+            QJsonObject catapultObj = catapultValue.toObject();
+            QString territory = catapultObj["territory"].toString();
+
+            CatapultPiece *catapult = new CatapultPiece(playerId, territory, player);
+            catapult->setMovesRemaining(catapultObj["movesRemaining"].toDouble(1));
+            catapult->setOnGalley(catapultObj["onGalley"].toString());
+
+            player->addCatapult(catapult);
+        }
+
+        // Load Galleys
+        QJsonArray galleysArray = playerObj["galleys"].toArray();
+        for (const QJsonValue &galleyValue : galleysArray) {
+            QJsonObject galleyObj = galleyValue.toObject();
+            QString territory = galleyObj["territory"].toString();
+
+            GalleyPiece *galley = new GalleyPiece(playerId, territory, player);
+            double savedMoves = galleyObj["movesRemaining"].toDouble(2);
+            galley->setMovesRemaining(savedMoves);
+            qDebug() << "  Loaded galley at" << territory << "movesRemaining:" << savedMoves
+                     << "(JSON has key:" << galleyObj.contains("movesRemaining") << ")";
+            if (galleyObj["transportedThisTurn"].toBool()) {
+                galley->setTransportedThisTurn(true);
+            }
+            if (galleyObj.contains("lastSeaZone")) {
+                galley->setLastSeaZone(galleyObj["lastSeaZone"].toString());
+            }
+
+            player->addGalley(galley);
+        }
+
+        // Load Cities
+        QJsonArray citiesArray = playerObj["cities"].toArray();
+        for (const QJsonValue &cityValue : citiesArray) {
+            QJsonObject cityObj = cityValue.toObject();
+            QString territory = cityObj["territory"].toString();
+            bool isFortified = cityObj["isFortified"].toBool();
+
+            City *city = new City(playerId, {0, 0}, territory, isFortified, player);
+            player->addCity(city);
+        }
+        qDebug() << "  Added" << player->getCityCount() << "cities";
+
+        // Load Captured Generals
+        QJsonArray capturedGeneralsArray = playerObj["capturedGenerals"].toArray();
+        for (const QJsonValue &generalValue : capturedGeneralsArray) {
+            QJsonObject generalObj = generalValue.toObject();
+            QString territory = generalObj["territory"].toString();
+            QChar originalPlayer = generalObj["originalPlayer"].toString().at(0);
+            int number = generalObj["number"].toInt(1);
+
+            GeneralPiece *general = new GeneralPiece(originalPlayer, territory, number, player);
+            general->setCapturedBy(playerId);
+
+            player->addCapturedGeneral(general);
+        }
+
+        players.append(player);
+    }
+
+    // Clear invalid onGalley references (old serial numbers that don't exist anymore)
+    qDebug() << "Clearing invalid galley references...";
+    for (Player *player : players) {
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            caesar->clearGalley();
+        }
+        for (GeneralPiece *general : player->getGenerals()) {
+            general->clearGalley();
+        }
+        for (InfantryPiece *infantry : player->getInfantry()) {
+            infantry->clearGalley();
+        }
+        for (CavalryPiece *cavalry : player->getCavalry()) {
+            cavalry->clearGalley();
+        }
+        for (CatapultPiece *catapult : player->getCatapults()) {
+            catapult->clearGalley();
+        }
+        for (GalleyPiece *galley : player->getGalleys()) {
+            galley->setLeaderAboard(0);  // Clear invalid leader reference
+        }
+    }
+
+    // Rebuild galley-leader relationships and legion membership
+    // Leaders in sea territories should be on galleys in the same territory
+    // Troops in sea territories should be in the legion of a leader in the same territory
+    qDebug() << "Rebuilding galley-leader relationships and legions...";
+    for (Player *player : players) {
+        qDebug() << "  Player" << player->getId() << "has" << player->getGalleys().size() << "galleys";
+
+        // Check caesars
+        for (CaesarPiece *caesar : player->getCaesars()) {
+            QString territory = caesar->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        caesar->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(caesar->getUniqueId());
+                        qDebug() << "  Linked Caesar to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the caesar's legion
+                caesar->clearLegion();
+                for (InfantryPiece *infantry : player->getInfantry()) {
+                    if (infantry->getTerritoryName() == territory) {
+                        caesar->addToLegion(infantry->getUniqueId());
+                        infantry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CavalryPiece *cavalry : player->getCavalry()) {
+                    if (cavalry->getTerritoryName() == territory) {
+                        caesar->addToLegion(cavalry->getUniqueId());
+                        cavalry->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                for (CatapultPiece *catapult : player->getCatapults()) {
+                    if (catapult->getTerritoryName() == territory) {
+                        caesar->addToLegion(catapult->getUniqueId());
+                        catapult->setOnGalley(caesar->getOnGalley());
+                    }
+                }
+                qDebug() << "    Caesar's legion now has" << caesar->getLegion().size() << "troops";
+            }
+        }
+
+        // Check generals
+        for (GeneralPiece *general : player->getGenerals()) {
+            QString territory = general->getTerritoryName();
+            // Check if territory is a sea zone (starts with "Mare" or "Oceanus")
+            if (territory.startsWith("Mare") || territory.startsWith("Oceanus")) {
+                // Find a galley in the same territory
+                for (GalleyPiece *galley : player->getGalleys()) {
+                    if (galley->getTerritoryName() == territory && !galley->hasLeaderAboard()) {
+                        // Establish the relationship
+                        general->setOnGalley(galley->getSerialNumber());
+                        galley->setLeaderAboard(general->getUniqueId());
+                        qDebug() << "  Linked General" << general->getNumber() << "to galley in" << territory;
+                        break;
+                    }
+                }
+
+                // Add troops in the same sea territory to the general's legion
+                // But only if this general is on a galley (to avoid assigning troops to multiple leaders)
+                if (general->isOnGalley()) {
+                    general->clearLegion();
+                    qDebug() << "    Looking for troops in" << territory;
+                    for (InfantryPiece *infantry : player->getInfantry()) {
+                        qDebug() << "      Infantry at" << infantry->getTerritoryName() << "onGalley:" << infantry->isOnGalley();
+                        if (infantry->getTerritoryName() == territory) {
+                            general->addToLegion(infantry->getUniqueId());
+                            infantry->setOnGalley(general->getOnGalley());
+                            qDebug() << "        Added infantry to legion";
+                        }
+                    }
+                    for (CavalryPiece *cavalry : player->getCavalry()) {
+                        if (cavalry->getTerritoryName() == territory) {
+                            general->addToLegion(cavalry->getUniqueId());
+                            cavalry->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    for (CatapultPiece *catapult : player->getCatapults()) {
+                        if (catapult->getTerritoryName() == territory) {
+                            general->addToLegion(catapult->getUniqueId());
+                            catapult->setOnGalley(general->getOnGalley());
+                        }
+                    }
+                    qDebug() << "    General" << general->getNumber() << "'s legion now has" << general->getLegion().size() << "troops";
+                }
+            }
+        }
+    }
+
+    qDebug() << "Game loaded successfully with" << players.size() << "players";
+    return true;
+}
+#else
 bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Player*> &players, int &currentPlayerIndex)
 {
     // Open and parse JSON file
@@ -407,21 +1017,14 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CaesarPiece*> caesarMap;  // Track by old serial for legion restoration
         for (const QJsonValue &caesarValue : caesarsArray) {
             QJsonObject caesarObj = caesarValue.toObject();
+            QString territory = caesarObj["territory"].toString();
 
-            Position pos;
-            pos.row = caesarObj["row"].toInt(0);
-            pos.col = caesarObj["col"].toInt(0);
-
-            CaesarPiece *caesar = new CaesarPiece(playerId, pos, player);
-            caesar->setTerritoryName(caesarObj["territory"].toString());
+            CaesarPiece *caesar = new CaesarPiece(playerId, territory, player);
             caesar->setMovesRemaining(caesarObj["movesRemaining"].toInt(0));
             caesar->setOnGalley(caesarObj["onGalley"].toString());
 
-            if (caesarObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = caesarObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = caesarObj["lastTerritoryCol"].toInt(0);
-                caesar->setLastTerritory(lastPos);
+            if (caesarObj.contains("lastTerritoryName")) {
+                caesar->setLastTerritoryName(caesarObj["lastTerritoryName"].toString());
             }
 
             caesarMap[caesarObj["serialNumber"].toString()] = caesar;
@@ -433,22 +1036,15 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, GeneralPiece*> generalMap;
         for (const QJsonValue &generalValue : generalsArray) {
             QJsonObject generalObj = generalValue.toObject();
-
-            Position pos;
-            pos.row = generalObj["row"].toInt(0);
-            pos.col = generalObj["col"].toInt(0);
+            QString territory = generalObj["territory"].toString();
             int number = generalObj["number"].toInt(1);
 
-            GeneralPiece *general = new GeneralPiece(playerId, pos, number, player);
-            general->setTerritoryName(generalObj["territory"].toString());
+            GeneralPiece *general = new GeneralPiece(playerId, territory, number, player);
             general->setMovesRemaining(generalObj["movesRemaining"].toInt(0));
             general->setOnGalley(generalObj["onGalley"].toString());
 
-            if (generalObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = generalObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = generalObj["lastTerritoryCol"].toInt(0);
-                general->setLastTerritory(lastPos);
+            if (generalObj.contains("lastTerritoryName")) {
+                general->setLastTerritoryName(generalObj["lastTerritoryName"].toString());
             }
 
             generalMap[generalObj["serialNumber"].toString()] = general;
@@ -459,15 +1055,11 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QJsonArray capturedGeneralsArray = playerObj["capturedGenerals"].toArray();
         for (const QJsonValue &generalValue : capturedGeneralsArray) {
             QJsonObject generalObj = generalValue.toObject();
-
-            Position pos;
-            pos.row = generalObj["row"].toInt(0);
-            pos.col = generalObj["col"].toInt(0);
+            QString territory = generalObj["territory"].toString();
             int number = generalObj["number"].toInt(1);
             QChar originalPlayer = generalObj["originalPlayer"].toString().at(0);
 
-            GeneralPiece *general = new GeneralPiece(originalPlayer, pos, number, player);
-            general->setTerritoryName(generalObj["territory"].toString());
+            GeneralPiece *general = new GeneralPiece(originalPlayer, territory, number, player);
             general->setMovesRemaining(generalObj["movesRemaining"].toInt(0));
             general->setOnGalley(generalObj["onGalley"].toString());
             general->setCapturedBy(playerId);
@@ -480,13 +1072,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, InfantryPiece*> infantryMap;
         for (const QJsonValue &infantryValue : infantryArray) {
             QJsonObject infantryObj = infantryValue.toObject();
+            QString territory = infantryObj["territory"].toString();
 
-            Position pos;
-            pos.row = infantryObj["row"].toInt(0);
-            pos.col = infantryObj["col"].toInt(0);
-
-            InfantryPiece *infantry = new InfantryPiece(playerId, pos, player);
-            infantry->setTerritoryName(infantryObj["territory"].toString());
+            InfantryPiece *infantry = new InfantryPiece(playerId, territory, player);
             infantry->setMovesRemaining(infantryObj["movesRemaining"].toInt(0));
             infantry->setOnGalley(infantryObj["onGalley"].toString());
 
@@ -499,13 +1087,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CavalryPiece*> cavalryMap;
         for (const QJsonValue &cavalryValue : cavalryArray) {
             QJsonObject cavalryObj = cavalryValue.toObject();
+            QString territory = cavalryObj["territory"].toString();
 
-            Position pos;
-            pos.row = cavalryObj["row"].toInt(0);
-            pos.col = cavalryObj["col"].toInt(0);
-
-            CavalryPiece *cavalry = new CavalryPiece(playerId, pos, player);
-            cavalry->setTerritoryName(cavalryObj["territory"].toString());
+            CavalryPiece *cavalry = new CavalryPiece(playerId, territory, player);
             cavalry->setMovesRemaining(cavalryObj["movesRemaining"].toInt(0));
             cavalry->setOnGalley(cavalryObj["onGalley"].toString());
 
@@ -518,13 +1102,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, CatapultPiece*> catapultMap;
         for (const QJsonValue &catapultValue : catapultsArray) {
             QJsonObject catapultObj = catapultValue.toObject();
+            QString territory = catapultObj["territory"].toString();
 
-            Position pos;
-            pos.row = catapultObj["row"].toInt(0);
-            pos.col = catapultObj["col"].toInt(0);
-
-            CatapultPiece *catapult = new CatapultPiece(playerId, pos, player);
-            catapult->setTerritoryName(catapultObj["territory"].toString());
+            CatapultPiece *catapult = new CatapultPiece(playerId, territory, player);
             catapult->setMovesRemaining(catapultObj["movesRemaining"].toInt(0));
             catapult->setOnGalley(catapultObj["onGalley"].toString());
 
@@ -537,20 +1117,18 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         QMap<QString, GalleyPiece*> galleyMap;
         for (const QJsonValue &galleyValue : galleysArray) {
             QJsonObject galleyObj = galleyValue.toObject();
+            QString territory = galleyObj["territory"].toString();
 
-            Position pos;
-            pos.row = galleyObj["row"].toInt(0);
-            pos.col = galleyObj["col"].toInt(0);
-
-            GalleyPiece *galley = new GalleyPiece(playerId, pos, player);
-            galley->setTerritoryName(galleyObj["territory"].toString());
+            GalleyPiece *galley = new GalleyPiece(playerId, territory, player);
             galley->setMovesRemaining(galleyObj["movesRemaining"].toInt(0));
 
-            if (galleyObj.contains("lastTerritoryRow")) {
-                Position lastPos;
-                lastPos.row = galleyObj["lastTerritoryRow"].toInt(0);
-                lastPos.col = galleyObj["lastTerritoryCol"].toInt(0);
-                galley->setLastTerritory(lastPos);
+            if (galleyObj.contains("lastTerritoryName")) {
+                galley->setLastTerritoryName(galleyObj["lastTerritoryName"].toString());
+            }
+
+            // Load last sea zone (for beach positioning)
+            if (galleyObj.contains("lastSeaZone")) {
+                galley->setLastSeaZone(galleyObj["lastSeaZone"].toString());
             }
 
             galleyMap[galleyObj["serialNumber"].toString()] = galley;
@@ -626,9 +1204,9 @@ bool loadGameFromFile(const QString &fileName, MapWidget *&mapWidget, QList<Play
         players.append(player);
     }
 
-    // Now that all players and cities are loaded, generate roads
+    // Set players on the map widget
     mapWidget->setPlayers(players);
-    mapWidget->updateRoads();
 
     return true;
 }
+#endif // USE_OPENGL_MAP

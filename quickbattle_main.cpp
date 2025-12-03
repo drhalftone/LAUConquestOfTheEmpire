@@ -18,26 +18,21 @@
 // Create game pieces from purchase result
 void createPiecesFromPurchase(Player *player, const PurchaseResult &result, const QString &territory)
 {
-    Position dummyPos = {0, 0};
-
     // Create infantry
     for (int i = 0; i < result.infantry; ++i) {
-        InfantryPiece *infantry = new InfantryPiece(player->getId(), dummyPos, player);
-        infantry->setTerritoryName(territory);
+        InfantryPiece *infantry = new InfantryPiece(player->getId(), territory, player);
         player->addInfantry(infantry);
     }
 
     // Create cavalry
     for (int i = 0; i < result.cavalry; ++i) {
-        CavalryPiece *cavalry = new CavalryPiece(player->getId(), dummyPos, player);
-        cavalry->setTerritoryName(territory);
+        CavalryPiece *cavalry = new CavalryPiece(player->getId(), territory, player);
         player->addCavalry(cavalry);
     }
 
     // Create catapults
     for (int i = 0; i < result.catapults; ++i) {
-        CatapultPiece *catapult = new CatapultPiece(player->getId(), dummyPos, player);
-        catapult->setTerritoryName(territory);
+        CatapultPiece *catapult = new CatapultPiece(player->getId(), territory, player);
         player->addCatapult(catapult);
     }
 }
@@ -146,17 +141,13 @@ int main(int argc, char *argv[])
         Player *attacker = new Player('A', "Battlefield", nullptr, true);
         Player *defender = new Player('D', "Battlefield", nullptr, true);
 
-        // Replace auto-created Caesars with appropriate leaders
-        Position dummyPos = {0, 0};
-
         // Attacker uses a General
         if (!attacker->getCaesars().isEmpty()) {
             CaesarPiece *caesar = attacker->getCaesars().first();
             attacker->removeCaesar(caesar);
             delete caesar;
         }
-        GeneralPiece *attackerGeneral = new GeneralPiece(attacker->getId(), dummyPos, 1, nullptr);
-        attackerGeneral->setTerritoryName("Battlefield");
+        GeneralPiece *attackerGeneral = new GeneralPiece(attacker->getId(), "Battlefield", 1, nullptr);
         attacker->addGeneral(attackerGeneral);
 
         // Defender uses Caesar only if defending a fortified city, otherwise General
@@ -173,8 +164,7 @@ int main(int argc, char *argv[])
                 defender->removeCaesar(caesar);
                 delete caesar;
             }
-            defenderGeneral = new GeneralPiece(defender->getId(), dummyPos, 1, nullptr);
-            defenderGeneral->setTerritoryName("Battlefield");
+            defenderGeneral = new GeneralPiece(defender->getId(), "Battlefield", 1, nullptr);
             defender->addGeneral(defenderGeneral);
             qDebug() << "Defender General:" << (defenderGeneral ? defenderGeneral->getTerritoryName() : "NONE");
         }

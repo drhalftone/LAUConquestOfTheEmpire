@@ -1,0 +1,283 @@
+#ifndef GAMEMAPWIDGET_H
+#define GAMEMAPWIDGET_H
+
+#include <QOpenGLWidget>
+#include <QOpenGLFunctions>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLBuffer>
+#include <QOpenGLVertexArrayObject>
+#include <QOpenGLTexture>
+#include <QOpenGLFramebufferObject>
+#include <QMatrix4x4>
+#include <QImage>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QMap>
+#include <QMenuBar>
+#include <QSoundEffect>
+
+#include "common.h"
+#include "mapgraph.h"
+#include "ai/reachabilitycalculator.h"
+
+// Forward declarations
+class Player;
+class PlayerInfoWidget;
+class MoveEnumeratorWidget;
+class GamePiece;
+class QMenu;
+
+/**
+ * @brief Heat map visualization modes for the map widget
+ */
+enum class HeatMapMode {
+    None,                    // Normal ownership view (column 0)
+    PlayerReachability,      // Territories reachable by current player this turn
+    MaxForceProjection,      // Max troops that could reach each territory (1 turn)
+    MaxForceProjectionTwoTurn, // Max troops that could reach each territory (2 turns)
+    EnemyThreat,             // Max enemy force that could reach each territory (1 turn)
+    EnemyThreatTwoTurn,      // Combined enemy threat (1 turn + 0.5 * 2 turn)
+    RiskLevel                // Risk levels (SAFE/LOW/MEDIUM/HIGH)
+};
+
+// Alias for compatibility - OpenGL widget uses territory names, not grid positions
+// This allows code to work with both MapWidget and GameMapWidget
+class GameMapWidget : public QOpenGLWidget, protected QOpenGLFunctions
+{
+    Q_OBJECT
+
+public:
+    explicit GameMapWidget(QWidget *parent = nullptr);
+    ~GameMapWidget();
+
+    // === Common Interface (shared with MapWidget) ===
+
+    // Player management
+    void setPlayers(const QList<Player*> &players);
+    void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
+    int getCurrentPlayerIndex() const { return m_currentPlayerIndex; }
+    void setPlayerInfoWidget(PlayerInfoWidget *widget) { m_playerInfoWidget = widget; }
+
+    // Graph access
+    MapGraph* getGraph() { return m_graph; }
+    const MapGraph* getGraph() const { return m_graph; }
+
+    // Territory queries (by name) - use these instead of row/col versions
+    QString getHoveredTerritory() const;
+    bool isSeaTerritory(const QString &name) const;
+    int getTerritoryValue(const QString &name) const;
+
+    // Get adjacent sea territories by territory name (graph-based, works with OpenGL map)
+    QList<QString> getAdjacentSeaTerritories(const QString &landTerritoryName) const;
+
+    // Convert territory name to grid position (returns -1,-1 for OpenGL map since it's not grid-based)
+    Position territoryNameToPosition(const QString &territoryName) const;
+
+    // Get player color
+    QColor getPlayerColor(QChar player) const;
+
+    // Game state
+    void updateScores(const QMap<QChar, int> &scores);
+    int getInflationMultiplier() const { return m_inflationMultiplier; }
+    void setInflationMultiplier(int multiplier) { m_inflationMultiplier = qBound(1, multiplier, 3); }
+
+    // Turn state
+    bool isAtStartOfTurn() const { return m_isAtStartOfTurn; }
+    void setAtStartOfTurn(bool atStart) { m_isAtStartOfTurn = atStart; }
+
+    // Score calculation
+    QMap<QChar, int> calculateScores() const;
+
+    // === OpenGL-specific methods ===
+
+    // Get territory ID at widget position (0 if none/background)
+    int getTerritoryIdAt(const QPointF &widgetPos) const;
+
+    // Zoom/pan control
+    void resetView();
+    void zoomToTerritory(const QString &name);
+
+    // Highlight control (for external menus)
+    void setHoveredTerritoryById(int territoryId);
+    void setHighlightedTerritory(const QString &territoryName);
+    void clearHighlightedTerritory();
+
+    // === Grid-based functions (DEPRECATED - compatibility stubs only) ===
+    // These return dummy values for OpenGL map. Use MapGraph methods instead.
+    // Kept public for legacy code compatibility - will be removed in future.
+    int rows() const { return 0; }
+    int cols() const { return 0; }
+    QString getTerritoryNameAt(int row, int col) const;
+    int getTerritoryValueAt(int row, int col) const;
+    QChar getTerritoryOwnerAt(int row, int col) const;
+    bool isSeaTerritory(int row, int col) const;
+    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
+    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
+    void removeCityAt(int row, int col);
+    void removeFortificationAt(int row, int col);
+
+    // === Heat Map Visualization ===
+    HeatMapMode getHeatMapMode() const { return m_heatMapMode; }
+    void setHeatMapMode(HeatMapMode mode);
+
+public slots:
+    void saveGame();
+    void loadGame();
+    void showAbout();
+    void updateTerritoryOwnership();  // Call when any territory ownership changes
+    void updateHeatMap();             // Recalculate heat map data for current mode
+
+signals:
+    // Common signals
+    void scoresChanged();
+    void taxesCollected(QChar player, int amount);
+    void purchasePhaseNeeded(QChar player, int availableMoney, int inflationMultiplier);
+    void itemPlaced(QString itemType);
+
+    // Territory interaction
+    void territoryClicked(const QString &territoryName);
+    void territoryRightClicked(const QString &territoryName, const QPoint &globalPos);
+    void territoryHovered(const QString &territoryName);
+
+protected:
+    void initializeGL() override;
+    void paintGL() override;
+    void resizeGL(int w, int h) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+
+private:
+    void createShaders();
+    void createGeometry();
+    void loadTextures();
+    void createFramebuffer();
+    void createOwnershipTexture();
+    void createIconResources();
+    void renderCityIcons();
+    void renderRoads();
+    void updateMvpMatrix();
+    void updateHoveredTerritory(const QPointF &widgetPos);
+    QPointF widgetToNormalized(const QPointF &widgetPos) const;
+    QPointF widgetToMapCoords(const QPointF &widgetPos) const;
+    void createMenuBar();
+    QString buildTerritoryTooltip(const QString &territoryName) const;
+    void playMenuClickSound(QAction *action);
+
+    // Heat map helpers
+    void updateHeatMapMaxForce();
+    void updateHeatMapMaxForceTwoTurn();
+    void updateHeatMapEnemyThreat();
+    void updateHeatMapEnemyThreatTwoTurn();
+    void updateHeatMapRiskLevel();
+
+    // Map graph (owned by this widget)
+    MapGraph *m_graph = nullptr;
+
+    // Player references
+    QList<Player*> m_players;
+    PlayerInfoWidget *m_playerInfoWidget = nullptr;
+    MoveEnumeratorWidget *m_moveEnumeratorWidget = nullptr;
+    int m_currentPlayerIndex = 0;
+
+    // Game state
+    bool m_isAtStartOfTurn = true;
+    int m_inflationMultiplier = 1;
+    QMap<QChar, int> m_scores;
+
+    // Menu bar
+    QMenuBar *m_menuBar = nullptr;
+
+    // OpenGL resources - map processing shader (renders to FBO)
+    QOpenGLShaderProgram *m_shaderProgram = nullptr;
+    QOpenGLVertexArrayObject m_vao;
+    QOpenGLBuffer m_vbo;
+    QOpenGLTexture *m_mapTexture = nullptr;
+    QOpenGLTexture *m_indexTexture = nullptr;
+
+    // Framebuffer for intermediate rendering
+    QOpenGLFramebufferObject *m_fbo = nullptr;
+    QOpenGLShaderProgram *m_screenShader = nullptr;  // Renders FBO texture to screen
+    QOpenGLShaderProgram *m_lineShader = nullptr;    // Renders solid color lines (roads)
+
+    // Ownership/heat map lookup texture (60 rows x 8 columns, RGB)
+    // Row = territory ID (1-60 maps to rows 0-59)
+    // Column 0 = ownership border color (PROTECTED - never used for heat maps)
+    // Column 1 = Player reachability heat map
+    // Column 2 = Max force projection heat map
+    // Column 3 = Enemy threat heat map
+    // Column 4 = Risk level heat map
+    // Columns 5-7 = Reserved for future use
+    static constexpr int LUT_WIDTH = 8;
+    static constexpr int LUT_HEIGHT = 60;
+    QOpenGLTexture *m_ownershipTexture = nullptr;
+    QImage m_ownershipImage;  // CPU-side data for updating
+    int m_borderRadius = 8;   // Border thickness in pixels
+    HeatMapMode m_heatMapMode = HeatMapMode::None;
+    QActionGroup *m_heatMapActionGroup = nullptr;  // For radio button behavior in menu
+
+    // City and building icons
+    QOpenGLTexture *m_cityIconTexture = nullptr;
+    QOpenGLTexture *m_fortifiedCityIconTexture = nullptr;
+    QOpenGLTexture *m_burningCityIconTexture = nullptr;
+
+    // Constants for icon arrays (must be defined before arrays that use them)
+    static constexpr int NUM_UNIT_TYPES = 5;
+    static constexpr int NUM_PLAYER_COLORS = 6;
+
+    // Galley icons indexed by player color
+    QOpenGLTexture *m_galleyIconTextures[NUM_PLAYER_COLORS] = {nullptr};
+
+    // Unit icons indexed by [unitType][playerIndex]
+    // Unit types: 0=Caesar, 1=General, 2=Infantry, 3=Cavalry, 4=Catapult
+    // Player indices: 0=A(red), 1=B(blue), 2=C(green), 3=D(yellow), 4=E(orange), 5=F(black)
+    QOpenGLTexture *m_unitIconTextures[NUM_UNIT_TYPES][NUM_PLAYER_COLORS] = {{nullptr}};
+
+    QOpenGLShaderProgram *m_iconShader = nullptr;
+    QOpenGLBuffer m_iconVbo;
+    QOpenGLVertexArrayObject m_iconVao;
+    float m_iconSize = 60.0f;  // Icon size in map pixels
+
+    // Territory detection (CPU side for mouse lookup)
+    QImage m_indexImage;
+    int m_hoveredTerritoryId = 0;  // Currently hovered territory ID (0 = none/background)
+    int m_highlightedTerritoryId = 0;  // Territory to highlight (e.g., for city destruction selection)
+
+    // Map dimensions
+    QSize m_mapSize;
+
+    // Window size in pixels (for Retina support)
+    QSize m_windowPixelSize;
+
+    // Aspect ratio correction factors
+    float m_aspectScaleX = 1.0f;
+    float m_aspectScaleY = 1.0f;
+
+    // View transform
+    float m_zoom = 1.0f;
+    QPointF m_pan;
+    QMatrix4x4 m_mvpMatrix;
+
+    // Dragging state
+    bool m_dragging = false;
+    QPointF m_lastMousePos;
+
+    // Momentum/inertia
+    QPointF m_velocity;
+    QTimer m_momentumTimer;
+    QElapsedTimer m_dragTimer;
+    static constexpr float m_friction = 5.0f;
+    static constexpr float m_minVelocity = 0.01f;
+
+    // Audio
+    QSoundEffect *m_clickSound = nullptr;
+    QElapsedTimer m_clickTimer;  // Throttle click sounds
+    QAction *m_lastHoveredAction = nullptr;  // Track last hovered action for click sounds
+
+private slots:
+    void onMomentumTick();
+};
+
+#endif // GAMEMAPWIDGET_H

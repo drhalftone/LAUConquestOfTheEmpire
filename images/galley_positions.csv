@@ -1,0 +1,40 @@
+Territory ID,Territory Name,Galley X,Galley Y,Adjacent Sea IDs,Adjacent Sea Names
+1,Britannia,536,200,39,Oceanus Britannicus
+2,Belgica,967,274,39,Oceanus Britannicus
+8,Hispania,429,941,55,Mare Cantabricum
+8,Hispania,800,1305,52;56,Mare Baliaricum;Mare Narbo
+9,Cilicia,3172,1175,34,Mare Rhodus
+10,Achaia,2307,1343,45;51,Mare Epirus;Mare Aegaeum
+12,Palestina,3327,1515,49,Mare Pelusium
+14,Tingitana,502,1677,35;52,Mare Hispalis;Mare Baliaricum
+16,Narbonensis,1140,972,56,Mare Narbo
+17,Macedonia,2025,1050,45,Mare Epirus
+17,Macedonia,2310,1124,51,Mare Aegaeum
+18,Galatia,2847,1307,34,Mare Rhodus
+19,Neopolis,1845,1141,,
+20,Syria,3348,1320,34;49,Mare Rhodus;Mare Pelusium
+21,Sardinia,1400,1249,,
+22,Cyprus,3107,1328,,
+23,Baleares,1034,1307,,
+24,Sicilia,1806,1414,,
+25,Creta,2437,1461,,
+26,Cyrenaica,2435,1718,11;59,Mare Alexandria;Mare Libycum
+28,Lugudunensis,549,485,39;50,Oceanus Britannicus;Oceanus Atlanticus
+29,Armenia,3462,631,40,Mare Amisus
+30,Dalmatia,1877,934,6;45,Mare Adriatico;Mare Epirus
+31,Pontus Et Bithynia,2889,741,5;40,Mare Pontus Euxinus;Mare Amisus
+32,Thracia,2521,941,5;51,Mare Pontus Euxinus;Mare Aegaeum
+36,Caesariensis,1028,1523,48;52,Mare Numidia;Mare Baliaricum
+37,Egyptus,3109,1643,11;49,Mare Alexandria;Mare Pelusium
+38,Africa Procons,1814,1729,13;59,Mare Sabrata;Mare Libycum
+41,Moesia,2499,636,5,Mare Pontus Euxinus
+42,Aquitania,743,736,50;55,Oceanus Atlanticus;Mare Cantabricum
+43,Italia,1569,756,6,Mare Adriatico
+43,Italia,1365,869,33;56,Mare Tyrrhenum;Mare Narbo
+44,Asia,2585,1152,,
+46,Corsica,1382,1039,,
+47,Lusitania,253,1201,35;55,Mare Hispalis;Mare Cantabricum
+53,Germania,1073,157,39,Oceanus Britannicus
+54,Cappadocia,3251,708,40,Mare Amisus
+58,Baetica,524,1575,35;52,Mare Hispalis;Mare Baliaricum
+60,Numidia,1561,1483,13;48,Mare Sabrata;Mare Numidia

@@ -1,8 +1,16 @@
 #include "aiplayer.h"
 #include "player.h"
 #include "playerinfowidget.h"
+#ifdef USE_OPENGL_MAP
+#include "gamemapwidget.h"
+#else
 #include "mapwidget.h"
+#endif
 #include "gamepiece.h"
+#include "combatdialog.h"
+#include "purchasedialog.h"
+#include "building.h"
+#include "gamelog.h"
 #include <QDebug>
 #include <QTime>
 #include <QTimer>
@@ -148,6 +156,10 @@ void AIPlayer::executeTurn()
         return;
     }
 
+    // Reset planning state for new turn
+    m_planCreated = false;
+    m_currentPlan = MovementPlan();
+
     // Enable AI auto-mode to skip dialogs during this turn
     if (m_infoWidget) {
         m_infoWidget->setAIAutoMode(true, m_delayMs);
@@ -189,6 +201,13 @@ void AIPlayer::executeMovementPhase()
     // Re-read state to get current leader positions
     m_lastGameState = readGameState();
 
+    // Use risk-based decision maker if that strategy is selected
+    if (m_strategy == Strategy::RiskBased) {
+        executeMovementPhaseRiskBased();
+        return;
+    }
+
+    // Original strategy-based movement logic
     // Find GENERALS (not Caesars) with moves remaining AND whose legion can move
     // NOTE: We use piece->getMovesRemaining() instead of UI-displayed movesRemaining
     // because the UI tables may not be refreshed after startTurn() resets moves
@@ -275,6 +294,802 @@ void AIPlayer::executeMovementPhase()
     });
 }
 
+void AIPlayer::executeMovementPhaseRiskBased()
+{
+    static int moveIterationCount = 0;
+    moveIterationCount++;
+    log(QString("Executing PLANNED movement phase (iteration %1)...").arg(moveIterationCount));
+
+    // Reset counter at start of new turn
+    if (moveIterationCount > 100) {
+        moveIterationCount = 1;  // Safety reset to prevent overflow
+    }
+
+    // Get all players from the info widget
+    const QList<Player*> &allPlayers = m_infoWidget->getPlayers();
+    MapGraph *graph = m_mapWidget->getGraph();
+
+    if (!graph) {
+        log("ERROR: No map graph available");
+        executeEndTurn();
+        return;
+    }
+
+    // Detect first move of turn: check if all generals have full moves (2.0)
+    bool isFirstMoveOfTurn = true;
+    for (GeneralPiece *gen : m_player->getGenerals()) {
+        if (gen->getMovesRemaining() < 2.0) {
+            isFirstMoveOfTurn = false;
+            break;
+        }
+    }
+
+    // On first move of turn, CREATE THE PLAN and print comprehensive situation report
+    if (isFirstMoveOfTurn) {
+        // Reset plan state for new turn
+        m_planCreated = false;
+        log("========== AI TURN START - SITUATION REPORT ==========");
+
+        // Print our territories and their risk levels
+        ReachabilityCalculator calc;
+        QMap<QString, TerritoryRisk> riskMap = calc.assessAllTerritories(m_player, allPlayers, graph);
+
+        log("--- OUR TERRITORIES ---");
+        for (const QString &territory : m_player->getOwnedTerritories()) {
+            QString riskStr = "UNKNOWN";
+            int ourForce = 0, enemyForce = 0;
+            if (riskMap.contains(territory)) {
+                const TerritoryRisk &r = riskMap[territory];
+                ourForce = r.ourMaxForce;
+                enemyForce = r.enemyMaxForce;
+                switch (r.risk) {
+                    case RiskLevel::Safe: riskStr = "SAFE"; break;
+                    case RiskLevel::Low: riskStr = "LOW"; break;
+                    case RiskLevel::Medium: riskStr = "MEDIUM"; break;
+                    case RiskLevel::High: riskStr = "HIGH"; break;
+                    case RiskLevel::Unreachable: riskStr = "UNREACHABLE"; break;
+                }
+            }
+            // Check for city
+            City *city = m_player->getCityAtTerritory(territory);
+            QString cityStr = "";
+            if (city) {
+                cityStr = city->isFortified() ? " [FORTIFIED CITY]" : " [City]";
+            }
+            log(QString("  %1%2: Risk=%3 (our force=%4, enemy force=%5)")
+                .arg(territory).arg(cityStr).arg(riskStr).arg(ourForce).arg(enemyForce));
+        }
+
+        // Print our leaders and their positions AND what they can reach
+        log("--- OUR LEADERS ---");
+        for (CaesarPiece *caesar : m_player->getCaesars()) {
+            QMap<QString, ReachInfo> reachable = calc.getReachableFrom(caesar, graph, m_player);
+            QStringList reachNames;
+            for (const QString &t : reachable.keys()) reachNames << t;
+            log(QString("  Caesar at %1 (moves=%2, legion=%3) -> can reach: %4")
+                .arg(caesar->getTerritoryName())
+                .arg(caesar->getMovesRemaining())
+                .arg(caesar->getLegion().size())
+                .arg(reachNames.join(", ")));
+        }
+        for (GeneralPiece *gen : m_player->getGenerals()) {
+            QMap<QString, ReachInfo> reachable = calc.getReachableFrom(gen, graph, m_player);
+            QStringList reachNames;
+            for (const QString &t : reachable.keys()) reachNames << t;
+            log(QString("  General #%1 at %2 (moves=%3, legion=%4) -> can reach: %5")
+                .arg(gen->getNumber())
+                .arg(gen->getTerritoryName())
+                .arg(gen->getMovesRemaining())
+                .arg(gen->getLegion().size())
+                .arg(reachNames.join(", ")));
+        }
+
+        // Print enemy positions (troops and leaders)
+        log("--- ENEMY POSITIONS ---");
+        for (Player *enemy : allPlayers) {
+            if (enemy == m_player) continue;
+            log(QString("  Player %1:").arg(enemy->getId()));
+            for (CaesarPiece *caesar : enemy->getCaesars()) {
+                log(QString("    Caesar at %1 (legion=%2)")
+                    .arg(caesar->getTerritoryName()).arg(caesar->getLegion().size()));
+            }
+            for (GeneralPiece *gen : enemy->getGenerals()) {
+                log(QString("    General #%1 at %2 (legion=%3)")
+                    .arg(gen->getNumber()).arg(gen->getTerritoryName()).arg(gen->getLegion().size()));
+            }
+            // Count troops by territory
+            QMap<QString, int> troopsByTerritory;
+            for (InfantryPiece *inf : enemy->getInfantry()) {
+                troopsByTerritory[inf->getTerritoryName()]++;
+            }
+            for (CavalryPiece *cav : enemy->getCavalry()) {
+                troopsByTerritory[cav->getTerritoryName()]++;
+            }
+            for (CatapultPiece *cat : enemy->getCatapults()) {
+                troopsByTerritory[cat->getTerritoryName()]++;
+            }
+            for (auto it = troopsByTerritory.begin(); it != troopsByTerritory.end(); ++it) {
+                log(QString("    %1 troops at %2").arg(it.value()).arg(it.key()));
+            }
+        }
+
+        // Debug: Show what enemies can reach our territories
+        log("--- ENEMY THREAT ANALYSIS ---");
+        for (Player *enemy : allPlayers) {
+            if (enemy == m_player) continue;
+            QMap<QString, ReachInfo> enemyReach = calc.getAllReachable(enemy, graph);
+            log(QString("  Player %1 can reach %2 total territories").arg(enemy->getId()).arg(enemyReach.size()));
+
+            // Show what each enemy general can reach
+            for (GeneralPiece *gen : enemy->getGenerals()) {
+                QMap<QString, ReachInfo> genReach = calc.getReachableFrom(gen, graph, enemy);
+                QStringList reachNames;
+                for (const QString &t : genReach.keys()) reachNames << t;
+                log(QString("    General #%1 at %2 can reach: %3")
+                    .arg(gen->getNumber()).arg(gen->getTerritoryName()).arg(reachNames.join(", ")));
+            }
+
+            // Check threats to our territories
+            for (const QString &territory : m_player->getOwnedTerritories()) {
+                if (enemyReach.contains(territory)) {
+                    const ReachInfo &info = enemyReach[territory];
+                    log(QString("  ** THREAT: Player %1 can reach %2 with force=%3")
+                        .arg(enemy->getId()).arg(territory).arg(info.maxTroopStrength));
+                }
+            }
+        }
+
+        log("--- CREATING MOVEMENT PLAN ---");
+
+        // CREATE THE PLAN at the start of the turn
+        m_currentPlan = m_decisionMaker.planMovement(m_player, allPlayers, graph);
+        m_planCreated = true;
+
+        log(QString("Plan created: %1").arg(m_currentPlan.summary));
+        for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+            if (assignment.general && assignment.general->getType() == GamePiece::Type::General) {
+                GeneralPiece *gen = static_cast<GeneralPiece*>(assignment.general);
+                log(QString("  General #%1: %2 -> %3 (%4) with %5 troops")
+                    .arg(gen->getNumber())
+                    .arg(gen->getTerritoryName())
+                    .arg(assignment.targetTerritory)
+                    .arg(assignment.missionType)
+                    .arg(assignment.troopsToTake));
+            }
+        }
+    }
+
+    // Get the next move from the plan (not greedy per-move scoring)
+    ScoredMove bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, allPlayers, graph);
+
+    if (!bestMove.isValid()) {
+        // Check if any generals still have moves remaining
+        bool anyMovesLeft = false;
+        for (GeneralPiece *gen : m_player->getGenerals()) {
+            if (gen->getMovesRemaining() >= 1.0) {
+                anyMovesLeft = true;
+                break;
+            }
+        }
+
+        if (anyMovesLeft) {
+            // Plan exhausted but generals have moves - CREATE A NEW PLAN for remaining moves
+            log("--- CREATING SECOND-ROUND PLAN (generals still have moves) ---");
+
+            m_currentPlan = m_decisionMaker.planMovement(m_player, allPlayers, graph);
+
+            log(QString("Second-round plan: %1").arg(m_currentPlan.summary));
+            for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+                if (assignment.general && assignment.general->getType() == GamePiece::Type::General) {
+                    GeneralPiece *gen = static_cast<GeneralPiece*>(assignment.general);
+                    log(QString("  General #%1: %2 -> %3 (%4) with %5 troops")
+                        .arg(gen->getNumber())
+                        .arg(gen->getTerritoryName())
+                        .arg(assignment.targetTerritory)
+                        .arg(assignment.missionType)
+                        .arg(assignment.troopsToTake));
+                }
+            }
+
+            // Try to get a move from the new plan
+            bestMove = m_decisionMaker.getNextMoveFromPlan(m_currentPlan, m_player, allPlayers, graph);
+        }
+
+        if (!bestMove.isValid()) {
+            log("No valid general moves available - checking for idle galleys...");
+            for (GeneralPiece *gen : m_player->getGenerals()) {
+                log(QString("  General #%1 at %2: %3 moves remaining")
+                    .arg(gen->getNumber())
+                    .arg(gen->getTerritoryName())
+                    .arg(gen->getMovesRemaining()));
+            }
+
+            // === IDLE GALLEY RETURN-HOME LOGIC ===
+            // Check for idle beached galleys that should sail back toward home
+            // An idle galley is: beached, no leader aboard, has moves, not at home
+            QString homeProvince = m_player->getHomeProvinceName();
+            bool movedGalley = false;
+
+            for (GalleyPiece *galley : m_player->getGalleys()) {
+                if (!galley->isBeached()) continue;  // Only handle beached galleys
+                if (galley->hasLeaderAboard()) continue;  // Leader will handle this galley
+                if (galley->getMovesRemaining() < 1.0) continue;  // No moves left
+                if (galley->hasTransportedThisTurn()) continue;  // Already used this turn
+
+                QString galleyTerritory = galley->getTerritoryName();
+
+                // Skip if already at home province
+                if (galleyTerritory == homeProvince) {
+                    log(QString("Galley %1 already at home province %2")
+                        .arg(galley->getSerialNumber()).arg(homeProvince));
+                    continue;
+                }
+
+                // Find adjacent sea zones to launch from
+                QStringList neighbors = graph->getNeighbors(galleyTerritory);
+                QString launchSeaZone;
+
+                // Prefer the galley's last sea zone if still adjacent
+                if (galley->hasLastSeaZone() && neighbors.contains(galley->getLastSeaZone())) {
+                    launchSeaZone = galley->getLastSeaZone();
+                } else {
+                    // Find any adjacent sea zone
+                    for (const QString &neighbor : neighbors) {
+                        if (graph->isSeaTerritory(neighbor)) {
+                            launchSeaZone = neighbor;
+                            break;
+                        }
+                    }
+                }
+
+                if (launchSeaZone.isEmpty()) {
+                    log(QString("Galley %1 at %2 has no adjacent sea zone to launch from")
+                        .arg(galley->getSerialNumber()).arg(galleyTerritory));
+                    continue;
+                }
+
+                // Find sea zones adjacent to home province (destinations we want to reach)
+                QStringList homeNeighbors = graph->getNeighbors(homeProvince);
+                QSet<QString> homeSeaZones;
+                for (const QString &neighbor : homeNeighbors) {
+                    if (graph->isSeaTerritory(neighbor)) {
+                        homeSeaZones.insert(neighbor);
+                    }
+                }
+
+                if (homeSeaZones.isEmpty()) {
+                    log(QString("Home province %1 has no adjacent sea zones - galley cannot sail home")
+                        .arg(homeProvince));
+                    continue;
+                }
+
+                // BFS from launch zone to find path to any home sea zone
+                QMap<QString, QString> cameFrom;
+                QList<QString> queue;
+                queue.append(launchSeaZone);
+                cameFrom[launchSeaZone] = galleyTerritory;  // Came from land
+
+                QString targetSeaZone;
+                bool found = false;
+
+                while (!queue.isEmpty() && !found) {
+                    QString current = queue.takeFirst();
+
+                    if (homeSeaZones.contains(current)) {
+                        targetSeaZone = current;
+                        found = true;
+                        break;
+                    }
+
+                    for (const QString &neighbor : graph->getNeighbors(current)) {
+                        if (graph->isSeaTerritory(neighbor) && !cameFrom.contains(neighbor)) {
+                            cameFrom[neighbor] = current;
+                            queue.append(neighbor);
+                        }
+                    }
+                }
+
+                if (!found) {
+                    log(QString("Galley %1 cannot find sea route from %2 to home")
+                        .arg(galley->getSerialNumber()).arg(launchSeaZone));
+                    continue;
+                }
+
+                // Trace path and find how far we can sail this turn
+                QList<QString> path;
+                QString step = targetSeaZone;
+                while (!step.isEmpty() && step != galleyTerritory) {
+                    path.prepend(step);
+                    step = cameFrom.value(step, "");
+                }
+
+                log(QString("Galley %1 at %2 sailing toward home via: %3")
+                    .arg(galley->getSerialNumber())
+                    .arg(galleyTerritory)
+                    .arg(path.join(" -> ")));
+
+                // Launch galley to first sea zone (costs 1 move)
+                galley->setLastTerritoryName(galleyTerritory);
+                galley->setLastSeaZone("");  // Clear - we're leaving this shore
+                galley->setTerritoryName(path.first());
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                log(QString("  Launched to %1 (moves remaining: %2)")
+                    .arg(path.first()).arg(galley->getMovesRemaining()));
+
+                // Continue sailing through path while we have moves
+                for (int i = 1; i < path.size() && galley->getMovesRemaining() >= 1.0; i++) {
+                    QString prevSea = galley->getTerritoryName();
+                    QString nextSea = path[i];
+
+                    galley->setLastTerritoryName(prevSea);
+                    galley->setTerritoryName(nextSea);
+                    galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                    log(QString("  Sailed to %1 (moves remaining: %2)")
+                        .arg(nextSea).arg(galley->getMovesRemaining()));
+                }
+
+                // If we're adjacent to home and have a move left, beach at home
+                QString currentSeaZone = galley->getTerritoryName();
+                if (homeSeaZones.contains(currentSeaZone) && galley->getMovesRemaining() >= 1.0) {
+                    galley->setLastSeaZone(currentSeaZone);
+                    galley->setTerritoryName(homeProvince);
+                    galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+                    log(QString("  Beached at home province %1!").arg(homeProvince));
+                } else {
+                    // Beach at any adjacent land territory if we can't make it home
+                    // This prevents galley from being stuck at sea
+                    for (const QString &neighbor : graph->getNeighbors(currentSeaZone)) {
+                        if (!graph->isSeaTerritory(neighbor) && m_player->ownsTerritory(neighbor)) {
+                            galley->setLastSeaZone(currentSeaZone);
+                            galley->setTerritoryName(neighbor);
+                            // Don't consume move for beaching - galley will try again next turn
+                            log(QString("  Beached at %1 (will continue home next turn)").arg(neighbor));
+                            break;
+                        }
+                    }
+                }
+
+                movedGalley = true;
+            }
+
+            if (movedGalley) {
+                // Galleys moved - refresh the map and continue phase
+                if (m_mapWidget) {
+                    m_mapWidget->update();
+                }
+                // Don't end turn yet - there might be more to do next iteration
+                // But consume one iteration to prevent infinite loop
+            }
+
+            executeEndTurn();
+            return;
+        }
+    }
+
+    // Check if the move has a positive score
+    if (bestMove.score <= 0) {
+        log(QString("Best move has non-positive score (%1) - reason: %2").arg(bestMove.score).arg(bestMove.reason));
+
+        // Before ending, check for idle galleys that should return home
+        // (Same logic as above, but for when moves have non-positive scores)
+        QString homeProvince = m_player->getHomeProvinceName();
+
+        for (GalleyPiece *galley : m_player->getGalleys()) {
+            if (!galley->isBeached()) continue;
+            if (galley->hasLeaderAboard()) continue;
+            if (galley->getMovesRemaining() < 1.0) continue;
+            if (galley->hasTransportedThisTurn()) continue;
+
+            QString galleyTerritory = galley->getTerritoryName();
+            if (galleyTerritory == homeProvince) continue;
+
+            // Find adjacent sea zone
+            QStringList neighbors = graph->getNeighbors(galleyTerritory);
+            QString launchSeaZone;
+            if (galley->hasLastSeaZone() && neighbors.contains(galley->getLastSeaZone())) {
+                launchSeaZone = galley->getLastSeaZone();
+            } else {
+                for (const QString &neighbor : neighbors) {
+                    if (graph->isSeaTerritory(neighbor)) {
+                        launchSeaZone = neighbor;
+                        break;
+                    }
+                }
+            }
+
+            if (launchSeaZone.isEmpty()) continue;
+
+            // Find path to home
+            QStringList homeNeighbors = graph->getNeighbors(homeProvince);
+            QSet<QString> homeSeaZones;
+            for (const QString &neighbor : homeNeighbors) {
+                if (graph->isSeaTerritory(neighbor)) {
+                    homeSeaZones.insert(neighbor);
+                }
+            }
+
+            if (homeSeaZones.isEmpty()) continue;
+
+            // BFS to home
+            QMap<QString, QString> cameFrom;
+            QList<QString> queue;
+            queue.append(launchSeaZone);
+            cameFrom[launchSeaZone] = galleyTerritory;
+
+            QString targetSeaZone;
+            bool found = false;
+
+            while (!queue.isEmpty() && !found) {
+                QString current = queue.takeFirst();
+                if (homeSeaZones.contains(current)) {
+                    targetSeaZone = current;
+                    found = true;
+                    break;
+                }
+                for (const QString &neighbor : graph->getNeighbors(current)) {
+                    if (graph->isSeaTerritory(neighbor) && !cameFrom.contains(neighbor)) {
+                        cameFrom[neighbor] = current;
+                        queue.append(neighbor);
+                    }
+                }
+            }
+
+            if (!found) continue;
+
+            // Build path
+            QList<QString> path;
+            QString step = targetSeaZone;
+            while (!step.isEmpty() && step != galleyTerritory) {
+                path.prepend(step);
+                step = cameFrom.value(step, "");
+            }
+
+            log(QString("Galley %1 returning home: %2 -> %3")
+                .arg(galley->getSerialNumber())
+                .arg(galleyTerritory)
+                .arg(path.join(" -> ")));
+
+            // Launch
+            galley->setLastTerritoryName(galleyTerritory);
+            galley->setLastSeaZone("");
+            galley->setTerritoryName(path.first());
+            galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+
+            // Sail
+            for (int i = 1; i < path.size() && galley->getMovesRemaining() >= 1.0; i++) {
+                galley->setLastTerritoryName(galley->getTerritoryName());
+                galley->setTerritoryName(path[i]);
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+            }
+
+            // Beach at home if possible
+            QString currentSeaZone = galley->getTerritoryName();
+            if (homeSeaZones.contains(currentSeaZone) && galley->getMovesRemaining() >= 1.0) {
+                galley->setLastSeaZone(currentSeaZone);
+                galley->setTerritoryName(homeProvince);
+                galley->setMovesRemaining(galley->getMovesRemaining() - 1.0);
+                log(QString("  Galley beached at home!"));
+            } else {
+                for (const QString &neighbor : graph->getNeighbors(currentSeaZone)) {
+                    if (!graph->isSeaTerritory(neighbor) && m_player->ownsTerritory(neighbor)) {
+                        galley->setLastSeaZone(currentSeaZone);
+                        galley->setTerritoryName(neighbor);
+                        log(QString("  Galley beached at %1").arg(neighbor));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (m_mapWidget) {
+            m_mapWidget->update();
+        }
+
+        executeEndTurn();
+        return;
+    }
+
+    // Check if the leader can actually move (legion constraints)
+    if (!canGeneralMove(bestMove.leader)) {
+        log(QString("Best move leader cannot move (legion constraints), consuming moves"));
+        bestMove.leader->setMovesRemaining(0);
+        scheduleNextAction([this]() {
+            executeMovementPhaseRiskBased();
+        });
+        return;
+    }
+
+    // CRITICAL CHECK: If moving to enemy/unclaimed territory, verify troops can follow!
+    // Generals cannot capture territory without troops. If all infantry already moved
+    // (0 moves remaining), the general shouldn't try to capture.
+    bool weOwnDestination = m_player->ownsTerritory(bestMove.destination);
+    bool hasEnemiesAtDestination = m_infoWidget->hasEnemyPiecesAt(bestMove.destination, m_player);
+
+    if (!weOwnDestination || hasEnemiesAtDestination) {
+        // Need troops to capture or fight - check if any troops can follow
+        QString currentTerritory = bestMove.leader->getTerritoryName();
+        QList<GamePiece*> troopsHere = m_player->getPiecesAtTerritory(currentTerritory);
+        bool hasTroopsWithMoves = false;
+
+        for (GamePiece *piece : troopsHere) {
+            if ((piece->getType() == GamePiece::Type::Infantry ||
+                 piece->getType() == GamePiece::Type::Cavalry ||
+                 piece->getType() == GamePiece::Type::Catapult) &&
+                piece->getMovesRemaining() > 0) {
+                hasTroopsWithMoves = true;
+                break;
+            }
+        }
+
+        if (!hasTroopsWithMoves) {
+            // Determine if it's a combat or capture situation
+            QString situation = hasEnemiesAtDestination ? "combat" : "unclaimed/enemy territory";
+            log(QString("SKIPPING MOVE: %1 would enter %2 at %3 but NO troops can follow (all exhausted)")
+                .arg(bestMove.leader->getSerialNumber())
+                .arg(situation)
+                .arg(bestMove.destination));
+            // Consume this general's moves to prevent infinite loop
+            bestMove.leader->setMovesRemaining(0);
+            scheduleNextAction([this]() {
+                executeMovementPhaseRiskBased();
+            });
+            return;
+        }
+    }
+
+    // Log the decision
+    QString leaderName;
+    if (bestMove.leader->getType() == GamePiece::Type::Caesar) {
+        leaderName = "Caesar";
+    } else if (bestMove.leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *gen = static_cast<GeneralPiece*>(bestMove.leader);
+        leaderName = QString("General #%1").arg(gen->getNumber());
+    } else {
+        leaderName = "Galley";
+    }
+
+    // IMPORTANT: Validate that the destination is actually reachable in ONE move
+    // The ReachabilityCalculator considers multi-hop moves, but we can only move
+    // one step at a time. Check against getMovesForLeader.
+    QList<PlayerInfoWidget::MoveOption> validMoves = m_infoWidget->getMovesForLeader(bestMove.leader);
+    bool destinationIsValid = false;
+    for (const auto &move : validMoves) {
+        if (move.destinationTerritory == bestMove.destination) {
+            destinationIsValid = true;
+            break;
+        }
+    }
+
+    if (!destinationIsValid) {
+        log(QString("PLANNED: %1 wants %2 -> %3 but destination not reachable in one move!")
+            .arg(leaderName)
+            .arg(bestMove.leader->getTerritoryName())
+            .arg(bestMove.destination));
+        log(QString("  Available destinations: %1").arg(validMoves.size()));
+        for (const auto &move : validMoves) {
+            log(QString("    - %1").arg(move.destinationTerritory));
+        }
+        // Pick the best valid destination instead
+        // Find the highest-scoring move that IS in validMoves
+        QList<ScoredMove> allMoves = m_decisionMaker.getAllScoredMoves(m_player, allPlayers, graph);
+        for (const ScoredMove &altMove : allMoves) {
+            if (altMove.leader == bestMove.leader) {
+                for (const auto &validMove : validMoves) {
+                    if (validMove.destinationTerritory == altMove.destination) {
+                        bestMove = altMove;
+                        log(QString("  Falling back to: %1 (score=%2)")
+                            .arg(altMove.destination).arg(altMove.score));
+                        destinationIsValid = true;
+                        break;
+                    }
+                }
+                if (destinationIsValid) break;
+            }
+        }
+
+        if (!destinationIsValid) {
+            log(QString("  No valid moves for this leader, consuming moves"));
+            bestMove.leader->setMovesRemaining(0);
+            scheduleNextAction([this]() {
+                executeMovementPhaseRiskBased();
+            });
+            return;
+        }
+    }
+
+    log(QString("PLANNED: %1 at %2 -> %3 (score=%4, troops=%5)")
+        .arg(leaderName)
+        .arg(bestMove.leader->getTerritoryName())
+        .arg(bestMove.destination)
+        .arg(bestMove.score)
+        .arg(bestMove.troopsCanBring));
+    log(QString("  Reason: %1").arg(bestMove.reason));
+
+    // Convert to MoveEvaluation for compatibility with existing signals
+    MoveEvaluation evalMove;
+    evalMove.leaderName = leaderName;
+    evalMove.fromTerritory = bestMove.leader->getTerritoryName();
+    evalMove.targetTerritory = bestMove.destination;
+    evalMove.score = bestMove.score;
+    evalMove.moveType = "Planned";
+    evalMove.reason = bestMove.reason;
+    evalMove.isSelected = true;
+    emit moveSelected(evalMove);
+
+    // Skip if staying in place
+    if (bestMove.destination == bestMove.leader->getTerritoryName()) {
+        log(QString("%1: Staying at %2").arg(leaderName).arg(bestMove.destination));
+        bestMove.leader->setMovesRemaining(0);
+        scheduleNextAction([this]() {
+            executeMovementPhaseRiskBased();
+        });
+        return;
+    }
+
+    // CRITICAL SAFETY CHECK: Caesar is EXTREMELY valuable - losing Caesar loses the game!
+    // Enemy capturing Caesar gets 100 tax bonus, so they WILL attack at equal strength.
+    // Caesar should stay in fortified cities unless we've lost most generals.
+    if (bestMove.leader->getType() == GamePiece::Type::Caesar) {
+        QString caesarTerritory = bestMove.leader->getTerritoryName();
+        CaesarPiece *caesar = static_cast<CaesarPiece*>(bestMove.leader);
+        int numGenerals = m_player->getGenerals().size();
+
+        // Check if Caesar is currently in a fortified city we own
+        City *caesarCity = m_player->getCityAtTerritory(caesarTerritory);
+        bool inFortifiedCity = caesarCity && caesarCity->isFortified();
+
+        // Caesar should ONLY lead armies if we've lost most generals (desperate situation)
+        // Standard practice: Caesar stays in fortified city
+        const int MIN_GENERALS_BEFORE_CAESAR_MOVES = 2;  // Only use Caesar if < 2 generals left
+
+        if (numGenerals >= MIN_GENERALS_BEFORE_CAESAR_MOVES) {
+            log(QString("SAFETY: Caesar should NOT lead armies - we still have %1 generals").arg(numGenerals));
+            log("  Caesar is too valuable to risk. Use generals instead!");
+            bestMove.leader->setMovesRemaining(0);
+            scheduleNextAction([this]() {
+                executeMovementPhaseRiskBased();
+            });
+            return;
+        }
+
+        // If Caesar MUST move (desperate - few generals), require massive troop advantage
+        // Enemy will attack Caesar at equal strength, so we need overwhelming force
+        QSet<int> caesarLegion = QSet<int>(caesar->getLegion().begin(), caesar->getLegion().end());
+        int availableTroopsCount = 0;
+
+        // Count troops already in Caesar's legion with moves
+        for (int troopId : caesar->getLegion()) {
+            GamePiece *troop = m_player->getPieceByUniqueId(troopId);
+            if (troop && troop->getMovesRemaining() > 0) {
+                availableTroopsCount++;
+            }
+        }
+
+        // Count unassigned troops at same territory with moves
+        QSet<int> assignedTroopIds;
+        for (GeneralPiece *g : m_player->getGenerals()) {
+            for (int id : g->getLegion()) {
+                assignedTroopIds.insert(id);
+            }
+        }
+
+        // Check all troop types at same territory
+        for (InfantryPiece *troop : m_player->getInfantryAtTerritory(caesarTerritory)) {
+            if (troop->getMovesRemaining() > 0 &&
+                !caesarLegion.contains(troop->getUniqueId()) &&
+                !assignedTroopIds.contains(troop->getUniqueId())) {
+                availableTroopsCount++;
+            }
+        }
+        for (CavalryPiece *troop : m_player->getCavalryAtTerritory(caesarTerritory)) {
+            if (troop->getMovesRemaining() > 0 &&
+                !caesarLegion.contains(troop->getUniqueId()) &&
+                !assignedTroopIds.contains(troop->getUniqueId())) {
+                availableTroopsCount++;
+            }
+        }
+        for (CatapultPiece *troop : m_player->getCatapultsAtTerritory(caesarTerritory)) {
+            if (troop->getMovesRemaining() > 0 &&
+                !caesarLegion.contains(troop->getUniqueId()) &&
+                !assignedTroopIds.contains(troop->getUniqueId())) {
+                availableTroopsCount++;
+            }
+        }
+
+        // Caesar needs MASSIVE troop protection - enemy will attack at equal odds for 100 gold bonus
+        // Require at least 5 troops (full legion minus 1) to even consider moving Caesar
+        const int MIN_TROOPS_FOR_CAESAR = 5;
+        if (availableTroopsCount < MIN_TROOPS_FOR_CAESAR) {
+            log(QString("SAFETY: Caesar at %1 only has %2 troops available (need %3) - SKIPPING MOVE")
+                .arg(caesarTerritory).arg(availableTroopsCount).arg(MIN_TROOPS_FOR_CAESAR));
+            log("  Caesar is too valuable to move without overwhelming force!");
+            bestMove.leader->setMovesRemaining(0);
+            scheduleNextAction([this]() {
+                executeMovementPhaseRiskBased();
+            });
+            return;
+        }
+
+        // Even with enough troops, warn that Caesar is being used
+        log(QString("WARNING: Using Caesar to lead army (only %1 generals left) - HIGH RISK!")
+            .arg(numGenerals));
+    }
+
+    // === TROOP TRANSFER LOGIC ===
+    // If a general is returning home to pick up more troops, first transfer their
+    // current troops to another general at the same location (if one exists)
+    // This prevents troops from making the round trip unnecessarily
+    QString homeProvince = m_player->getHomeProvinceName();
+    bool isReturningHome = (bestMove.destination == homeProvince) &&
+                           bestMove.reason.contains("home", Qt::CaseInsensitive);
+
+    if (isReturningHome && bestMove.leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *general = static_cast<GeneralPiece*>(bestMove.leader);
+        int currentTroops = general->getLegion().size();
+
+        if (currentTroops > 0) {
+            log(QString("General #%1 is returning home with %2 troops - checking for handoff opportunity...")
+                .arg(general->getNumber()).arg(currentTroops));
+
+            // Try to transfer troops to another leader at the same location
+            bool transferred = transferTroopsToOtherGeneral(general);
+
+            if (transferred) {
+                log(QString("Troops handed off! General #%1 now has %2 troops and can travel light to home")
+                    .arg(general->getNumber()).arg(general->getLegion().size()));
+            }
+        }
+    }
+
+    // Actually perform the move
+    QString fromTerritory = bestMove.leader->getTerritoryName();
+    bool moveSuccess = m_infoWidget->aiMoveLeaderToTerritory(bestMove.leader, bestMove.destination);
+
+    if (moveSuccess) {
+        log(QString("%1: Moved to %2 successfully!").arg(leaderName).arg(bestMove.destination));
+
+        // Log the movement to game log
+        GAME_LOG.logMovement(QString("Player %1").arg(m_player->getId()),
+                             leaderName, fromTerritory, bestMove.destination,
+                             bestMove.troopsCanBring);
+
+        // Check if we moved into combat - if so, consume all moves for leader and legion
+        if (m_infoWidget->hasEnemyPiecesAt(bestMove.destination, m_player)) {
+            log(QString("Moved into combat at %1 - consuming moves to prevent further movement").arg(bestMove.destination));
+            // Consume all remaining moves for this leader
+            bestMove.leader->setMovesRemaining(0);
+            // Also consume moves for all troops in the legion
+            QList<int> legionIds;
+            if (bestMove.leader->getType() == GamePiece::Type::Caesar) {
+                legionIds = static_cast<CaesarPiece*>(bestMove.leader)->getLegion();
+            } else if (bestMove.leader->getType() == GamePiece::Type::General) {
+                legionIds = static_cast<GeneralPiece*>(bestMove.leader)->getLegion();
+            }
+            for (int troopId : legionIds) {
+                GamePiece *troop = m_player->getPieceByUniqueId(troopId);
+                if (troop) {
+                    troop->setMovesRemaining(0);
+                }
+            }
+        }
+    } else {
+        log(QString("%1: Move to %2 FAILED - possibly cancelled or blocked").arg(leaderName).arg(bestMove.destination));
+        log(QString("  Leader still at: %1 with %2 moves")
+            .arg(bestMove.leader->getTerritoryName())
+            .arg(bestMove.leader->getMovesRemaining()));
+        // Consume moves to prevent infinite loop
+        bestMove.leader->setMovesRemaining(0);
+    }
+
+    // Schedule next movement check
+    scheduleNextAction([this]() {
+        executeMovementPhaseRiskBased();
+    });
+}
+
 void AIPlayer::executeEndTurn()
 {
     log("Ending turn...");
@@ -356,17 +1171,13 @@ AIPlayer::GameState AIPlayer::readGameState()
     // Total pieces still comes from Player (UI doesn't show troop totals easily)
     state.totalPieces = m_player->getTotalPieceCount();
 
-    // Find enemy territories by scanning the map
-    // (This info isn't directly in PlayerInfoWidget, so we read from MapWidget)
-    if (m_mapWidget) {
-        for (int row = 0; row < m_mapWidget->rows(); ++row) {
-            for (int col = 0; col < m_mapWidget->cols(); ++col) {
-                QChar owner = m_mapWidget->getTerritoryOwnerAt(row, col);
-                if (owner != '\0' && owner != playerId) {
-                    QString territoryName = m_mapWidget->getTerritoryNameAt(row, col);
-                    if (!state.enemyTerritories.contains(territoryName)) {
-                        state.enemyTerritories.append(territoryName);
-                    }
+    // Find enemy territories by iterating through all players
+    const QList<Player*> &allPlayers = m_infoWidget->getPlayers();
+    for (Player *otherPlayer : allPlayers) {
+        if (otherPlayer->getId() != playerId) {
+            for (const QString &territoryName : otherPlayer->getOwnedTerritories()) {
+                if (!state.enemyTerritories.contains(territoryName)) {
+                    state.enemyTerritories.append(territoryName);
                 }
             }
         }
@@ -551,13 +1362,34 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
         move.targetTerritory = option.destinationTerritory;
 
         // Determine move type based on ownership and combat status
-        if (option.hasCombat) {
-            // Enemy territory or enemy troops present - attack
+        // Key distinction: hasCombat is true for both:
+        //   1. Enemy troops present (actual combat needed)
+        //   2. Enemy-owned but undefended (free capture)
+        // Check troopInfo to distinguish between these cases
+        bool hasEnemyTroops = !option.troopInfo.isEmpty();
+
+        if (option.hasCombat && hasEnemyTroops) {
+            // Enemy troops present - actual combat
+            // Cannot attack without troops!
+            if (effectiveTroopCount == 0) {
+                continue;  // Skip this move - can't enter combat without troops
+            }
             move.score = scoreAttackMove(option.destinationTerritory, state);
             move.moveType = "Attack";
-            move.reason = QString("Attack territory (owner: %1)%2")
+            move.reason = QString("Attack territory (owner: %1) - %2")
                 .arg(option.owner == '\0' ? "none" : QString(option.owner))
-                .arg(option.troopInfo.isEmpty() ? "" : QString(" - %1").arg(option.troopInfo));
+                .arg(option.troopInfo);
+        } else if (option.hasCombat && !hasEnemyTroops) {
+            // Enemy-owned territory but NO defenders - free capture!
+            // Generals CANNOT capture territories without troops - they need at least 1 troop
+            if (effectiveTroopCount == 0) {
+                continue;  // Skip this move - can't capture without troops
+            }
+            move.score = scoreExpandMove(option.destinationTerritory, state) + 50;  // Bonus for enemy territory
+            move.moveType = "Capture";
+            move.reason = QString("Capture UNDEFENDED enemy territory (owner: %1, value: %2)")
+                .arg(option.owner)
+                .arg(option.territoryValue);
         } else if (option.isOwnTerritory) {
             // Own territory - reinforce
             move.score = scoreDefendMove(option.destinationTerritory, state);
@@ -589,10 +1421,10 @@ QList<MoveEvaluation> AIPlayer::evaluateMovesForLeader(GamePiece *leader, const 
                 move.reason = "No troops - staying is better";
             }
         } else if (option.owner == '\0') {
-            // Unclaimed territory - expand (but only if general has or can get troops)
+            // Unclaimed territory - expand
+            // Generals CANNOT claim territories without troops - they need at least 1 troop
             if (effectiveTroopCount == 0) {
-                // General without troops (and none available) cannot claim territory - skip this move
-                continue;
+                continue;  // Skip this move - can't capture without troops
             }
             move.score = scoreExpandMove(option.destinationTerritory, state);
             move.moveType = "Expand";
@@ -684,12 +1516,9 @@ int AIPlayer::scoreExpandMove(const QString &target, const GameState &state)
     // This ensures unclaimed territories always score higher than owned ones
     int score = 100;
 
-    if (m_mapWidget) {
-        Position pos = m_mapWidget->territoryNameToPosition(target);
-        if (pos.row >= 0) {
-            int value = m_mapWidget->getTerritoryValueAt(pos.row, pos.col);
-            score += value;  // Higher value = higher score (105 or 110)
-        }
+    if (m_mapWidget && m_mapWidget->getGraph()) {
+        int value = m_mapWidget->getGraph()->getValue(target);
+        score += value;  // Higher value = higher score (105 or 110)
     }
 
     return score;
@@ -766,9 +1595,123 @@ int AIPlayer::selectCombatTarget(const QList<GamePiece::Type> &targetTypes)
 
 void AIPlayer::handlePurchaseDialog(PurchaseDialog *dialog)
 {
-    Q_UNUSED(dialog)
-    log("Purchase dialog opened - AI purchase not yet implemented");
-    // TODO: Implement purchase AI
+    if (!dialog) {
+        log("ERROR: No purchase dialog provided");
+        return;
+    }
+
+    log("Purchase dialog opened - making AI purchase decisions");
+
+    // Get available items from the dialog
+    QList<PurchaseDialog::PurchaseMenuItem> availableItems = dialog->getAvailableItems();
+
+    // Extract information needed for decision making
+    int budget = 0;
+    int inflationMultiplier = dialog->getInflationMultiplier();
+    QStringList territoriesForCities;
+    QStringList territoriesForFortification;
+    QStringList seaTerritoriesForGalleys;
+    int currentGalleyCount = m_player->getGalleys().size();
+
+    // Parse available items to understand what's available
+    for (const auto &item : availableItems) {
+        // Collect city placement options
+        if (item.itemType == "City" && !item.location.isEmpty()) {
+            territoriesForCities.append(item.location);
+        }
+
+        // Collect fortification options
+        if (item.itemType == "Fortification" && !item.location.isEmpty()) {
+            territoriesForFortification.append(item.location);
+        }
+
+        // Collect galley placement options
+        if (item.itemType == "Galley" && !item.location.isEmpty()) {
+            seaTerritoriesForGalleys.append(item.location);
+        }
+    }
+
+    // Get budget from player's wallet
+    budget = m_player->getWallet();
+
+    log(QString("Purchase analysis: Budget=%1, Inflation=%2x, CitySpots=%3, GalleySpots=%4")
+        .arg(budget)
+        .arg(inflationMultiplier)
+        .arg(territoriesForCities.size())
+        .arg(seaTerritoriesForGalleys.size()));
+
+    // Get purchase decision from AI decision maker
+    const QList<Player*> &allPlayers = m_infoWidget->getPlayers();
+    MapGraph *graph = m_mapWidget->getGraph();
+
+    AIPurchaseDecision decision = m_decisionMaker.decidePurchases(
+        m_player,
+        allPlayers,
+        graph,
+        budget,
+        inflationMultiplier,
+        territoriesForCities,
+        territoriesForFortification,
+        seaTerritoriesForGalleys,
+        currentGalleyCount
+    );
+
+    log(QString("Purchase decision: %1").arg(decision.reason));
+
+    // Convert decision to the format expected by the dialog
+    QMap<QString, int> purchases;
+
+    // Cities to DESTROY (strategic decision - deny enemy the prize)
+    for (const QString &territory : decision.citiesToDestroy) {
+        purchases[QString("DestroyCity:%1").arg(territory)] = 1;
+        log(QString("  -> DESTROY city at %1 (can't defend)").arg(territory));
+    }
+
+    if (decision.infantry > 0) {
+        purchases["Infantry"] = decision.infantry;
+        log(QString("  -> Infantry: %1").arg(decision.infantry));
+    }
+    if (decision.cavalry > 0) {
+        purchases["Cavalry"] = decision.cavalry;
+        log(QString("  -> Cavalry: %1").arg(decision.cavalry));
+    }
+    if (decision.catapults > 0) {
+        purchases["Catapults"] = decision.catapults;
+        log(QString("  -> Catapults: %1").arg(decision.catapults));
+    }
+
+    // Cities
+    for (auto it = decision.cities.begin(); it != decision.cities.end(); ++it) {
+        QString key = it.value() ? QString("FortifiedCity:%1").arg(it.key())
+                                 : QString("City:%1").arg(it.key());
+        purchases[key] = 1;
+        log(QString("  -> City at %1%2").arg(it.key()).arg(it.value() ? " (fortified)" : ""));
+    }
+
+    // Fortifications
+    for (const QString &territory : decision.fortifications) {
+        purchases[QString("Fortification:%1").arg(territory)] = 1;
+        log(QString("  -> Fortify %1").arg(territory));
+    }
+
+    // Galleys
+    for (auto it = decision.galleys.begin(); it != decision.galleys.end(); ++it) {
+        purchases[QString("Galley:%1").arg(it.key())] = it.value();
+        log(QString("  -> Galley at %1: %2").arg(it.key()).arg(it.value()));
+    }
+
+    // Setup auto-mode to execute purchases
+    dialog->setupAIAutoMode(m_delayMs, purchases);
+
+    emit purchasePlanUpdated(budget, PurchaseDecision{
+        decision.infantry,
+        decision.cavalry,
+        decision.catapults,
+        {}, // cityTerritories - not used in signal
+        {}, // fortifyTerritories - not used in signal
+        0,  // galleys count
+        decision.totalCost
+    });
 }
 
 void AIPlayer::executeCombatPhase()
@@ -816,52 +1759,267 @@ void AIPlayer::performMove(GamePiece *leader, const QString &targetTerritory)
 // Legion Building Logic
 // ============================================================================
 
-QList<int> AIPlayer::decideLegionComposition(GamePiece *general, const QList<GamePiece*> &availableTroops)
+QList<int> AIPlayer::decideLegionComposition(GamePiece *leader, const QList<GamePiece*> &availableTroops)
 {
     QList<int> troopsToSelect;
 
-    if (!general || !m_player) {
+    if (!leader || !m_player) {
         return troopsToSelect;
     }
 
-    // Cast to GeneralPiece to access getLegion()
-    GeneralPiece *gen = qobject_cast<GeneralPiece*>(general);
-    if (!gen) {
-        log("decideLegionComposition: Not a GeneralPiece, returning empty list");
+    // Get the leader's current legion - handle both Caesar and General
+    QList<int> currentLegion;
+    bool isCaesar = false;
+    int leaderNumber = 0;
+
+    if (leader->getType() == GamePiece::Type::Caesar) {
+        CaesarPiece *caesar = static_cast<CaesarPiece*>(leader);
+        currentLegion = caesar->getLegion();
+        isCaesar = true;
+        log("decideLegionComposition: Processing Caesar");
+    } else if (leader->getType() == GamePiece::Type::General) {
+        GeneralPiece *gen = static_cast<GeneralPiece*>(leader);
+        currentLegion = gen->getLegion();
+        leaderNumber = gen->getNumber();
+    } else {
+        log("decideLegionComposition: Unknown leader type, returning empty list");
         return troopsToSelect;
     }
 
-    // Get the general's current legion
-    QList<int> currentLegion = gen->getLegion();
     int currentLegionSize = currentLegion.size();
+    QString leaderName = isCaesar ? "Caesar" : QString("General %1").arg(leaderNumber);
 
-    // Calculate quota: total troops / 6 generals
+    // === NEW PLANNING-BASED APPROACH ===
+    // Check if we have a plan and this general has an assignment
+    int plannedTroops = 0;
+    QList<int> plannedTroopIds;
+    bool hasPlannedAssignment = false;
+    QString missionType;
+
+    if (m_planCreated && !m_currentPlan.isEmpty()) {
+        for (const GeneralAssignment &assignment : m_currentPlan.assignments) {
+            if (assignment.general == leader) {
+                hasPlannedAssignment = true;
+                plannedTroops = assignment.troopsToTake;
+                plannedTroopIds = assignment.troopIds;
+                missionType = assignment.missionType;
+                log(QString("Legion Building: %1 has PLANNED assignment: %2 troops for %3, troopIds=%4")
+                    .arg(leaderName).arg(plannedTroops).arg(missionType)
+                    .arg(QDebug::toString(plannedTroopIds)));
+                break;
+            }
+        }
+    }
+
+    // ReturnHome mission: general should bring ALL their current troops with them!
+    // BUT if general has ARRIVED home (current position == home), pick up troops!
+    // Defend mission: general should bring their current troops PLUS any planned troops
+    QString homeProvince = m_player->getHomeProvinceName();
+    QString currentTerritory = leader->getTerritoryName();
+
+    // Special case: General has ReturnHome mission and is NOW AT HOME
+    // This means they've arrived - pick up troops using quota system!
+    if (hasPlannedAssignment && missionType == "ReturnHome" && currentTerritory == homeProvince) {
+        log(QString("Legion Building: %1 has ARRIVED home - switching to quota-based troop pickup!")
+            .arg(leaderName));
+        hasPlannedAssignment = false;  // Fall through to quota system below
+    }
+
+    if (hasPlannedAssignment && (missionType == "ReturnHome" || missionType == "Defend" || missionType == "PickupTroops")) {
+        // DEBUG: Log what's in currentLegion vs availableTroops
+        log(QString("Legion Building: %1 has currentLegion with %2 troops: %3")
+            .arg(leaderName).arg(currentLegion.size()).arg(QDebug::toString(currentLegion)));
+        QStringList availableIds;
+        for (GamePiece *troop : availableTroops) {
+            availableIds.append(QString("%1(mv=%2)").arg(troop->getUniqueId()).arg(troop->getMovesRemaining()));
+        }
+        log(QString("Legion Building: availableTroops has %1 troops: %2")
+            .arg(availableTroops.size()).arg(availableIds.join(", ")));
+
+        // Keep troops currently in the legion that still have moves remaining
+        // Troops with 0 moves must be left behind - the general will continue without them
+        for (int troopId : currentLegion) {
+            bool foundInAvailable = false;
+            bool hasMoves = false;
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId) {
+                    foundInAvailable = true;
+                    hasMoves = (troop->getMovesRemaining() > 0);
+                    if (hasMoves) {
+                        troopsToSelect.append(troopId);
+                    }
+                    break;
+                }
+            }
+            if (!foundInAvailable) {
+                log(QString("Legion Building: Troop %1 in legion but NOT in availableTroops (different territory?)").arg(troopId));
+            } else if (!hasMoves) {
+                log(QString("Legion Building: Troop %1 in legion but has NO MOVES").arg(troopId));
+            }
+        }
+
+        // Log if we had to leave troops behind
+        if (troopsToSelect.size() < currentLegionSize) {
+            log(QString("Legion Building: %1 leaving %2 troops behind (no moves remaining)")
+                .arg(leaderName).arg(currentLegionSize - troopsToSelect.size()));
+        }
+
+        // For DEFEND missions, also pick up the planned troops (general might be picking up reinforcements)
+        if (missionType == "Defend" && !plannedTroopIds.isEmpty()) {
+            for (int troopId : plannedTroopIds) {
+                if (troopsToSelect.contains(troopId)) continue;  // Already added
+
+                bool available = false;
+                for (GamePiece *troop : availableTroops) {
+                    if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                        available = true;
+                        break;
+                    }
+                }
+                if (available) {
+                    troopsToSelect.append(troopId);
+                }
+            }
+
+            // FALLBACK: If planned troops weren't available, pick up ANY available troops
+            if (troopsToSelect.size() < plannedTroops) {
+                for (GamePiece *troop : availableTroops) {
+                    if (troopsToSelect.size() >= plannedTroops) break;
+                    if (troopsToSelect.contains(troop->getUniqueId())) continue;
+                    if (troop->getMovesRemaining() <= 0) continue;
+
+                    troopsToSelect.append(troop->getUniqueId());
+                }
+                log(QString("Legion Building: %1 DEFENDING FALLBACK - picking up %2 available troops (planned %3 unavailable)")
+                    .arg(leaderName).arg(troopsToSelect.size()).arg(plannedTroops));
+            } else {
+                log(QString("Legion Building: %1 DEFENDING - picking up %2 troops (had %3, adding %4 planned)")
+                    .arg(leaderName)
+                    .arg(troopsToSelect.size())
+                    .arg(currentLegionSize)
+                    .arg(plannedTroopIds.size()));
+            }
+            return troopsToSelect;
+        }
+
+        log(QString("Legion Building: %1 %2 - keeping %3 troops in legion")
+            .arg(leaderName)
+            .arg(missionType == "Defend" ? "DEFENDING" : "RETURNING HOME")
+            .arg(troopsToSelect.size()));
+        return troopsToSelect;
+    }
+
+    // If we have a planned assignment with specific troops, use those
+    // This includes "ExpandWithTroops" missions from the new troop-centric planner
+    if (hasPlannedAssignment && !plannedTroopIds.isEmpty()) {
+        log(QString("Legion Building: %1 using planned troops: %2").arg(leaderName).arg(plannedTroopIds.size()));
+        // First, add troops already in this leader's legion that still have moves
+        // Troops with 0 moves must be left behind
+        for (int troopId : currentLegion) {
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    troopsToSelect.append(troopId);
+                    break;
+                }
+            }
+        }
+
+        // Log if we had to leave troops behind
+        if (troopsToSelect.size() < currentLegionSize) {
+            log(QString("Legion Building: %1 leaving %2 troops behind (no moves remaining)")
+                .arg(leaderName).arg(currentLegionSize - troopsToSelect.size()));
+        }
+
+        // Then add the specifically planned troops (if not already added)
+        for (int troopId : plannedTroopIds) {
+            if (troopsToSelect.contains(troopId)) continue;
+
+            // Verify this troop is available
+            bool available = false;
+            for (GamePiece *troop : availableTroops) {
+                if (troop->getUniqueId() == troopId && troop->getMovesRemaining() > 0) {
+                    available = true;
+                    break;
+                }
+            }
+            if (available) {
+                troopsToSelect.append(troopId);
+            }
+        }
+
+        // If planned troops weren't available but we need troops (Defend/Attack/ExpandWithTroops missions),
+        // pick up ANY available troops with moves remaining
+        if (troopsToSelect.size() < plannedTroops &&
+            (missionType == "Defend" || missionType == "Attack" || missionType == "ExpandWithTroops")) {
+            for (GamePiece *troop : availableTroops) {
+                if (troopsToSelect.size() >= plannedTroops) break;
+                if (troopsToSelect.contains(troop->getUniqueId())) continue;
+                if (troop->getMovesRemaining() <= 0) continue;
+
+                troopsToSelect.append(troop->getUniqueId());
+            }
+            log(QString("Legion Building: %1 FALLBACK - picking up %2 available troops (planned %3 unavailable)")
+                .arg(leaderName).arg(troopsToSelect.size()).arg(plannedTroops));
+        } else {
+            log(QString("Legion Building: %1 using PLANNED composition: %2 troops selected")
+                .arg(leaderName).arg(troopsToSelect.size()));
+        }
+        return troopsToSelect;
+    }
+
+    // NOTE: Generals CANNOT capture territory without troops - removed old "expansion with 0 troops" logic
+    // If a planned assignment has 0 troops, the general should return home to get troops instead
+    if (hasPlannedAssignment && plannedTroops == 0 && missionType != "ReturnHome" && missionType != "Defend") {
+        // This shouldn't happen anymore since SafeExpand was removed, but handle it gracefully
+        log(QString("Legion Building: WARNING - %1 has 0 planned troops for %2 mission - generals cannot capture without troops!")
+            .arg(leaderName).arg(missionType));
+        // Return empty - the move should fail and general will need to return for troops
+        return troopsToSelect;
+    }
+
+    // === FALLBACK: Old quota-based approach if no plan ===
+    // (This path is taken if plan creation failed or for Caesar)
+
+    // CRITICAL: Caesar is EXTREMELY valuable - losing Caesar loses the game!
+    int minTroops = isCaesar ? 6 : 0;
+
+    // Calculate quota: total troops / (6 generals + 1 for Caesar)
     int totalTroops = m_player->getInfantryCount() +
                       m_player->getCavalryCount() +
                       m_player->getCatapultCount();
     int numGenerals = m_player->getGenerals().size();
-    if (numGenerals == 0) numGenerals = 1;  // Avoid division by zero
+    int numLeaders = numGenerals + 1;
+    if (numLeaders == 0) numLeaders = 1;
 
-    int quota = totalTroops / numGenerals;
-    // Handle remainder: generals with lower numbers get priority
-    int remainder = totalTroops % numGenerals;
-    int generalNumber = gen->getNumber();
-    if (generalNumber <= remainder) {
-        quota += 1;  // This general gets one extra from the remainder
+    int quota = totalTroops / numLeaders;
+    int remainder = totalTroops % numLeaders;
+    if (leaderNumber <= remainder) {
+        quota += 1;
     }
 
-    log(QString("Legion Building: General %1 - Current legion: %2, Quota: %3, Total troops: %4, NumGenerals: %5")
-        .arg(generalNumber).arg(currentLegionSize).arg(quota).arg(totalTroops).arg(numGenerals));
-    log(QString("  Infantry: %1, Cavalry: %2, Catapults: %3")
-        .arg(m_player->getInfantryCount())
-        .arg(m_player->getCavalryCount())
-        .arg(m_player->getCatapultCount()));
+    if (isCaesar && quota < minTroops) {
+        quota = minTroops;
+    }
 
-    // Build set of all troop IDs in ANY general's legion (to identify assigned troops)
+    log(QString("Legion Building: %1 - FALLBACK quota mode: Current=%2, Quota=%3")
+        .arg(leaderName).arg(currentLegionSize).arg(quota));
+
+    // Build set of all troop IDs in ANY leader's legion (to identify assigned troops)
     QSet<int> assignedTroopIds;
+    // Include Caesar's legion (player should only have 1 Caesar, but use list for safety)
+    for (CaesarPiece *playerCaesar : m_player->getCaesars()) {
+        if (!isCaesar || playerCaesar != leader) {  // Don't exclude our own legion
+            for (int id : playerCaesar->getLegion()) {
+                assignedTroopIds.insert(id);
+            }
+        }
+    }
+    // Include all generals' legions
     for (GeneralPiece *g : m_player->getGenerals()) {
-        for (int id : g->getLegion()) {
-            assignedTroopIds.insert(id);
+        if (isCaesar || g != leader) {  // Don't exclude our own legion
+            for (int id : g->getLegion()) {
+                assignedTroopIds.insert(id);
+            }
         }
     }
     log(QString("  Total assigned troops across all generals: %1").arg(assignedTroopIds.size()));
@@ -876,10 +2034,14 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *general, const QList<Gam
     for (GamePiece *troop : availableTroops) {
         int troopId = troop->getUniqueId();
 
-        // Rule 1: If troop is in THIS general's legion, always select it (permanent)
+        // Rule 1: If troop is in THIS general's legion and has moves, select it (permanent)
         if (currentLegion.contains(troopId)) {
-            troopsToSelect.append(troopId);
-            log(QString("  Troop %1: In this general's legion - SELECTED (permanent)").arg(troopId));
+            if (troop->getMovesRemaining() > 0) {
+                troopsToSelect.append(troopId);
+                log(QString("  Troop %1: In this general's legion - SELECTED (permanent)").arg(troopId));
+            } else {
+                log(QString("  Troop %1: In this general's legion but NO MOVES - SKIP").arg(troopId));
+            }
             continue;
         }
 
@@ -944,8 +2106,158 @@ QList<int> AIPlayer::decideLegionComposition(GamePiece *general, const QList<Gam
         if (!addedAny) break;
     }
 
-    log(QString("Legion Building: Selected %1 troops for General %2").arg(troopsToSelect.size()).arg(generalNumber));
+    // CRITICAL: For Caesar, if we're below minTroops but there are still unassigned troops,
+    // keep adding until we reach minTroops (even if over quota)
+    if (isCaesar && currentLegionSize < minTroops) {
+        log(QString("  WARNING: Caesar only has %1 troops, need at least %2 - adding more!")
+            .arg(currentLegionSize).arg(minTroops));
+
+        // Try to add more troops in priority order: catapult > cavalry > infantry
+        while (currentLegionSize < minTroops && currentLegionSize < 6) {
+            bool addedAny = false;
+
+            if (iCat < unassignedCatapults.size()) {
+                GamePiece *troop = unassignedCatapults[iCat++];
+                troopsToSelect.append(troop->getUniqueId());
+                currentLegionSize++;
+                log(QString("  Troop %1 (Catapult): Emergency add for Caesar - SELECTED").arg(troop->getUniqueId()));
+                addedAny = true;
+            } else if (iCav < unassignedCavalry.size()) {
+                GamePiece *troop = unassignedCavalry[iCav++];
+                troopsToSelect.append(troop->getUniqueId());
+                currentLegionSize++;
+                log(QString("  Troop %1 (Cavalry): Emergency add for Caesar - SELECTED").arg(troop->getUniqueId()));
+                addedAny = true;
+            } else if (iInf < unassignedInfantry.size()) {
+                GamePiece *troop = unassignedInfantry[iInf++];
+                troopsToSelect.append(troop->getUniqueId());
+                currentLegionSize++;
+                log(QString("  Troop %1 (Infantry): Emergency add for Caesar - SELECTED").arg(troop->getUniqueId()));
+                addedAny = true;
+            }
+
+            if (!addedAny) break;
+        }
+
+        if (currentLegionSize < minTroops) {
+            log(QString("  CRITICAL WARNING: Caesar has only %1 troops, wanted %2 - no more available!")
+                .arg(currentLegionSize).arg(minTroops));
+        }
+    }
+
+    log(QString("Legion Building: Selected %1 troops for %2").arg(troopsToSelect.size()).arg(leaderName));
     return troopsToSelect;
+}
+
+bool AIPlayer::transferTroopsToOtherGeneral(GeneralPiece *fromGeneral)
+{
+    if (!fromGeneral || !m_player) {
+        return false;
+    }
+
+    QString territory = fromGeneral->getTerritoryName();
+    QList<int> fromLegion = fromGeneral->getLegion();
+
+    if (fromLegion.isEmpty()) {
+        log(QString("Transfer: General #%1 has no troops to transfer").arg(fromGeneral->getNumber()));
+        return false;
+    }
+
+    // Find another general at the same territory who could use more troops
+    GeneralPiece *bestRecipient = nullptr;
+    int bestRecipientNeed = 0;  // How many more troops they could use (6 - current legion size)
+
+    for (GeneralPiece *otherGen : m_player->getGenerals()) {
+        if (otherGen == fromGeneral) continue;
+        if (otherGen->getTerritoryName() != territory) continue;
+
+        int currentLegionSize = otherGen->getLegion().size();
+        int spaceAvailable = 6 - currentLegionSize;
+
+        // Prefer generals who:
+        // 1. Have space for more troops
+        // 2. Have fewer troops than fromGeneral (so transfer makes sense)
+        // 3. Are NOT heading home (have troops already or are at a strategic position)
+        if (spaceAvailable > 0 && currentLegionSize < fromLegion.size()) {
+            if (spaceAvailable > bestRecipientNeed) {
+                bestRecipient = otherGen;
+                bestRecipientNeed = spaceAvailable;
+            }
+        }
+    }
+
+    // Also check Caesar at the same territory
+    for (CaesarPiece *caesar : m_player->getCaesars()) {
+        if (caesar->getTerritoryName() != territory) continue;
+
+        int currentLegionSize = caesar->getLegion().size();
+        int spaceAvailable = 6 - currentLegionSize;
+
+        // Caesar always gets priority for troops (he needs protection)
+        if (spaceAvailable > 0) {
+            // Transfer to Caesar even if he has more troops than fromGeneral
+            // because Caesar's safety is paramount
+            log(QString("Transfer: Found Caesar at %1 with space for %2 more troops")
+                .arg(territory).arg(spaceAvailable));
+
+            // Transfer troops to Caesar
+            int transferred = 0;
+            QList<int> newFromLegion = fromLegion;
+
+            for (int troopId : fromLegion) {
+                if (transferred >= spaceAvailable) break;
+
+                // Move troop from general to Caesar
+                newFromLegion.removeOne(troopId);
+                caesar->addToLegion(troopId);
+                transferred++;
+
+                log(QString("  Transferred troop %1 to Caesar").arg(troopId));
+            }
+
+            fromGeneral->setLegion(newFromLegion);
+            log(QString("Transfer: Gave %1 troops to Caesar, General #%2 now has %3 troops")
+                .arg(transferred).arg(fromGeneral->getNumber()).arg(newFromLegion.size()));
+
+            return transferred > 0;
+        }
+    }
+
+    if (!bestRecipient) {
+        log(QString("Transfer: No suitable recipient found at %1 for General #%2's troops")
+            .arg(territory).arg(fromGeneral->getNumber()));
+        return false;
+    }
+
+    // Transfer troops to the best recipient
+    int transferred = 0;
+    QList<int> newFromLegion = fromLegion;
+    int maxToTransfer = qMin(bestRecipientNeed, fromLegion.size());
+
+    // Keep at least some troops if we're not heading home
+    // But if we ARE heading home to get more troops, transfer all
+    QString homeProvince = m_player->getHomeProvinceName();
+    bool headingHome = false;  // Caller should determine this - for now, transfer all
+
+    for (int troopId : fromLegion) {
+        if (transferred >= maxToTransfer) break;
+
+        // Move troop from one general to another
+        newFromLegion.removeOne(troopId);
+        bestRecipient->addToLegion(troopId);
+        transferred++;
+
+        log(QString("  Transferred troop %1 to General #%2").arg(troopId).arg(bestRecipient->getNumber()));
+    }
+
+    fromGeneral->setLegion(newFromLegion);
+    log(QString("Transfer: Gave %1 troops to General #%2, General #%3 now has %4 troops")
+        .arg(transferred)
+        .arg(bestRecipient->getNumber())
+        .arg(fromGeneral->getNumber())
+        .arg(newFromLegion.size()));
+
+    return transferred > 0;
 }
 
 bool AIPlayer::canGeneralMove(GamePiece *general) const
@@ -954,31 +2266,13 @@ bool AIPlayer::canGeneralMove(GamePiece *general) const
         return false;
     }
 
-    // Cast to GeneralPiece to access getLegion()
-    GeneralPiece *gen = qobject_cast<GeneralPiece*>(general);
-    if (!gen) {
-        // Not a general - can't determine legion, assume can move
-        return true;
+    // A leader can always move if they have moves remaining
+    // They may not be able to bring all troops, but they can move alone
+    if (general->getMovesRemaining() <= 0) {
+        return false;
     }
 
-    // Get the general's legion
-    QList<int> legion = gen->getLegion();
-
-    // If legion is empty, general can move freely
-    if (legion.isEmpty()) {
-        return true;
-    }
-
-    // Check if ALL troops in the legion have moves remaining
-    // We need to find each troop by ID and check its moves
-    for (int troopId : legion) {
-        GamePiece *troop = m_player->getPieceByUniqueId(troopId);
-        if (troop && troop->getMovesRemaining() <= 0) {
-            qDebug() << "canGeneralMove: Troop" << troopId << "has no moves remaining";
-            return false;
-        }
-    }
-
+    // Leader has moves - they can move (possibly without troops)
     return true;
 }
 

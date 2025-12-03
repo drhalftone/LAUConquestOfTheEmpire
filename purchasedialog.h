@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QGroupBox>
 #include <QMap>
 #include <QString>
 #include <QTimer>
@@ -14,21 +15,22 @@
 // Structure to hold information about territories available for city placement
 struct CityPlacementOption {
     QString territoryName;
-    Position position;
 };
 
 // Structure to hold information about existing cities that can be fortified
 struct FortificationOption {
     QString territoryName;
-    Position position;
 };
 
 // Structure to hold information about sea borders for galley placement
 struct GalleyPlacementOption {
-    Position seaPosition;
     QString seaTerritoryName;
-    QString direction;  // "North", "South", "East", "West"
+    QString direction;  // "North", "South", "East", "West" (for display only)
 };
+
+// Forward declaration
+class City;
+class GameMapWidget;
 
 // Structure to return what was purchased
 struct PurchaseResult {
@@ -40,7 +42,6 @@ struct PurchaseResult {
     // Cities with their locations
     struct CityPurchase {
         QString territoryName;
-        Position position;
         bool fortified;
     };
     QList<CityPurchase> cities;
@@ -48,12 +49,15 @@ struct PurchaseResult {
     // Fortifications for existing cities
     QStringList fortifications;  // List of territory names to fortify
 
-    // Galleys with their sea border
+    // Galleys with their sea territory
     struct GalleyPurchase {
-        Position seaBorder;
+        QString seaTerritoryName;
         int count;
     };
     QList<GalleyPurchase> galleys;
+
+    // Cities to destroy
+    QList<City*> citiesToDestroy;
 
     int totalCost;
 };
@@ -63,6 +67,7 @@ class PurchaseDialog : public QDialog
     Q_OBJECT
 
 public:
+    ~PurchaseDialog();
     explicit PurchaseDialog(QChar player,
                            int availableMoney,
                            int inflationMultiplier,
@@ -74,6 +79,9 @@ public:
                            int availableCavalry,
                            int availableCatapults,
                            int availableGalleys,
+                           const QList<City*> &citiesToDestroy,
+                           GameMapWidget *mapWidget,
+                           const QString &homeProvinceName,
                            QWidget *parent = nullptr,
                            bool combatUnitsOnly = false);
 
@@ -86,12 +94,14 @@ public:
         QString itemType;       // "Infantry", "Cavalry", "Catapult", "Galley", "City", "FortifiedCity", "Fortification"
         int currentPrice;       // Price with inflation applied
         int maxQuantity;        // Max that can be bought (limited by money and availability)
-        QString location;       // For placed items (city territory, galley sea border)
-        Position position;      // Grid position for placed items
+        QString location;       // For placed items (city territory, galley sea territory)
     };
 
     // Get the menu of available items for AI to read
     QList<PurchaseMenuItem> getAvailableItems() const;
+
+    // Get current inflation multiplier (1 = normal, 2 = first inflation, etc.)
+    int getInflationMultiplier() const { return m_inflationMultiplier; }
 
     // AI auto-mode: programmatically make purchases and accept dialog
     // purchases maps item description to quantity (e.g., "Infantry" -> 2, "City:Roma" -> 1)
@@ -100,6 +110,7 @@ public:
 private slots:
     void updateTotals();
     void onPurchaseClicked();
+    void onCityDestructionToggled();
 
 private:
     void setupUI();
@@ -131,6 +142,9 @@ private:
     QList<CityPlacementOption> m_cityOptions;
     QList<FortificationOption> m_fortificationOptions;
     QList<GalleyPlacementOption> m_galleyOptions;
+    QList<City*> m_availableCitiesToDestroy;
+    GameMapWidget *m_mapWidget;
+    QString m_homeProvinceName;
 
     // Troop spinboxes
     QSpinBox *m_infantrySpinBox;
@@ -147,6 +161,9 @@ private:
     // Galley spinboxes (maps spinbox to sea border option)
     QMap<QSpinBox*, GalleyPlacementOption> m_galleySpinboxes;
 
+    // City destruction checkboxes (maps checkbox to city object)
+    QMap<QCheckBox*, City*> m_cityDestructionCheckboxes;
+
     // Summary labels
     QLabel *m_availableLabel;
     QLabel *m_spendingLabel;
@@ -154,6 +171,10 @@ private:
 
     // Purchase button
     QPushButton *m_purchaseButton;
+
+    // Group boxes that need to be disabled if home city is destroyed
+    QGroupBox *m_troopsGroupBox;
+    QGroupBox *m_galleysGroupBox;
 
     // AI mode flag - skip confirmation dialog
     bool m_aiAutoMode = false;
