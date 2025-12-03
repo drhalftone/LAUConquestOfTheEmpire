@@ -1600,7 +1600,7 @@ void AIPlayer::handlePurchaseDialog(PurchaseDialog *dialog)
 
     // Extract information needed for decision making
     int budget = 0;
-    int inflationMultiplier = 1;
+    int inflationMultiplier = dialog->getInflationMultiplier();
     QStringList territoriesForCities;
     QStringList territoriesForFortification;
     QStringList seaTerritoriesForGalleys;
@@ -1608,11 +1608,6 @@ void AIPlayer::handlePurchaseDialog(PurchaseDialog *dialog)
 
     // Parse available items to understand what's available
     for (const auto &item : availableItems) {
-        // Determine inflation from infantry price (base is 10)
-        if (item.itemType == "Infantry" && item.currentPrice > 0) {
-            inflationMultiplier = item.currentPrice / 10;
-        }
-
         // Collect city placement options
         if (item.itemType == "City" && !item.location.isEmpty()) {
             territoriesForCities.append(item.location);

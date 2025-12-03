@@ -100,6 +100,9 @@ public:
     // Get the menu of available items for AI to read
     QList<PurchaseMenuItem> getAvailableItems() const;
 
+    // Get current inflation multiplier (1 = normal, 2 = first inflation, etc.)
+    int getInflationMultiplier() const { return m_inflationMultiplier; }
+
     // AI auto-mode: programmatically make purchases and accept dialog
     // purchases maps item description to quantity (e.g., "Infantry" -> 2, "City:Roma" -> 1)
     void setupAIAutoMode(int delayMs, const QMap<QString, int> &purchases);
