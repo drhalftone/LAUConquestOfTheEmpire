@@ -10,6 +10,7 @@
 #include <QPixmap>
 #include <QPainter>
 #include <QApplication>
+#include <QDebug>
 
 PurchaseDialog::PurchaseDialog(QChar player,
                                int availableMoney,

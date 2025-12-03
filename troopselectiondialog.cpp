@@ -7,6 +7,7 @@
 #include <QFrame>
 #include <QFont>
 #include <QPixmap>
+#include <QDebug>
 
 TroopSelectionDialog::TroopSelectionDialog(const QString &leaderName,
                                            const QList<GamePiece*> &availableTroops,
