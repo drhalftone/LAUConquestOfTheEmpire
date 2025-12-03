@@ -115,13 +115,13 @@ int main(int argc, char *argv[])
         aiTestMode = true;
 
         // Ask for number of AI players
-        QStringList playerOptions = {"1 AI Player", "2 AI Players", "3 AI Players"};
+        QStringList playerOptions = {"2 AI Players", "3 AI Players", "4 AI Players", "5 AI Players", "6 AI Players"};
         bool ok;
         QString selection = QInputDialog::getItem(nullptr,
                                                   "AI Test Mode",
                                                   "Select number of AI players:",
                                                   playerOptions,
-                                                  0,  // Default to 1 AI
+                                                  0,  // Default to 2 AI
                                                   false,  // Not editable
                                                   &ok);
         if (!ok) {

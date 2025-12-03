@@ -96,7 +96,10 @@ void LAURollingDieWidget::mousePressEvent(QMouseEvent *event) {
 }
 
 void LAURollingDieWidget::startRolling() {
-    isRolling = true; rollCount = 0; rollTimer->start(20);
+    isRolling = true;
+    rollCount = 0;
+    rollTimer->setInterval(20);  // Reset interval before starting
+    rollTimer->start();
 }
 
 void LAURollingDieWidget::onRollTimer() {
@@ -104,16 +107,25 @@ void LAURollingDieWidget::onRollTimer() {
         diceValues[i] = QRandomGenerator::global()->bounded(1, 7);
         diceOrientations[i] = QRandomGenerator::global()->bounded(0, 4);
     }
-    if (m_clickSound->isPlaying()) {
-        m_clickSound->stop();
+
+    // Play click sound only if not already playing to avoid audio glitches
+    if (!m_clickSound->isPlaying()) {
+        m_clickSound->play();
     }
-    m_clickSound->play();
+
     update();
     rollCount++;
-    if (rollCount > 10) rollTimer->setInterval(20 + (rollCount - 10) * 15);
+
     if (rollCount >= maxRolls) {
-        rollTimer->stop(); isRolling = false;
+        rollTimer->stop();
+        isRolling = false;
         emit rollComplete(diceValues[0], m_rollSender);
         m_rollSender = nullptr;
+    } else if (rollCount > 10) {
+        // Stop timer and restart with new interval to avoid timer restart glitch
+        int newInterval = 20 + (rollCount - 10) * 15;
+        rollTimer->stop();
+        rollTimer->setInterval(newInterval);
+        rollTimer->start();
     }
 }
