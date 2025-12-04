@@ -23,7 +23,9 @@ SOURCES += \
     gamelog.cpp \
     ai/reachabilitycalculator.cpp \
     ai/aidecisionmaker.cpp \
-    ai/moveenumerator.cpp
+    ai/moveenumerator.cpp \
+    ai/killshotanalyzer.cpp \
+    ai/combatsimulator.cpp
 
 # Common headers (always included)
 HEADERS += \
@@ -35,7 +37,9 @@ HEADERS += \
     gamelog.h \
     ai/reachabilitycalculator.h \
     ai/aidecisionmaker.h \
-    ai/moveenumerator.h
+    ai/moveenumerator.h \
+    ai/killshotanalyzer.h \
+    ai/combatsimulator.h
 
 # Conditional compilation based on map type
 contains(DEFINES, USE_OPENGL_MAP) {

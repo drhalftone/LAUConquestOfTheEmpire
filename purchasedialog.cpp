@@ -665,8 +665,8 @@ void PurchaseDialog::onPurchaseClicked()
                         !result.cities.isEmpty() || !result.fortifications.isEmpty() || !result.galleys.isEmpty());
     bool hasDestructions = !result.citiesToDestroy.isEmpty();
 
-    if (hasPurchases || hasDestructions) {
-        // Create custom confirmation dialog
+    if ((hasPurchases || hasDestructions) && !m_aiAutoMode) {
+        // Create custom confirmation dialog (skip for AI players)
         QDialog confirmDialog(this);
         confirmDialog.setWindowTitle("Confirm Turn End");
         confirmDialog.setModal(true);

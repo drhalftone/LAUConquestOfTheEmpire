@@ -10,7 +10,7 @@ Player::Player(QChar id, const QString &homeProvinceName, QObject *parent, bool 
     : QObject(parent)
     , m_id(id)
     , m_color(getColorForPlayer(id))
-    , m_wallet(100)  // Start each player with 100 talents
+    , m_wallet(0)  // Start each player with 0 talents
     , m_homeProvinceName(homeProvinceName)
     , m_hasHomeFortifiedCity(!minimalSetup)  // Only if not minimal setup
     , m_isMyTurn(false)  // Starts as false, first player's turn is set in main()

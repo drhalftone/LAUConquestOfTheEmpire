@@ -119,6 +119,11 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
         });
         tempLayout->addWidget(okButton);
 
+        // Auto-click for AI players
+        if (m_attackingPlayer->isAI() || m_defendingPlayer->isAI()) {
+            QTimer::singleShot(1000, okButton, &QPushButton::click);
+        }
+
         return;  // Skip normal combat dialog setup
     }
 
@@ -149,6 +154,11 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
             checkCombatEnd();
         });
         tempLayout->addWidget(okButton);
+
+        // Auto-click for AI players
+        if (m_attackingPlayer->isAI() || m_defendingPlayer->isAI()) {
+            QTimer::singleShot(1000, okButton, &QPushButton::click);
+        }
 
         return;  // Skip normal combat dialog setup
     }

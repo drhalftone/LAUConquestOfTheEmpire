@@ -187,22 +187,50 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
                           (risk.enemyMaxForce < currentEnemyMaxForce);
 
         if (destIsSafer && weOwnIt) {
-            // Retreating to our own safer territory - HIGHLY valuable for lone generals
-            // This needs to be a DOMINANT bonus to ensure retreat happens
-            int retreatBonus = 300;
+            // Retreating to our own safer territory - CRITICAL for lone generals
+            // This needs to be a DOMINANT bonus to ensure retreat happens FIRST
+            int retreatBonus = 500;
             move.score += retreatBonus;
-            move.reason = QString("RETREAT from danger (enemy=%1): +%2").arg(currentEnemyMaxForce).arg(retreatBonus);
-            qDebug() << "Retreat bonus for" << leader->getTerritoryName() << "->" << destination
+            move.reason = QString("URGENT RETREAT from danger (enemy=%1): +%2").arg(currentEnemyMaxForce).arg(retreatBonus);
+            qDebug() << "URGENT Retreat bonus for" << leader->getTerritoryName() << "->" << destination
                      << ": +" << retreatBonus << "(enemy force=" << currentEnemyMaxForce << ")";
+
+            // === PRIORITIZE RETREATING TOWARD HOME ===
+            QString homeProvince = player->getHomeProvinceName();
+            int distFromCurrent = graph->getDistance(currentTerritory, homeProvince);
+            int distFromDest = graph->getDistance(destination, homeProvince);
+
+            // Bonus for moving closer to home
+            if (distFromDest >= 0 && distFromCurrent >= 0 && distFromDest < distFromCurrent) {
+                int homeBonus = (distFromCurrent - distFromDest) * 50;  // 50 points per step closer
+                move.score += homeBonus;
+                move.reason += QString(" | Closer to home (%1->%2 steps): +%3")
+                    .arg(distFromCurrent).arg(distFromDest).arg(homeBonus);
+
+                // Extra bonus if using road network (faster retreat)
+                QStringList roadFromDest = graph->getRoadConnectedTerritories(destination, player);
+                if (roadFromDest.contains(homeProvince)) {
+                    int roadBonus = 75;
+                    move.score += roadBonus;
+                    move.reason += QString(" | Road to home: +%1").arg(roadBonus);
+                }
+            }
+
+            // Big bonus if destination IS home
+            if (destination == homeProvince) {
+                int homeSafetyBonus = 150;
+                move.score += homeSafetyBonus;
+                move.reason += QString(" | Reached HOME: +%1").arg(homeSafetyBonus);
+            }
         } else if (destIsSafer) {
             // Retreating to neutral/enemy but safer territory
-            int retreatBonus = 150;
+            int retreatBonus = 350;
             move.score += retreatBonus;
             move.reason = QString("Escape to safer ground (enemy=%1): +%2").arg(currentEnemyMaxForce).arg(retreatBonus);
         } else {
             // Moving to another dangerous position as a lone general - BAD IDEA
             // Strong penalty to discourage this
-            int dangerPenalty = -250;
+            int dangerPenalty = -400;
             move.score += dangerPenalty;
             move.reason = QString("DANGER: Lone general moving to risky area: %1").arg(dangerPenalty);
         }
