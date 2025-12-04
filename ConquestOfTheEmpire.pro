@@ -54,6 +54,7 @@ contains(DEFINES, USE_OPENGL_MAP) {
         laurollingdiewidget.cpp \
         aiplayer.cpp \
         aidebugwidget.cpp \
+        aidebugcontainer.cpp \
         moveenumeratorwidget.cpp
     HEADERS += \
         gamemapwidget.h \
@@ -65,6 +66,7 @@ contains(DEFINES, USE_OPENGL_MAP) {
         laurollingdiewidget.h \
         aiplayer.h \
         aidebugwidget.h \
+        aidebugcontainer.h \
         moveenumeratorwidget.h
 } else {
     message("Using grid-based map widget")
@@ -79,7 +81,8 @@ contains(DEFINES, USE_OPENGL_MAP) {
         citydestructiondialog.cpp \
         laurollingdiewidget.cpp \
         aiplayer.cpp \
-        aidebugwidget.cpp
+        aidebugwidget.cpp \
+        aidebugcontainer.cpp
 
     HEADERS += \
         mapwidget.h \
@@ -92,7 +95,8 @@ contains(DEFINES, USE_OPENGL_MAP) {
         citydestructiondialog.h \
         laurollingdiewidget.h \
         aiplayer.h \
-        aidebugwidget.h
+        aidebugwidget.h \
+        aidebugcontainer.h
 }
 
 RESOURCES += \

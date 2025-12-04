@@ -10,6 +10,7 @@
 #include "combatdialog.h"
 #include "aiplayer.h"
 #include "aidebugwidget.h"
+#include "aidebugcontainer.h"
 #include "gamelog.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -473,6 +474,7 @@ int main(int argc, char *argv[])
     // AI players for single player mode
     QList<AIPlayer*> aiPlayers;
     QList<AIDebugWidget*> debugWidgets;
+    AIDebugContainer *debugContainer = nullptr;
 
     if (singlePlayerMode) {
         qDebug() << "Setting up AI players for single player mode...";
@@ -514,6 +516,9 @@ int main(int argc, char *argv[])
     } else if (aiTestMode) {
         qDebug() << "Setting up AI players for AI test mode...";
 
+        // Create a single container for all AI debug widgets
+        debugContainer = new AIDebugContainer();
+
         // Create AI controller for ALL players (no human)
         for (int i = 0; i < players.size(); ++i) {
             Player *player = players[i];
@@ -534,16 +539,12 @@ int main(int argc, char *argv[])
 
             qDebug() << "Player" << player->getId() << "(" << player->getHomeProvinceName() << ") is AI-controlled";
 
-            // Create debug widget for AI in test mode (so we can see decision-making)
-            AIDebugWidget *debugWidget = new AIDebugWidget();
-            debugWidget->setAIPlayer(ai);
-            debugWidget->setWindowTitle(QString("AI Debug - Player %1 (%2)")
-                .arg(player->getId())
-                .arg(player->getHomeProvinceName()));
-            debugWidget->move(900 + i * 50, 100 + i * 50);
-            debugWidget->show();
-            debugWidgets.append(debugWidget);
+            // Add to the tabbed debug container
+            debugContainer->addAIPlayer(ai, player);
         }
+
+        // Show the single container with all AI tabs
+        debugContainer->show();
     }
 
     // When loading a saved game, restore AI controllers based on saved isAI flag
@@ -593,6 +594,7 @@ int main(int argc, char *argv[])
     // Clean up
     qDeleteAll(aiPlayers);
     qDeleteAll(debugWidgets);
+    delete debugContainer;
     qDeleteAll(players);
     delete infoWidget;
     delete mapWidget;
