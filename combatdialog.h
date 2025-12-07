@@ -19,6 +19,7 @@
 #include "mapwidget.h"
 #endif
 #include "laurollingdiewidget.h"
+#include "ai/combatsimulator.h"
 
 class AIPlayer;
 
@@ -47,6 +48,9 @@ public:
 
     // Legacy method for simple AI (no AIPlayer instance)
     void setupAIMode(bool attackerIsAI, bool defenderIsAI, int delayMs = 1000);
+
+    // Disable Caesar capture/takeover logic (for QuickBattle mode)
+    void setQuickBattleMode(bool enabled) { m_quickBattleMode = enabled; }
 
 protected:
     void done(int result) override;
@@ -157,6 +161,19 @@ private:
     // Track the button being attacked (for visual feedback)
     QPushButton *m_targetedButton = nullptr;
     QString m_targetedButtonOriginalStyle;
+
+    // Quick battle mode - skips Caesar capture/takeover dialogs
+    bool m_quickBattleMode = false;
+
+    // Combat simulator for win probability calculation
+    CombatSimulator m_combatSimulator;
+
+    // Win probability labels
+    QLabel *m_attackerOddsLabel = nullptr;
+    QLabel *m_defenderOddsLabel = nullptr;
+
+    // Update win probability display based on current troop counts
+    void updateWinProbabilityDisplay();
 };
 
 #endif // COMBATDIALOG_H

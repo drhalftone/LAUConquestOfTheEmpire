@@ -55,29 +55,19 @@ void CombatSimulator::initializeFromGame(Player *attackingPlayer,
 
 int CombatSimulator::calculateAttackerAdvantage() const
 {
-    // TODO: Mirror CombatDialog::calculateAttackerAdvantage()
-    // - Caesar: +2
-    // - Multiple generals: +1 per extra general
-    // - Cavalry: +1 if any
-    // - Catapults vs walls: negates wall bonus
-
-    int advantage = 0;
-
-    // Placeholder
-    return advantage;
+    // Catapults provide advantage (matches CombatDialog logic)
+    return m_state.attacker.catapults;
 }
 
 int CombatSimulator::calculateDefenderAdvantage() const
 {
-    // TODO: Mirror CombatDialog::calculateDefenderAdvantage()
-    // - Caesar: +2
-    // - Multiple generals: +1 per extra general
-    // - Cavalry: +1 if any
-    // - Fortified city: +2
+    int advantage = m_state.defender.catapults;
 
-    int advantage = 0;
+    // Fortified city gives +1 advantage
+    if (m_state.terrain.defenderHasFortifiedCity) {
+        advantage++;
+    }
 
-    // Placeholder
     return advantage;
 }
 
@@ -85,11 +75,12 @@ int CombatSimulator::getNetAdvantage(bool forAttacker) const
 {
     int attackerAdv = calculateAttackerAdvantage();
     int defenderAdv = calculateDefenderAdvantage();
+    int difference = attackerAdv - defenderAdv;
 
     if (forAttacker) {
-        return attackerAdv - defenderAdv;
+        return (difference > 0) ? difference : 0;  // Only positive for attacker
     } else {
-        return defenderAdv - attackerAdv;
+        return (difference < 0) ? -difference : 0;  // Only positive for defender
     }
 }
 
@@ -99,15 +90,156 @@ int CombatSimulator::getNetAdvantage(bool forAttacker) const
 
 CombatProbability CombatSimulator::calculateWinProbability(int numSimulations) const
 {
-    // TODO: Run Monte Carlo simulation
-    // - Simulate numSimulations complete battles
-    // - Track win/loss/draw outcomes
-    // - Track casualty statistics
-
     CombatProbability result;
 
-    // Placeholder - return quick estimate for now
-    return quickEstimate();
+    bool isSeaCombat = m_state.terrain.isSeaCombat;
+
+    // Edge cases - in sea combat, galleys matter; in land combat, only troops matter
+    bool attackerHasForces = m_state.attacker.hasTroops() || (isSeaCombat && m_state.attacker.hasGalleys());
+    bool defenderHasForces = m_state.defender.hasTroops() || (isSeaCombat && m_state.defender.hasGalleys());
+
+    if (!attackerHasForces) {
+        result.defenderWinChance = 1.0;
+        return result;
+    }
+    if (!defenderHasForces) {
+        result.attackerWinChance = 1.0;
+        return result;
+    }
+
+    int attackerWins = 0;
+    int defenderWins = 0;
+    double totalAttackerSurvivors = 0.0;
+    double totalDefenderSurvivors = 0.0;
+    double totalAttackerCasualties = 0.0;
+    double totalDefenderCasualties = 0.0;
+
+    // Hit thresholds: Infantry 4+, Cavalry 5+, Catapult 6+, Galley 3+ (no advantage)
+    const int INFANTRY_THRESHOLD = 4;
+    const int CAVALRY_THRESHOLD = 5;
+    const int CATAPULT_THRESHOLD = 6;
+    const int GALLEY_THRESHOLD = 3;
+
+    for (int sim = 0; sim < numSimulations; sim++) {
+        // Copy current state for simulation
+        ArmyComposition attacker = m_state.attacker;
+        ArmyComposition defender = m_state.defender;
+        bool defenderHasFortifiedCity = m_state.terrain.defenderHasFortifiedCity;
+
+        bool isAttackerTurn = true;
+
+        // Battle continues while both sides have forces
+        // In sea combat: troops must be killed before galleys can be targeted
+        auto hasForces = [isSeaCombat](const ArmyComposition &army) {
+            return army.hasTroops() || (isSeaCombat && army.hasGalleys());
+        };
+
+        while (hasForces(attacker) && hasForces(defender)) {
+            // Calculate current advantage (catapult difference)
+            int attackerCatapults = attacker.catapults;
+            int defenderCatapults = defender.catapults + (defenderHasFortifiedCity ? 1 : 0);
+
+            if (isAttackerTurn) {
+                // Attacker attacks defender
+                int advantage = attackerCatapults - defenderCatapults;
+                advantage = (advantage > 0) ? advantage : 0;
+
+                // Choose target: catapult > cavalry > infantry > galley (only in sea combat)
+                int threshold;
+                int *targetCount;
+                bool targetingGalley = false;
+
+                if (defender.catapults > 0) {
+                    threshold = CATAPULT_THRESHOLD;
+                    targetCount = &defender.catapults;
+                } else if (defender.cavalry > 0) {
+                    threshold = CAVALRY_THRESHOLD;
+                    targetCount = &defender.cavalry;
+                } else if (defender.infantry > 0) {
+                    threshold = INFANTRY_THRESHOLD;
+                    targetCount = &defender.infantry;
+                } else if (isSeaCombat && defender.galleys > 0) {
+                    // Galleys can only be targeted after all troops are gone
+                    threshold = GALLEY_THRESHOLD;
+                    targetCount = &defender.galleys;
+                    targetingGalley = true;
+                } else {
+                    break;  // No valid targets
+                }
+
+                // Galleys don't use advantage modifier
+                int roll = (rand() % 6) + 1 + (targetingGalley ? 0 : advantage);
+                if (roll >= threshold) {
+                    (*targetCount)--;
+                }
+            } else {
+                // Defender attacks attacker
+                int advantage = defenderCatapults - attackerCatapults;
+                advantage = (advantage > 0) ? advantage : 0;
+
+                // Choose target: catapult > cavalry > infantry > galley (only in sea combat)
+                int threshold;
+                int *targetCount;
+                bool targetingGalley = false;
+
+                if (attacker.catapults > 0) {
+                    threshold = CATAPULT_THRESHOLD;
+                    targetCount = &attacker.catapults;
+                } else if (attacker.cavalry > 0) {
+                    threshold = CAVALRY_THRESHOLD;
+                    targetCount = &attacker.cavalry;
+                } else if (attacker.infantry > 0) {
+                    threshold = INFANTRY_THRESHOLD;
+                    targetCount = &attacker.infantry;
+                } else if (isSeaCombat && attacker.galleys > 0) {
+                    // Galleys can only be targeted after all troops are gone
+                    threshold = GALLEY_THRESHOLD;
+                    targetCount = &attacker.galleys;
+                    targetingGalley = true;
+                } else {
+                    break;  // No valid targets
+                }
+
+                // Galleys don't use advantage modifier
+                int roll = (rand() % 6) + 1 + (targetingGalley ? 0 : advantage);
+                if (roll >= threshold) {
+                    (*targetCount)--;
+                }
+            }
+
+            isAttackerTurn = !isAttackerTurn;
+        }
+
+        // Record outcome
+        if (hasForces(attacker)) {
+            attackerWins++;
+            totalAttackerSurvivors += attacker.totalTroops() + (isSeaCombat ? attacker.galleys : 0);
+        } else {
+            defenderWins++;
+            totalDefenderSurvivors += defender.totalTroops() + (isSeaCombat ? defender.galleys : 0);
+        }
+
+        int attackerStartForces = m_state.attacker.totalTroops() + (isSeaCombat ? m_state.attacker.galleys : 0);
+        int attackerEndForces = attacker.totalTroops() + (isSeaCombat ? attacker.galleys : 0);
+        int defenderStartForces = m_state.defender.totalTroops() + (isSeaCombat ? m_state.defender.galleys : 0);
+        int defenderEndForces = defender.totalTroops() + (isSeaCombat ? defender.galleys : 0);
+
+        totalAttackerCasualties += attackerStartForces - attackerEndForces;
+        totalDefenderCasualties += defenderStartForces - defenderEndForces;
+    }
+
+    // Calculate probabilities
+    result.attackerWinChance = (double)attackerWins / numSimulations;
+    result.defenderWinChance = (double)defenderWins / numSimulations;
+    result.drawChance = 0.0;  // Mutual destruction not possible in alternating combat
+
+    // Calculate expected outcomes
+    result.expectedAttackerCasualties = totalAttackerCasualties / numSimulations;
+    result.expectedDefenderCasualties = totalDefenderCasualties / numSimulations;
+    result.expectedAttackerSurvivors = (attackerWins > 0) ? totalAttackerSurvivors / attackerWins : 0;
+    result.expectedDefenderSurvivors = (defenderWins > 0) ? totalDefenderSurvivors / defenderWins : 0;
+
+    return result;
 }
 
 CombatProbability CombatSimulator::quickEstimate() const
@@ -162,8 +294,8 @@ void CombatSimulator::recordCasualty(bool isAttacker, const QString &troopType)
 
 CombatProbability CombatSimulator::recalculateProbability() const
 {
-    // Recalculate based on current (post-casualty) state
-    return quickEstimate();
+    // Recalculate based on current (post-casualty) state using Monte Carlo
+    return calculateWinProbability(1000);
 }
 
 // ============================================================================

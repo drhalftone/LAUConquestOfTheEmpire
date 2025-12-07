@@ -356,6 +356,12 @@ QWidget* CombatDialog::createAttackingSide()
     m_attackingHeader->setAlignment(Qt::AlignCenter);
     layout->addWidget(m_attackingHeader);
 
+    // Win probability label
+    m_attackerOddsLabel = new QLabel("Win: --%");
+    m_attackerOddsLabel->setStyleSheet("font-size: 10pt; color: #006400;");
+    m_attackerOddsLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(m_attackerOddsLabel);
+
     // Scroll area for legions
     QScrollArea *scrollArea = new QScrollArea();
     scrollArea->setWidgetResizable(true);
@@ -424,6 +430,12 @@ QWidget* CombatDialog::createDefendingSide()
     m_defendingHeader->setStyleSheet("font-weight: bold; font-size: 12pt;");
     m_defendingHeader->setAlignment(Qt::AlignCenter);
     layout->addWidget(m_defendingHeader);
+
+    // Win probability label
+    m_defenderOddsLabel = new QLabel("Win: --%");
+    m_defenderOddsLabel->setStyleSheet("font-size: 10pt; color: #8B0000;");
+    m_defenderOddsLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(m_defenderOddsLabel);
 
     // Scroll area for legions
     QScrollArea *scrollArea = new QScrollArea();
@@ -1052,7 +1064,15 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         setDefendingButtonsEnabled(true);
         setAttackingButtonsEnabled(false);
         if (m_attackerIsAI) {
-            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+            // Check if AI should retreat (win chance below 20% and retreat is allowed)
+            CombatProbability prob = m_combatSimulator.calculateWinProbability(1000);
+            bool canRetreat = m_retreatButton && m_retreatButton->isEnabled();
+            if (canRetreat && prob.attackerWinChance < 0.20) {
+                qDebug() << "AI attacker retreating - win chance:" << (prob.attackerWinChance * 100) << "%";
+                QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::onRetreatClicked);
+            } else {
+                QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+            }
         }
 
     } else if (isDefendingGalley) {
@@ -1134,7 +1154,15 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
         setDefendingButtonsEnabled(true);
         setAttackingButtonsEnabled(false);
         if (m_attackerIsAI) {
-            QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+            // Check if AI should retreat (win chance below 20% and retreat is allowed)
+            CombatProbability prob = m_combatSimulator.calculateWinProbability(1000);
+            bool canRetreat = m_retreatButton && m_retreatButton->isEnabled();
+            if (canRetreat && prob.attackerWinChance < 0.20) {
+                qDebug() << "AI attacker retreating - win chance:" << (prob.attackerWinChance * 100) << "%";
+                QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::onRetreatClicked);
+            } else {
+                QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+            }
         }
     }
 }
@@ -1316,6 +1344,9 @@ void CombatDialog::updateAdvantageDisplay()
         }
         m_defendingHeader->setText(headerText);
     }
+
+    // Update win probability display
+    updateWinProbabilityDisplay();
 }
 
 bool CombatDialog::resolveAttack(GamePiece::Type targetType, int attackerAdvantage, int dieRoll)
@@ -1434,7 +1465,7 @@ bool CombatDialog::checkCombatEnd()
         }
 
         // If Caesar was defeated, complete takeover occurs
-        if (!defeatedCaesars.isEmpty()) {
+        if (!defeatedCaesars.isEmpty() && !m_quickBattleMode) {
             qDebug() << "Caesar captured! Complete takeover initiated.";
 
             QMessageBox captureMsg(this);
@@ -2038,4 +2069,87 @@ void CombatDialog::done(int result)
         m_rollingDie->hide();
     }
     QDialog::done(result);
+}
+
+void CombatDialog::updateWinProbabilityDisplay()
+{
+    // Count troops from button maps (reflects current state after casualties)
+    ArmyComposition attacker;
+    ArmyComposition defender;
+
+    for (GamePiece *piece : m_attackingTroopButtons.values()) {
+        if (!piece) continue;
+        switch (piece->getType()) {
+            case GamePiece::Type::Infantry: attacker.infantry++; break;
+            case GamePiece::Type::Cavalry: attacker.cavalry++; break;
+            case GamePiece::Type::Catapult: attacker.catapults++; break;
+            default: break;
+        }
+    }
+
+    for (GamePiece *piece : m_defendingTroopButtons.values()) {
+        if (!piece) continue;
+        switch (piece->getType()) {
+            case GamePiece::Type::Infantry: defender.infantry++; break;
+            case GamePiece::Type::Cavalry: defender.cavalry++; break;
+            case GamePiece::Type::Catapult: defender.catapults++; break;
+            default: break;
+        }
+    }
+
+    // Count galleys from galley button maps
+    attacker.galleys = m_attackingGalleyButtons.size();
+    defender.galleys = m_defendingGalleyButtons.size();
+
+    // Set up terrain
+    CombatTerrain terrain;
+    terrain.territoryName = m_combatTerritoryName;
+    terrain.defenderHasFortifiedCity = false;
+    terrain.isSeaCombat = false;
+
+    // Check if this is sea combat
+    if (m_mapWidget && m_mapWidget->getGraph()) {
+        terrain.isSeaCombat = m_mapWidget->getGraph()->isSeaTerritory(m_combatTerritoryName);
+    }
+
+    // Check for fortified city
+    if (m_mapWidget && m_defendingPlayer) {
+        City *city = m_defendingPlayer->getCityAtTerritory(m_combatTerritoryName);
+        if (city && city->isFortified()) {
+            terrain.defenderHasFortifiedCity = true;
+        }
+    }
+
+    // Initialize simulator and calculate probabilities
+    m_combatSimulator.initializeBattle(attacker, defender, terrain);
+    CombatProbability prob = m_combatSimulator.calculateWinProbability(1000);
+
+    // Update labels
+    if (m_attackerOddsLabel) {
+        int attackerPct = qRound(prob.attackerWinChance * 100);
+        m_attackerOddsLabel->setText(QString("Win: %1%").arg(attackerPct));
+
+        // Color based on probability
+        if (attackerPct >= 60) {
+            m_attackerOddsLabel->setStyleSheet("font-size: 10pt; color: #006400; font-weight: bold;");  // Dark green
+        } else if (attackerPct >= 40) {
+            m_attackerOddsLabel->setStyleSheet("font-size: 10pt; color: #B8860B;");  // Dark goldenrod
+        } else {
+            m_attackerOddsLabel->setStyleSheet("font-size: 10pt; color: #8B0000;");  // Dark red
+        }
+    }
+
+    if (m_defenderOddsLabel) {
+        int defenderPct = qRound(prob.defenderWinChance * 100);
+        m_defenderOddsLabel->setText(QString("Win: %1%").arg(defenderPct));
+
+        // Color based on probability
+        if (defenderPct >= 60) {
+            m_defenderOddsLabel->setStyleSheet("font-size: 10pt; color: #006400; font-weight: bold;");  // Dark green
+        } else if (defenderPct >= 40) {
+            m_defenderOddsLabel->setStyleSheet("font-size: 10pt; color: #B8860B;");  // Dark goldenrod
+        } else {
+            m_defenderOddsLabel->setStyleSheet("font-size: 10pt; color: #8B0000;");  // Dark red
+        }
+    }
 }

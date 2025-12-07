@@ -684,3 +684,61 @@ Scoring priorities:
 - **Performance metrics** (territories/turn, combat win rate)
 - **Multiple AI difficulties** (Easy/Medium/Hard)
 - **Neural network integration** for learned strategies
+
+---
+
+## Combat Simulator Integration (December 2024)
+
+The `CombatSimulator` class (`ai/combatsimulator.h`) provides Monte Carlo simulation for predicting combat outcomes. This is now integrated into:
+
+### 1. CombatDialog - Real-time Odds Display
+
+The combat dialog shows live win probabilities for both sides:
+- Updates after each casualty
+- Color-coded (green ≥60%, yellow 40-60%, red <40%)
+- Factors in troop composition, catapult advantage, and fortified cities
+
+### 2. AI Retreat Decision
+
+AI attackers now make intelligent retreat decisions:
+
+```cpp
+// In combatdialog.cpp - when switching to attacker's turn
+if (m_attackerIsAI) {
+    CombatProbability prob = m_combatSimulator.calculateWinProbability(1000);
+    if (canRetreat && prob.attackerWinChance < 0.20) {
+        // AI retreats when win chance falls below 20%
+        QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::onRetreatClicked);
+    }
+}
+```
+
+### 3. Pre-Battle Analysis (QuickBattle)
+
+Before combat begins, predicted odds are shown:
+
+```cpp
+CombatSimulator simulator;
+simulator.initializeBattle(attackerArmy, defenderArmy, terrain);
+CombatProbability prob = simulator.calculateWinProbability(1000);
+// Display: "Attacker: 62%, Defender: 38%"
+```
+
+### Key Classes
+
+| Class | Purpose |
+|-------|---------|
+| `ArmyComposition` | Holds troop counts (infantry, cavalry, catapults, galleys) |
+| `CombatTerrain` | Territory info (fortified city, sea combat flag) |
+| `CombatProbability` | Results (win chances, expected casualties/survivors) |
+| `CombatSimulator` | Monte Carlo simulation engine |
+
+### Simulation Logic
+
+1. Copies army compositions for each simulation run
+2. Alternates attacker/defender turns
+3. Targets optimally: Catapults → Cavalry → Infantry → Galleys
+4. Applies advantage modifier (catapults - defender fortification)
+5. Tracks wins and average survivors across 1000 runs
+
+See `COMBAT_INTEGRATION_PLAN.md` for full details.

@@ -1,6 +1,4 @@
-QT       += core gui
-
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+QT       += core gui multimedia openglwidgets widgets
 
 CONFIG += c++17
 
@@ -21,7 +19,14 @@ SOURCES += \
     laurollingdiewidget.cpp \
     mapwidget.cpp \
     mapgraph.cpp \
-    aiplayer.cpp
+    aiplayer.cpp \
+    gamelog.cpp \
+    gamemapwidget.cpp \
+    moveenumeratorwidget.cpp \
+    ai/combatsimulator.cpp \
+    ai/aidecisionmaker.cpp \
+    ai/reachabilitycalculator.cpp \
+    ai/moveenumerator.cpp
 
 HEADERS += \
     quickbattlesplash.h \
@@ -35,7 +40,14 @@ HEADERS += \
     mapwidget.h \
     mapgraph.h \
     aiplayer.h \
-    playerinfowidget.h
+    playerinfowidget.h \
+    gamelog.h \
+    gamemapwidget.h \
+    moveenumeratorwidget.h \
+    ai/combatsimulator.h \
+    ai/aidecisionmaker.h \
+    ai/reachabilitycalculator.h \
+    ai/moveenumerator.h
 
 RESOURCES += \
     resources.qrc

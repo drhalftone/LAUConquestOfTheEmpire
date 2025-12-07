@@ -12,6 +12,8 @@ PlayerInfoWidget::~PlayerInfoWidget() {}
 void PlayerInfoWidget::closeEvent(QCloseEvent *event) { event->accept(); }
 void PlayerInfoWidget::handleTerritoryRightClick(const QString &, const QPoint &, QChar) {}
 void PlayerInfoWidget::onEndTurnClicked() {}
+void PlayerInfoWidget::onReachabilityClicked() {}
+void PlayerInfoWidget::onRiskClicked() {}
 
 // AI mode stubs - not used for combat-only testing
 void PlayerInfoWidget::setAIAutoMode(bool, int) {}
@@ -25,3 +27,5 @@ QStringList PlayerInfoWidget::getDisplayedTerritories(QChar) const { return QStr
 int PlayerInfoWidget::getDisplayedPieceCount(QChar) const { return 0; }
 QList<PlayerInfoWidget::DisplayedLeaderInfo> PlayerInfoWidget::getDisplayedLeaders(QChar) const { return {}; }
 QList<PlayerInfoWidget::MoveOption> PlayerInfoWidget::getMovesForLeader(GamePiece *) const { return {}; }
+bool PlayerInfoWidget::hasEnemyPiecesAt(const QString &, Player *) const { return false; }
+void PlayerInfoWidget::updateAllPlayers() {}

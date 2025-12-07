@@ -14,6 +14,7 @@
 #include "mapwidget.h"
 #include "building.h"
 #include "aiplayer.h"
+#include "ai/combatsimulator.h"
 
 // Create game pieces from purchase result
 void createPiecesFromPurchase(Player *player, const PurchaseResult &result, const QString &territory)
@@ -179,7 +180,8 @@ int main(int argc, char *argv[])
                 'A', budget, 1,
                 {}, {}, {},  // No cities/fortifications/galleys
                 0, 99, 99, 99, 0,  // Unlimited troops available
-                nullptr, true  // combatUnitsOnly = true
+                {}, nullptr, "Battlefield",  // No cities to destroy, no map, home province
+                nullptr, true  // parent = nullptr, combatUnitsOnly = true
             );
             attackerDialog.setWindowTitle("Attacker - Build Your Army");
 
@@ -235,9 +237,10 @@ int main(int argc, char *argv[])
         {
             PurchaseDialog defenderDialog(
                 'D', budget, 1,
-                {}, {}, {},
-                0, 99, 99, 99, 0,
-                nullptr, true
+                {}, {}, {},  // No cities/fortifications/galleys
+                0, 99, 99, 99, 0,  // Unlimited troops available
+                {}, nullptr, "Battlefield",  // No cities to destroy, no map, home province
+                nullptr, true  // parent = nullptr, combatUnitsOnly = true
             );
             defenderDialog.setWindowTitle("Defender - Build Your Army");
 
@@ -295,7 +298,7 @@ int main(int argc, char *argv[])
             defender->addCity(city);
         }
 
-        // Show army summary before combat
+        // Show army summary before combat with predicted win probability
         qDebug() << "About to show army summary";
         QString attackerSummary = QString("Attacker: 1 General, %1 Infantry, %2 Cavalry, %3 Catapults")
             .arg(attackerPurchase.infantry)
@@ -310,9 +313,36 @@ int main(int argc, char *argv[])
             .arg(defenderHasCity ? ", City" : "")
             .arg(defenderHasFortification ? " (Fortified)" : "");
 
+        // Use CombatSimulator to predict win probability
+        ArmyComposition attackerArmy;
+        attackerArmy.infantry = attackerPurchase.infantry;
+        attackerArmy.cavalry = attackerPurchase.cavalry;
+        attackerArmy.catapults = attackerPurchase.catapults;
+
+        ArmyComposition defenderArmy;
+        defenderArmy.infantry = defenderPurchase.infantry;
+        defenderArmy.cavalry = defenderPurchase.cavalry;
+        defenderArmy.catapults = defenderPurchase.catapults;
+
+        CombatTerrain terrain;
+        terrain.territoryName = "Battlefield";
+        terrain.defenderHasFortifiedCity = defenderHasFortification;
+        terrain.isSeaCombat = false;
+
+        CombatSimulator simulator;
+        simulator.initializeBattle(attackerArmy, defenderArmy, terrain);
+        CombatProbability prob = simulator.calculateWinProbability(1000);
+
+        int attackerWinPct = qRound(prob.attackerWinChance * 100);
+        int defenderWinPct = qRound(prob.defenderWinChance * 100);
+
+        QString predictionText = QString("\nPredicted Odds:\n  Attacker: %1%\n  Defender: %2%")
+            .arg(attackerWinPct)
+            .arg(defenderWinPct);
+
         QMessageBox battleMsg;
         battleMsg.setWindowTitle("Battle Starting");
-        battleMsg.setText(QString("%1\n%2\n\nLet the battle begin!").arg(attackerSummary).arg(defenderSummary));
+        battleMsg.setText(QString("%1\n%2%3\n\nLet the battle begin!").arg(attackerSummary).arg(defenderSummary).arg(predictionText));
         battleMsg.setIconPixmap(QPixmap(":/images/combatIcon.png").scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
         // Auto-close after delay if both players are AI
@@ -325,6 +355,7 @@ int main(int argc, char *argv[])
         // Run combat
         qDebug() << "Creating CombatDialog...";
         CombatDialog combatDialog(attacker, defender, "Battlefield", &mapWidget);
+        combatDialog.setQuickBattleMode(true);  // Disable Caesar capture/takeover dialogs
         qDebug() << "CombatDialog created, about to exec()...";
 
         // Create AIPlayer instances if AI controlled

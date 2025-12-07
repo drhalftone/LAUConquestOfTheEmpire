@@ -861,6 +861,14 @@ void PurchaseDialog::onPurchaseClicked()
 
 void PurchaseDialog::onCityDestructionToggled()
 {
+    // In combat-only mode, always allow troop purchases (no city requirement)
+    if (m_combatUnitsOnly) {
+        if (m_troopsGroupBox) {
+            m_troopsGroupBox->setEnabled(true);
+        }
+        return;
+    }
+
     // Check if home city exists or is being destroyed
     bool hasHomeCity = false;
     bool destroyingHomeCity = false;

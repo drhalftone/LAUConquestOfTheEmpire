@@ -155,21 +155,6 @@ private:
     QVector<Piece*> getPiecesAtPosition(const Position &pos, QChar player);
     void createMenuBar();
 
-    // === Grid-based functions (internal use only) ===
-    // External code should use MapGraph and territory names instead
-    int rows() const { return m_rows; }
-    int cols() const { return m_cols; }
-    void setMapSize(int rows, int cols);
-    QString getTerritoryNameAt(int row, int col) const;
-    QChar getTerritoryOwnerAt(int row, int col) const;
-    int getTerritoryValueAt(int row, int col) const;
-    bool isSeaTerritory(int row, int col) const;
-    QList<Position> getAdjacentSeaTerritories(const Position &pos) const;
-    bool hasEnemyPiecesAt(int row, int col, QChar currentPlayer) const;
-    void setTerritoryAt(int row, int col, const QString &name, int value, bool isLand);
-    void removeCityAt(int row, int col);
-    void removeFortificationAt(int row, int col);
-
     // Dynamic map dimensions
     int m_rows;
     int m_cols;

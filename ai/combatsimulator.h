@@ -16,13 +16,15 @@ struct ArmyComposition {
     int infantry = 0;
     int cavalry = 0;
     int catapults = 0;
+    int galleys = 0;           // Number of galleys (only count in sea combat)
     int generals = 0;          // Number of generals (not Caesar)
     bool hasCaesar = false;
 
     int totalTroops() const { return infantry + cavalry + catapults; }
-    int totalPieces() const { return totalTroops() + generals + (hasCaesar ? 1 : 0); }
+    int totalPieces() const { return totalTroops() + galleys + generals + (hasCaesar ? 1 : 0); }
     bool hasTroops() const { return totalTroops() > 0; }
     bool hasLeaders() const { return generals > 0 || hasCaesar; }
+    bool hasGalleys() const { return galleys > 0; }
 };
 
 /**

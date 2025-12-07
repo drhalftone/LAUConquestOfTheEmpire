@@ -238,3 +238,115 @@ The `executeCombatPhase()` can be removed or left as a no-op since combat happen
 - `quickbattle_main.cpp` - Reference implementation for combat flow
 - `combatdialog.cpp` - Combat UI and resolution logic
 - `aiplayer.cpp` - AI decision making
+- `ai/combatsimulator.cpp` - Monte Carlo win probability simulation
+
+---
+
+## Combat Simulator (December 2024)
+
+### Overview
+
+The `CombatSimulator` class provides Monte Carlo simulation to predict combat outcomes based on army composition. It is integrated into both the `CombatDialog` (for real-time odds display) and `QuickBattle` mini-game.
+
+### Features
+
+1. **Monte Carlo Win Probability**: Runs 1000 simulations to estimate win chances
+2. **Real-time Odds Display**: Shows "Win: XX%" for both attacker and defender in the combat dialog header
+3. **Dynamic Updates**: Odds recalculate after each casualty
+4. **AI Retreat Logic**: AI attacker retreats when win chance falls below 20%
+5. **Galley Support**: Simulates naval combat with proper targeting order (troops before galleys)
+
+### Hit Probabilities (d6 + advantage)
+
+| Target | Threshold | Base Hit Probability | Expected Rolls |
+|--------|-----------|---------------------|----------------|
+| Infantry | 4+ | 50% (3/6) | 2 |
+| Cavalry | 5+ | 33% (2/6) | 3 |
+| Catapult | 6+ | 17% (1/6) | 6 |
+| Galley | 3+ | 67% (4/6) | 1.5 |
+
+**Note**: Galleys ignore the advantage modifier.
+
+### Advantage Calculation
+
+- Each catapult provides +1 advantage
+- Defender in fortified city gets +1 advantage
+- Net advantage = max(0, attacker_advantage - defender_advantage)
+
+### Targeting Priority
+
+The simulation uses optimal targeting order:
+1. **Catapults first** - Removes enemy advantage
+2. **Cavalry second** - Higher economic damage per roll (cost/rolls)
+3. **Infantry third** - Easiest to kill but lowest value
+4. **Galleys last** - Only targetable after all troops eliminated (sea combat only)
+
+### Integration Points
+
+#### CombatDialog (`combatdialog.cpp`)
+
+```cpp
+// Member variables
+CombatSimulator m_combatSimulator;
+QLabel *m_attackerOddsLabel;
+QLabel *m_defenderOddsLabel;
+
+// Called after each casualty via updateAdvantageDisplay()
+void updateWinProbabilityDisplay();
+```
+
+The odds labels are color-coded:
+- **Green (≥60%)** - Favorable odds
+- **Yellow (40-60%)** - Even odds
+- **Red (<40%)** - Unfavorable odds
+
+#### AI Retreat Logic (`combatdialog.cpp:1066-1075`)
+
+```cpp
+if (m_attackerIsAI) {
+    CombatProbability prob = m_combatSimulator.calculateWinProbability(1000);
+    bool canRetreat = m_retreatButton && m_retreatButton->isEnabled();
+    if (canRetreat && prob.attackerWinChance < 0.20) {
+        QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::onRetreatClicked);
+    } else {
+        QTimer::singleShot(m_aiDelayMs, this, &CombatDialog::makeAIMove);
+    }
+}
+```
+
+#### QuickBattle (`quickbattle_main.cpp`)
+
+Pre-battle odds are displayed in the "Battle Starting" message box:
+
+```cpp
+CombatSimulator simulator;
+simulator.initializeBattle(attackerArmy, defenderArmy, terrain);
+CombatProbability prob = simulator.calculateWinProbability(1000);
+```
+
+### Quick Battle Mode
+
+The `CombatDialog` has a `setQuickBattleMode(true)` option that:
+- Skips the Caesar capture/takeover dialog
+- Useful for isolated combat testing without game-wide side effects
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ai/combatsimulator.h` | Added `galleys` field to `ArmyComposition`, `isSeaCombat` to `CombatTerrain` |
+| `ai/combatsimulator.cpp` | Implemented full Monte Carlo simulation with galley support |
+| `combatdialog.h` | Added `CombatSimulator`, odds labels, `setQuickBattleMode()` |
+| `combatdialog.cpp` | Added `updateWinProbabilityDisplay()`, AI retreat logic |
+| `quickbattle_main.cpp` | Added pre-battle odds display, quick battle mode |
+| `purchasedialog.cpp` | Fixed combat-only mode to enable troop purchases |
+| `QuickBattle.pro` | Added missing source files for AI modules |
+
+### MATLAB Validation Script
+
+A MATLAB script (`combat_simulation.m`) was created to validate the Monte Carlo results:
+
+```matlab
+% Simulates battles to compare catapult vs infantry/cavalry effectiveness
+% Results confirm targeting priority: Catapults > Cavalry > Infantry
+```
