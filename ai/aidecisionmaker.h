@@ -273,6 +273,20 @@ private:
      */
     void assignTroopsToGeneral(GeneralAssignment &assignment, Player *player, int maxTroops, bool requiresMultiHop = false);
 
+    /**
+     * @brief Calculate win probability for attacking a territory using CombatSimulator
+     * @param attackerBreakdown Breakdown of attacker's forces by unit type
+     * @param territory Target territory to attack
+     * @param player The attacking player
+     * @param allPlayers All players (to identify defenders)
+     * @return Win probability (0.0 to 1.0)
+     */
+    double calculateAttackWinProbability(
+        int attackerInfantry, int attackerCavalry, int attackerCatapults,
+        const QString &territory,
+        Player *player,
+        const QList<Player*> &allPlayers);
+
     // Scoring weights (can be tuned)
     int m_territoryValueWeight = 10;   // Points per territory value (5 or 10)
     int m_safetyBonus = 50;            // Bonus for SAFE moves

@@ -6,6 +6,7 @@
 #include <QMap>
 #include "reachabilitycalculator.h"
 #include "moveenumerator.h"
+#include "combatsimulator.h"
 
 // Forward declarations
 class Player;
@@ -13,15 +14,26 @@ class GamePiece;
 class MapGraph;
 
 /**
+ * @brief Type of kill shot opportunity
+ */
+enum class KillShotType {
+    CaesarKill,      // Attack Caesar directly (eliminates player)
+    HomeCityCapture  // Capture home city (prevents troop purchases)
+};
+
+/**
  * @brief Result of analyzing a potential kill shot opportunity
  */
 struct KillShotOpportunity {
-    Player *targetPlayer = nullptr;          // The player whose home we can attack
-    QString targetHomeCity;                  // Name of target home territory
+    KillShotType type = KillShotType::CaesarKill;  // Type of opportunity
+    Player *targetPlayer = nullptr;          // The player we're attacking
+    QString targetTerritory;                 // Territory to attack (Caesar location or home city)
+    QString caesarLocation;                  // Where Caesar actually is
+    QString homeCity;                        // Where home city is
     int ourMaxForce = 0;                     // Maximum troops we can concentrate
     int enemyDefenders = 0;                  // Enemy troops defending
     bool enemyHasFortifiedCity = false;      // Does defender have walls?
-    bool enemyHasCaesar = false;             // Is Caesar at home?
+    bool caesarAtTarget = false;             // Is Caesar at the target territory?
     double winProbability = 0.0;             // Estimated win chance (0.0 - 1.0)
     double expectedCasualties = 0.0;         // Expected troop losses
     int turnsToReach = 1;                    // How many turns to reach (1 = this turn)
@@ -33,9 +45,16 @@ struct KillShotOpportunity {
     int cavalryCount = 0;
     int catapultCount = 0;
 
+    // Enemy unit breakdown
+    int enemyInfantryCount = 0;
+    int enemyCavalryCount = 0;
+    int enemyCatapultCount = 0;
+
     bool isViable() const { return targetPlayer != nullptr && winProbability > 0.5; }
     bool isHighConfidence() const { return winProbability >= 0.7; }
     bool isOverwhelming() const { return winProbability >= 0.85; }
+    bool isCaesarKill() const { return type == KillShotType::CaesarKill; }
+    bool isHomeCityCapture() const { return type == KillShotType::HomeCityCapture; }
 };
 
 /**
@@ -48,8 +67,19 @@ struct KillShotThreat {
     bool weHaveFortifiedCity = false;        // Do we have walls?
     bool caesarAtHome = false;               // Is our Caesar at home?
     double enemyWinProbability = 0.0;        // Enemy's chance of winning
+    double expectedEnemyCasualties = 0.0;    // Expected casualties for enemy
     int turnsUntilThreat = 1;                // How soon can they attack (1 = this turn)
     QString reason;                          // Explanation for debugging
+
+    // Enemy unit breakdown
+    int enemyInfantryCount = 0;
+    int enemyCavalryCount = 0;
+    int enemyCatapultCount = 0;
+
+    // Our unit breakdown
+    int ourInfantryCount = 0;
+    int ourCavalryCount = 0;
+    int ourCatapultCount = 0;
 
     bool isCritical() const { return threateningPlayer != nullptr && enemyWinProbability > 0.5; }
     bool isUrgent() const { return enemyWinProbability >= 0.7 && turnsUntilThreat <= 1; }
@@ -164,33 +194,25 @@ public:
 
 private:
     /**
-     * @brief Estimate win probability for a battle
+     * @brief Run Monte Carlo simulation to get combat probability
      *
-     * TODO: This will be replaced by a proper CombatSimulator class
-     * that runs Monte Carlo simulations of actual combat.
-     * For now, uses simple force ratio estimation.
+     * Uses CombatSimulator with proper unit breakdowns for accurate
+     * win probability and expected casualty calculations.
      *
-     * @param attackerTroops Number of attacking troops
-     * @param defenderTroops Number of defending troops
-     * @param defenderHasWalls Does defender have fortified city?
-     * @param attackerHasCatapults Number of catapults attacker has
-     * @return Estimated win probability (0.0 - 1.0)
+     * @param attackerBreakdown Attacker's unit composition
+     * @param defenderBreakdown Defender's unit composition
+     * @param defenderHasFortifiedCity Does defender have fortified city?
+     * @return CombatProbability with win chances and expected casualties
      */
-    double estimateWinProbability(
-        int attackerTroops,
-        int defenderTroops,
-        bool defenderHasWalls,
-        int attackerCatapults = 0);
+    CombatProbability simulateCombat(
+        const ReachabilityBreakdown &attackerBreakdown,
+        const ReachabilityBreakdown &defenderBreakdown,
+        bool defenderHasFortifiedCity);
 
     /**
-     * @brief Estimate expected casualties in a battle
-     *
-     * TODO: Will be replaced by CombatSimulator
+     * @brief Count defender's unit breakdown at a territory
      */
-    double estimateCasualties(
-        int attackerTroops,
-        int defenderTroops,
-        bool defenderHasWalls);
+    ReachabilityBreakdown countDefenderBreakdown(const QString &territory, Player *player);
 
     /**
      * @brief Count troops at a territory for a player

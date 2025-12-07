@@ -742,3 +742,38 @@ CombatProbability prob = simulator.calculateWinProbability(1000);
 5. Tracks wins and average survivors across 1000 runs
 
 See `COMBAT_INTEGRATION_PLAN.md` for full details.
+
+### 4. AI Attack Decision Making (December 2024)
+
+The `AIDecisionMaker` now uses `CombatSimulator` to validate attacks before committing:
+
+#### Single-General Attacks (`scoreMove()`)
+
+Each attack move is evaluated for win probability:
+- **< 50%**: -500 penalty (effectively rejects the attack)
+- **50-70%**: Acceptable odds, no adjustment
+- **≥ 70%**: +50 bonus for good odds
+
+```cpp
+double winProb = calculateAttackWinProbability(
+    ourInfantry, ourCavalry, ourCatapults,
+    destination, player, allPlayers);
+
+if (winProb < 0.50) {
+    move.score += -500;  // Discourage low probability attacks
+}
+```
+
+#### Multi-General Coordinated Attacks (`identifyTargets()`)
+
+For attack targets, the combined force of all generals is considered:
+1. Calculate total force that can reach the target from heat map
+2. Estimate unit breakdown proportionally
+3. Only add target if combined win probability ≥ 50%
+
+This allows multiple generals to coordinate attacks on well-defended positions where individual attacks would fail.
+
+**Example**: Enemy has 4 infantry
+- General A alone (2 troops): ~30% win → rejected
+- General B alone (3 troops): ~45% win → rejected
+- Combined (5 troops): ~65% win → approved as coordinated attack

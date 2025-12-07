@@ -350,3 +350,95 @@ A MATLAB script (`combat_simulation.m`) was created to validate the Monte Carlo 
 % Simulates battles to compare catapult vs infantry/cavalry effectiveness
 % Results confirm targeting priority: Catapults > Cavalry > Infantry
 ```
+
+---
+
+## AI Attack Decision Win Probability (December 2024)
+
+### Overview
+
+The AI decision-making system now incorporates win probability calculations to make smarter attack decisions. The AI will only attack territories where it has at least a 50% chance of winning.
+
+### Key Features
+
+1. **Single-General Attack Validation**: Each individual attack move is scored with win probability
+2. **Multi-General Attack Planning**: Combined force projection is considered when planning coordinated attacks
+3. **Dynamic Scoring**: Attack targets receive score bonuses/penalties based on win probability
+
+### Implementation Details
+
+#### Win Probability Helper (`ai/aidecisionmaker.cpp`)
+
+```cpp
+double AIDecisionMaker::calculateAttackWinProbability(
+    int attackerInfantry, int attackerCavalry, int attackerCatapults,
+    const QString &territory,
+    Player *player,
+    const QList<Player*> &allPlayers);
+```
+
+- Counts defender units and checks for fortified city
+- Runs 500 Monte Carlo simulations (reduced from 1000 for speed)
+- Returns probability from 0.0 to 1.0
+
+#### Single-General Attacks (`scoreMove()`)
+
+When scoring an attack on a defended territory:
+
+| Win Probability | Score Adjustment | Behavior |
+|-----------------|------------------|----------|
+| < 50% | -500 penalty | Effectively invalidates the attack |
+| 50-70% | No adjustment | Acceptable odds |
+| ≥ 70% | +50 bonus | Encouraged attack |
+
+#### Multi-General Attacks (`identifyTargets()`)
+
+When identifying attack targets, the system:
+1. Uses heat map data (`ourForce1Turn`) to get total force that can reach target
+2. Estimates unit breakdown proportionally based on player's army composition
+3. Calculates combined win probability
+
+**Target Filtering:**
+- < 50% combined win probability → Target is **not added** to attack list
+- ≥ 50% → Target is added, allowing multiple generals to be assigned
+
+**Score Adjustments:**
+| Win Probability | Score Adjustment |
+|-----------------|------------------|
+| ≥ 80% | +80 bonus |
+| ≥ 70% | +40 bonus |
+| < 60% | -30 penalty |
+
+### How Multi-General Attacks Work
+
+The system allows coordinated multi-general attacks through this flow:
+
+1. **Target Identification Phase** (`identifyTargets`):
+   - Calculate max combined force that can reach each enemy territory
+   - Only add territory as "Attack" target if combined force gives ≥50% win
+
+2. **Movement Planning Phase** (`planMovement`):
+   - Multiple generals can be assigned to the same validated target
+   - Troops are allocated proportionally based on target priority
+
+3. **Individual Move Scoring** (`scoreMove`):
+   - Each general's move is still scored individually
+   - Low win probability attacks get heavy penalties
+   - But since target was already validated at planning level, coordinated attacks proceed
+
+### Example Scenario
+
+**Enemy has 4 infantry at Territory X**
+
+- General A has 2 infantry → ~30% win probability (too low alone)
+- General B has 3 infantry → ~45% win probability (too low alone)
+- Combined: 5 infantry vs 4 → ~65% win probability (valid attack)
+
+Result: Territory X is added as an Attack target, and both generals can be assigned to it.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ai/aidecisionmaker.h` | Added `calculateAttackWinProbability()` declaration |
+| `ai/aidecisionmaker.cpp` | Added `#include "combatsimulator.h"`, implemented win probability helper, modified `scoreMove()` and `identifyTargets()` |

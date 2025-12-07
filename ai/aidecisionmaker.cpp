@@ -1,4 +1,5 @@
 #include "aidecisionmaker.h"
+#include "combatsimulator.h"
 #include "../gamepiece.h"
 #include "../player.h"
 #include "../mapgraph.h"
@@ -532,6 +533,63 @@ ScoredMove AIDecisionMaker::scoreMove(GamePiece *leader,
             .arg(currentEnemyTroops)
             .arg(forceBonus >= 0 ? "+" : "")
             .arg(forceBonus);
+
+        // === WIN PROBABILITY CHECK ===
+        // For attacks on defended territories, calculate actual win probability
+        // using Monte Carlo simulation. Reject attacks with <50% win chance.
+        if (!weOwnIt && currentEnemyTroops > 0 && move.troopsCanBring > 0) {
+            // Count our troops by type from the leader's legion
+            int ourInfantry = 0, ourCavalry = 0, ourCatapults = 0;
+
+            QList<int> legionIds;
+            if (leader->getType() == GamePiece::Type::Caesar) {
+                legionIds = static_cast<CaesarPiece*>(leader)->getLegion();
+            } else if (leader->getType() == GamePiece::Type::General) {
+                legionIds = static_cast<GeneralPiece*>(leader)->getLegion();
+            }
+
+            for (InfantryPiece *inf : player->getInfantry()) {
+                if (legionIds.contains(inf->getUniqueId())) {
+                    ourInfantry++;
+                }
+            }
+            for (CavalryPiece *cav : player->getCavalry()) {
+                if (legionIds.contains(cav->getUniqueId())) {
+                    ourCavalry++;
+                }
+            }
+            for (CatapultPiece *cat : player->getCatapults()) {
+                if (legionIds.contains(cat->getUniqueId())) {
+                    ourCatapults++;
+                }
+            }
+
+            // Calculate win probability
+            double winProb = calculateAttackWinProbability(
+                ourInfantry, ourCavalry, ourCatapults,
+                destination, player, allPlayers);
+
+            // Apply penalty or rejection based on win probability
+            if (winProb < 0.50) {
+                // Win probability too low - heavy penalty to discourage this attack
+                // Use a very large penalty to effectively invalidate the move
+                int winProbPenalty = -500;
+                move.score += winProbPenalty;
+                move.reason += QString(" | LOW WIN PROB (%1%): %2")
+                    .arg(static_cast<int>(winProb * 100)).arg(winProbPenalty);
+                qDebug() << "Discouraging attack on" << destination
+                         << "- win probability" << QString::number(winProb * 100, 'f', 1) << "% < 50%";
+            } else if (winProb >= 0.70) {
+                // High win probability - bonus
+                int winProbBonus = 50;
+                move.score += winProbBonus;
+                move.reason += QString(" | GOOD ODDS (%1%): +%2")
+                    .arg(static_cast<int>(winProb * 100)).arg(winProbBonus);
+            } else {
+                // 50-70% - acceptable but no bonus
+                move.reason += QString(" | Win prob: %1%").arg(static_cast<int>(winProb * 100));
+            }
+        }
     }
 
     // Bonus for high-value targets (10-value territories)
@@ -1992,26 +2050,83 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
                 // ATTACK: Has defenders - requires troops WITH ADVANTAGE
                 // Don't attack with equal force - that's too risky!
                 // Require at least +2 troops OR 50% more force (whichever is greater)
-                target.type = "Attack";
-                target.score = 150 + (value * 15);  // Base 150 + 15 per value point
 
-                int minAdvantage = qMax(2, (target.enemyTroops + 1) / 2);  // At least +2 or +50%
-                target.troopsNeeded = target.enemyTroops + minAdvantage;
-                target.requiresTroops = true;
+                // === WIN PROBABILITY CHECK FOR MULTI-GENERAL ATTACKS ===
+                // Before adding as attack target, verify that our combined force
+                // projection can achieve ≥50% win probability.
+                // This allows multiple generals to be assigned to the same target.
+                int ourMaxForce = ourForce1Turn.value(territory, 0);
 
-                // Big bonus for enemy cities
-                if (hasEnemyCity) {
-                    target.score += 100;
+                // Count our troops by type that can reach this territory (from all generals)
+                // For simplicity, assume proportional breakdown based on player's army composition
+                int totalPlayerInfantry = player->getInfantry().size();
+                int totalPlayerCavalry = player->getCavalry().size();
+                int totalPlayerCatapults = player->getCatapults().size();
+                int totalPlayerTroops = totalPlayerInfantry + totalPlayerCavalry + totalPlayerCatapults;
+
+                int attackerInfantry = 0, attackerCavalry = 0, attackerCatapults = 0;
+                if (totalPlayerTroops > 0 && ourMaxForce > 0) {
+                    // Distribute our max force proportionally based on army composition
+                    double infantryRatio = static_cast<double>(totalPlayerInfantry) / totalPlayerTroops;
+                    double cavalryRatio = static_cast<double>(totalPlayerCavalry) / totalPlayerTroops;
+                    double catapultRatio = static_cast<double>(totalPlayerCatapults) / totalPlayerTroops;
+
+                    attackerInfantry = static_cast<int>(ourMaxForce * infantryRatio + 0.5);
+                    attackerCavalry = static_cast<int>(ourMaxForce * cavalryRatio + 0.5);
+                    attackerCatapults = static_cast<int>(ourMaxForce * catapultRatio + 0.5);
+
+                    // Ensure total matches ourMaxForce
+                    int allocated = attackerInfantry + attackerCavalry + attackerCatapults;
+                    if (allocated < ourMaxForce) {
+                        attackerInfantry += (ourMaxForce - allocated);
+                    }
                 }
 
-                // Penalty based on enemy reinforcement capability (2-turn threat)
-                if (threat2Turn > threat1Turn) {
-                    // Enemy can bring MORE troops in 2 turns - risky attack
-                    int penalty = (threat2Turn - threat1Turn) * 10;
-                    target.score -= penalty;
-                }
+                // Calculate win probability with our max combined force
+                double winProb = calculateAttackWinProbability(
+                    attackerInfantry, attackerCavalry, attackerCatapults,
+                    territory, player, allPlayers);
 
-                targets.append(target);
+                // Only add as attack target if we have ≥50% win probability
+                if (winProb < 0.50) {
+                    qDebug() << "Skipping attack target" << territory
+                             << "- combined win probability" << QString::number(winProb * 100, 'f', 1)
+                             << "% < 50% (our force:" << ourMaxForce << "vs enemy:" << target.enemyTroops << ")";
+                    // Don't add this as a target - not worth attacking
+                } else {
+                    target.type = "Attack";
+                    target.score = 150 + (value * 15);  // Base 150 + 15 per value point
+
+                    int minAdvantage = qMax(2, (target.enemyTroops + 1) / 2);  // At least +2 or +50%
+                    target.troopsNeeded = target.enemyTroops + minAdvantage;
+                    target.requiresTroops = true;
+
+                    // Big bonus for enemy cities
+                    if (hasEnemyCity) {
+                        target.score += 100;
+                    }
+
+                    // Bonus/penalty based on win probability
+                    if (winProb >= 0.80) {
+                        target.score += 80;  // Very high confidence attack
+                    } else if (winProb >= 0.70) {
+                        target.score += 40;  // Good odds
+                    } else if (winProb < 0.60) {
+                        target.score -= 30;  // Marginal odds - slight penalty
+                    }
+
+                    // Penalty based on enemy reinforcement capability (2-turn threat)
+                    if (threat2Turn > threat1Turn) {
+                        // Enemy can bring MORE troops in 2 turns - risky attack
+                        int penalty = (threat2Turn - threat1Turn) * 10;
+                        target.score -= penalty;
+                    }
+
+                    qDebug() << "Attack target" << territory << "- win probability"
+                             << QString::number(winProb * 100, 'f', 1) << "%, score:" << target.score;
+
+                    targets.append(target);
+                }
             }
         }
     }
@@ -2023,6 +2138,79 @@ QList<AIDecisionMaker::TargetTerritory> AIDecisionMaker::identifyTargets(
               });
 
     return targets;
+}
+
+double AIDecisionMaker::calculateAttackWinProbability(
+    int attackerInfantry, int attackerCavalry, int attackerCatapults,
+    const QString &territory,
+    Player *player,
+    const QList<Player*> &allPlayers)
+{
+    // Count defender's forces by unit type
+    int defenderInfantry = 0;
+    int defenderCavalry = 0;
+    int defenderCatapults = 0;
+    bool defenderHasFortifiedCity = false;
+
+    // Find the defending player and their units
+    for (Player *other : allPlayers) {
+        if (other == player) continue;
+
+        for (InfantryPiece *inf : other->getInfantry()) {
+            if (inf->getTerritoryName() == territory) {
+                defenderInfantry++;
+            }
+        }
+        for (CavalryPiece *cav : other->getCavalry()) {
+            if (cav->getTerritoryName() == territory) {
+                defenderCavalry++;
+            }
+        }
+        for (CatapultPiece *cat : other->getCatapults()) {
+            if (cat->getTerritoryName() == territory) {
+                defenderCatapults++;
+            }
+        }
+
+        // Check for fortified city
+        City *city = other->getCityAtTerritory(territory);
+        if (city && city->isFortified()) {
+            defenderHasFortifiedCity = true;
+        }
+    }
+
+    // If no enemy troops, 100% win (just capturing a general or empty territory)
+    int totalDefenders = defenderInfantry + defenderCavalry + defenderCatapults;
+    if (totalDefenders == 0) {
+        return 1.0;
+    }
+
+    // Build army compositions for CombatSimulator
+    ArmyComposition attacker;
+    attacker.infantry = attackerInfantry;
+    attacker.cavalry = attackerCavalry;
+    attacker.catapults = attackerCatapults;
+
+    ArmyComposition defender;
+    defender.infantry = defenderInfantry;
+    defender.cavalry = defenderCavalry;
+    defender.catapults = defenderCatapults;
+
+    CombatTerrain terrain;
+    terrain.defenderInFortifiedCity = defenderHasFortifiedCity;
+
+    // Run Monte Carlo simulation
+    CombatSimulator simulator;
+    simulator.initializeBattle(attacker, defender, terrain);
+    CombatProbability prob = simulator.calculateWinProbability(500);  // 500 simulations for speed
+
+    qDebug() << "Win probability for attacking" << territory
+             << "(" << attackerInfantry << "I," << attackerCavalry << "C," << attackerCatapults << "Cat)"
+             << "vs (" << defenderInfantry << "I," << defenderCavalry << "C," << defenderCatapults << "Cat)"
+             << (defenderHasFortifiedCity ? "FORT" : "")
+             << "=" << QString::number(prob.attackerWinChance * 100, 'f', 1) << "%";
+
+    return prob.attackerWinChance;
 }
 
 int AIDecisionMaker::countAvailableTroopsAt(const QString &territory, Player *player)
