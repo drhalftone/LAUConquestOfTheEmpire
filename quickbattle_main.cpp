@@ -14,7 +14,7 @@
 #include "mapwidget.h"
 #include "building.h"
 #include "aiplayer.h"
-#include "ai/combatsimulator.h"
+#include "combatsimulator.h"
 
 // Create game pieces from purchase result
 void createPiecesFromPurchase(Player *player, const PurchaseResult &result, const QString &territory)

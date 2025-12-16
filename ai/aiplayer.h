@@ -8,7 +8,7 @@
 #include <functional>
 #include "gamepiece.h"
 #include "common.h"  // For MapWidget type alias
-#include "ai/aidecisionmaker.h"
+#include "aidecisionmaker.h"
 
 class Player;
 class PlayerInfoWidget;

@@ -7,7 +7,7 @@
 #include "gamepiece.h"
 #include "building.h"
 #include "aiplayer.h"
-#include "ai/reachabilitycalculator.h"
+#include "reachabilitycalculator.h"
 #include "gamelog.h"
 #include <QScrollArea>
 #include <QRegularExpression>

@@ -4,7 +4,7 @@
 #include "gamepiece.h"
 #include "playerinfowidget.h"
 #include "moveenumeratorwidget.h"
-#include "ai/moveenumerator.h"
+#include "moveenumerator.h"
 
 #include <QDebug>
 #include <QMenu>

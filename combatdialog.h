@@ -19,7 +19,7 @@
 #include "mapwidget.h"
 #endif
 #include "laurollingdiewidget.h"
-#include "ai/combatsimulator.h"
+#include "combatsimulator.h"
 
 class AIPlayer;
 

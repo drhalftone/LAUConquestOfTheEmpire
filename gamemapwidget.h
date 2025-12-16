@@ -18,7 +18,7 @@
 
 #include "common.h"
 #include "mapgraph.h"
-#include "ai/reachabilitycalculator.h"
+#include "reachabilitycalculator.h"
 
 // Forward declarations
 class Player;

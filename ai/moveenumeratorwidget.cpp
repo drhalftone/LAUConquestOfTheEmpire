@@ -2,7 +2,7 @@
 #include "player.h"
 #include "mapgraph.h"
 #include "gamepiece.h"
-#include "ai/moveenumerator.h"
+#include "moveenumerator.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>

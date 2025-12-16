@@ -2197,7 +2197,7 @@ double AIDecisionMaker::calculateAttackWinProbability(
     defender.catapults = defenderCatapults;
 
     CombatTerrain terrain;
-    terrain.defenderInFortifiedCity = defenderHasFortifiedCity;
+    terrain.defenderHasFortifiedCity = defenderHasFortifiedCity;
 
     // Run Monte Carlo simulation
     CombatSimulator simulator;

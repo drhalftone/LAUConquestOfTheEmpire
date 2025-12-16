@@ -214,6 +214,9 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     // Initialize button states - only defender's troops are clickable
     setAttackingButtonsEnabled(false);  // Disable attacker's troops (not used in combat)
     setDefendingButtonsEnabled(true);   // Enable defender's troops for attacker to target
+
+    // Zoom map to combat territory
+    m_mapWidget->zoomToTerritory(m_combatTerritoryName);
 }
 
 void CombatDialog::showCombatResult(const QString &title, const QString &message)
@@ -998,6 +1001,7 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
                 m_defendingPlayer->removeCatapult(static_cast<CatapultPiece*>(defendingPiece));
             }
             defendingPiece->deleteLater();
+            m_mapWidget->update();  // Update map to show troop removed
             if (!galleySerial.isEmpty()) {
                 updateGalleyPassengerStatus(galleySerial, false);
             }
@@ -1053,6 +1057,7 @@ void CombatDialog::onRollComplete(int dieValue, QObject *senderObj)
                 m_attackingPlayer->removeCatapult(static_cast<CatapultPiece*>(attackingPiece));
             }
             attackingPiece->deleteLater();
+            m_mapWidget->update();  // Update map to show troop removed
             if (!galleySerial.isEmpty()) {
                 updateGalleyPassengerStatus(galleySerial, true);
             }
@@ -2068,6 +2073,10 @@ void CombatDialog::done(int result)
     if (m_rollingDie) {
         m_rollingDie->hide();
     }
+
+    // Reset map view to normal zoom
+    m_mapWidget->resetView();
+
     QDialog::done(result);
 }
 

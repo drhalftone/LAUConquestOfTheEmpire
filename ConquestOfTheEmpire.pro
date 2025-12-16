@@ -4,6 +4,8 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 CONFIG += c++17
 
+INCLUDEPATH += $$PWD/AI
+
 # You can make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
@@ -21,11 +23,11 @@ SOURCES += \
     player.cpp \
     building.cpp \
     gamelog.cpp \
-    ai/reachabilitycalculator.cpp \
-    ai/aidecisionmaker.cpp \
-    ai/moveenumerator.cpp \
-    ai/killshotanalyzer.cpp \
-    ai/combatsimulator.cpp
+    AI/reachabilitycalculator.cpp \
+    AI/aidecisionmaker.cpp \
+    AI/moveenumerator.cpp \
+    AI/killshotanalyzer.cpp \
+    AI/combatsimulator.cpp
 
 # Common headers (always included)
 HEADERS += \
@@ -35,11 +37,11 @@ HEADERS += \
     building.h \
     common.h \
     gamelog.h \
-    ai/reachabilitycalculator.h \
-    ai/aidecisionmaker.h \
-    ai/moveenumerator.h \
-    ai/killshotanalyzer.h \
-    ai/combatsimulator.h
+    AI/reachabilitycalculator.h \
+    AI/aidecisionmaker.h \
+    AI/moveenumerator.h \
+    AI/killshotanalyzer.h \
+    AI/combatsimulator.h
 
 # Conditional compilation based on map type
 contains(DEFINES, USE_OPENGL_MAP) {
@@ -52,10 +54,10 @@ contains(DEFINES, USE_OPENGL_MAP) {
         purchasedialog.cpp \
         citydestructiondialog.cpp \
         laurollingdiewidget.cpp \
-        aiplayer.cpp \
-        aidebugwidget.cpp \
-        aidebugcontainer.cpp \
-        moveenumeratorwidget.cpp
+        AI/aiplayer.cpp \
+        AI/aidebugwidget.cpp \
+        AI/aidebugcontainer.cpp \
+        AI/moveenumeratorwidget.cpp
     HEADERS += \
         gamemapwidget.h \
         playerinfowidget.h \
@@ -64,10 +66,10 @@ contains(DEFINES, USE_OPENGL_MAP) {
         purchasedialog.h \
         citydestructiondialog.h \
         laurollingdiewidget.h \
-        aiplayer.h \
-        aidebugwidget.h \
-        aidebugcontainer.h \
-        moveenumeratorwidget.h
+        AI/aiplayer.h \
+        AI/aidebugwidget.h \
+        AI/aidebugcontainer.h \
+        AI/moveenumeratorwidget.h
 } else {
     message("Using grid-based map widget")
     SOURCES += \
@@ -80,9 +82,9 @@ contains(DEFINES, USE_OPENGL_MAP) {
         combatdialog.cpp \
         citydestructiondialog.cpp \
         laurollingdiewidget.cpp \
-        aiplayer.cpp \
-        aidebugwidget.cpp \
-        aidebugcontainer.cpp
+        AI/aiplayer.cpp \
+        AI/aidebugwidget.cpp \
+        AI/aidebugcontainer.cpp
 
     HEADERS += \
         mapwidget.h \
@@ -94,9 +96,9 @@ contains(DEFINES, USE_OPENGL_MAP) {
         combatdialog.h \
         citydestructiondialog.h \
         laurollingdiewidget.h \
-        aiplayer.h \
-        aidebugwidget.h \
-        aidebugcontainer.h
+        AI/aiplayer.h \
+        AI/aidebugwidget.h \
+        AI/aidebugcontainer.h
 }
 
 RESOURCES += \
