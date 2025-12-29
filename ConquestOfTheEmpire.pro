@@ -5,6 +5,7 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 CONFIG += c++17
 
 INCLUDEPATH += $$PWD/AI
+INCLUDEPATH += $$PWD/AI/gnn
 
 # You can make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
@@ -27,7 +28,10 @@ SOURCES += \
     AI/aidecisionmaker.cpp \
     AI/moveenumerator.cpp \
     AI/killshotanalyzer.cpp \
-    AI/combatsimulator.cpp
+    AI/combatsimulator.cpp \
+    AI/gnn/gamestatesnapshot.cpp \
+    AI/gnn/gnnfeatureextractor.cpp \
+    AI/gnn/trainingdatalogger.cpp
 
 # Common headers (always included)
 HEADERS += \
@@ -41,7 +45,10 @@ HEADERS += \
     AI/aidecisionmaker.h \
     AI/moveenumerator.h \
     AI/killshotanalyzer.h \
-    AI/combatsimulator.h
+    AI/combatsimulator.h \
+    AI/gnn/gamestatesnapshot.h \
+    AI/gnn/gnnfeatureextractor.h \
+    AI/gnn/trainingdatalogger.h
 
 # Conditional compilation based on map type
 contains(DEFINES, USE_OPENGL_MAP) {

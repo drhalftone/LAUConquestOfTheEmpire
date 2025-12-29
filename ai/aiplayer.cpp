@@ -11,11 +11,20 @@
 #include "purchasedialog.h"
 #include "building.h"
 #include "gamelog.h"
+#include "gnn/trainingdatalogger.h"
+#include "gnn/gamestatesnapshot.h"
+#include "reachabilitycalculator.h"
 #include <QDebug>
 #include <QTime>
 #include <QTimer>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QDateTime>
+
+// Static member initialization
+TrainingDataLogger* AIPlayer::s_trainingLogger = nullptr;
+bool AIPlayer::s_trainingEnabled = false;
+int AIPlayer::s_turnCounter = 0;
 
 AIPlayer::AIPlayer(Player *player,
                    PlayerInfoWidget *infoWidget,
@@ -36,6 +45,74 @@ AIPlayer::AIPlayer(Player *player,
 AIPlayer::~AIPlayer()
 {
     log("AIPlayer destroyed");
+}
+
+// ============================================================================
+// Static Training Data Methods
+// ============================================================================
+
+void AIPlayer::setTrainingDataEnabled(bool enabled)
+{
+    s_trainingEnabled = enabled;
+    if (enabled && !s_trainingLogger) {
+        s_trainingLogger = new TrainingDataLogger();
+        s_trainingLogger->setOutputDirectory("training_data");
+    }
+    if (s_trainingLogger) {
+        s_trainingLogger->setEnabled(enabled);
+    }
+    qDebug() << "Training data collection:" << (enabled ? "ENABLED" : "DISABLED");
+}
+
+bool AIPlayer::isTrainingDataEnabled()
+{
+    return s_trainingEnabled;
+}
+
+TrainingDataLogger* AIPlayer::getTrainingDataLogger()
+{
+    return s_trainingLogger;
+}
+
+void AIPlayer::startTrainingSession(const QString &gameId, const QList<Player*> &players)
+{
+    if (!s_trainingEnabled || !s_trainingLogger) {
+        return;
+    }
+
+    QList<QChar> playerIds;
+    for (Player *p : players) {
+        playerIds.append(p->getId());
+    }
+
+    s_trainingLogger->startGame(gameId, playerIds);
+    s_turnCounter = 0;
+    qDebug() << "Started training session:" << gameId;
+}
+
+void AIPlayer::endTrainingSession(QChar winnerId)
+{
+    if (!s_trainingLogger) {
+        return;
+    }
+
+    s_trainingLogger->endGame(winnerId);
+    qDebug() << "Ended training session, winner:" << winnerId;
+}
+
+void AIPlayer::logCombatOutcome(const QString &territory,
+                                 QChar attackerId,
+                                 QChar defenderId,
+                                 bool attackerWon,
+                                 int attackerCasualties,
+                                 int defenderCasualties)
+{
+    if (!s_trainingEnabled || !s_trainingLogger) {
+        return;
+    }
+
+    s_trainingLogger->logCombatOutcome(territory, attackerId, defenderId,
+                                        attackerWon, attackerCasualties, defenderCasualties);
 }
 
 QChar AIPlayer::getPlayerId() const
@@ -186,6 +263,20 @@ void AIPlayer::executeReadingStatePhase()
         .arg(m_lastGameState.ownedTerritories.size())
         .arg(m_lastGameState.totalPieces)
         .arg(m_lastGameState.leaders.size()));
+
+    // Log training data snapshot at turn start
+    if (s_trainingEnabled && s_trainingLogger && m_mapWidget) {
+        s_turnCounter++;
+
+        // Get all players from the map widget
+        QList<Player*> allPlayers = m_mapWidget->getPlayers();
+
+        // Create a local reachability calculator for this snapshot
+        ReachabilityCalculator reachCalc;
+
+        s_trainingLogger->logSnapshot(m_player, allPlayers, m_mapWidget->getGraph(),
+                                       &reachCalc, s_turnCounter, "turn_start");
+    }
 
     // Move to movement phase
     setPhase(Phase::Movement);

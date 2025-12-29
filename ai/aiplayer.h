@@ -15,6 +15,8 @@ class PlayerInfoWidget;
 // MapWidget forward declaration removed - now in common.h as conditional type alias
 class CombatDialog;
 class PurchaseDialog;
+class TrainingDataLogger;
+class ReachabilityCalculator;
 
 // Structure for evaluating potential moves
 struct MoveEvaluation {
@@ -108,6 +110,24 @@ public slots:
 
     // Get the delay in ms for AI actions
     int getAIDelayMs() const { return m_delayMs; }
+
+    // === Training Data Collection ===
+    // Enable/disable training data logging for GNN model training
+    static void setTrainingDataEnabled(bool enabled);
+    static bool isTrainingDataEnabled();
+    static TrainingDataLogger* getTrainingDataLogger();
+
+    // Set the game ID for training data logging
+    static void startTrainingSession(const QString &gameId, const QList<Player*> &players);
+    static void endTrainingSession(QChar winnerId);
+
+    // Log a combat outcome (called from CombatDialog)
+    static void logCombatOutcome(const QString &territory,
+                                  QChar attackerId,
+                                  QChar defenderId,
+                                  bool attackerWon,
+                                  int attackerCasualties,
+                                  int defenderCasualties);
 
     // === Legion Building Logic (public for PlayerInfoWidget access) ===
     // Decides which troops a general should take when moving
@@ -232,6 +252,11 @@ private:
 
     // Pending action
     std::function<void()> m_pendingAction;
+
+    // === Static Training Data Members ===
+    static TrainingDataLogger *s_trainingLogger;
+    static bool s_trainingEnabled;
+    static int s_turnCounter;
 };
 
 #endif // AIPLAYER_H

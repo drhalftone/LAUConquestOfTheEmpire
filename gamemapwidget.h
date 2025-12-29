@@ -54,6 +54,7 @@ public:
 
     // Player management
     void setPlayers(const QList<Player*> &players);
+    const QList<Player*>& getPlayers() const { return m_players; }
     void setCurrentPlayerIndex(int index) { m_currentPlayerIndex = index; }
     int getCurrentPlayerIndex() const { return m_currentPlayerIndex; }
     void setPlayerInfoWidget(PlayerInfoWidget *widget) { m_playerInfoWidget = widget; }

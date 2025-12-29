@@ -25,6 +25,7 @@
 #include <QSet>
 #include <QInputDialog>
 #include <QSurfaceFormat>
+#include <QDateTime>
 
 // Home provinces by player count (from Conquest of the Empire Classic Rules)
 // Six provinces: Hispania, Italia, Macedonia, Numidia, Egyptus, Galatia
@@ -131,13 +132,32 @@ int main(int argc, char *argv[])
 
         numPlayers = selection.left(1).toInt();
 
+        // Ask if user wants to collect training data for GNN
+        QMessageBox trainingDataDialog;
+        trainingDataDialog.setWindowTitle("Training Data Collection");
+        trainingDataDialog.setText("Would you like to collect training data for the GNN AI?");
+        trainingDataDialog.setInformativeText("Training data will be saved to the 'training_data' folder.\n"
+                                               "This is useful for training the neural network AI.");
+        QPushButton *enableTrainingBtn = trainingDataDialog.addButton("Enable Training Data", QMessageBox::YesRole);
+        trainingDataDialog.addButton("No Thanks", QMessageBox::NoRole);
+        trainingDataDialog.exec();
+
+        bool collectTrainingData = (trainingDataDialog.clickedButton() == enableTrainingBtn);
+        if (collectTrainingData) {
+            AIPlayer::setTrainingDataEnabled(true);
+            qDebug() << "Training data collection ENABLED";
+        }
+
         QMessageBox::information(nullptr, "AI Test Mode",
             QString("Starting AI TEST MODE:\n\n"
             "- %1 AI player(s) will play automatically\n"
             "- You can watch the AI make decisions\n"
             "- Combat is ENABLED\n"
+            "- Training data collection: %2\n"
             "- Use End Turn in player widget to advance turns\n\n"
-            "Watch the AI expand and interact!").arg(numPlayers));
+            "Watch the AI expand and interact!")
+            .arg(numPlayers)
+            .arg(collectTrainingData ? "ON" : "OFF"));
 
         qDebug() << "Starting AI TEST mode with" << numPlayers << "AI players";
     } else if (startupDialog.clickedButton() == loadGameButton) {
@@ -545,6 +565,12 @@ int main(int argc, char *argv[])
 
         // Show the single container with all AI tabs
         debugContainer->show();
+
+        // Start training data session if enabled
+        if (AIPlayer::isTrainingDataEnabled()) {
+            QString gameId = QString("game_%1").arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+            AIPlayer::startTrainingSession(gameId, players);
+        }
     }
 
     // When loading a saved game, restore AI controllers based on saved isAI flag
@@ -590,6 +616,12 @@ int main(int argc, char *argv[])
 
     // End the game log
     GAME_LOG.endGame();
+
+    // End training data session if it was enabled
+    if (AIPlayer::isTrainingDataEnabled()) {
+        // TODO: Determine winner from game state
+        AIPlayer::endTrainingSession('\0');  // '\0' = no winner determined
+    }
 
     // Clean up
     qDeleteAll(aiPlayers);
