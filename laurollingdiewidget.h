@@ -59,6 +59,9 @@ public:
     // Check if currently rolling
     bool rolling() const { return isRolling; }
 
+    // Set fast mode (minimal animation, basically shows final result immediately)
+    void setFastMode(bool fast) { maxRolls = fast ? 1 : 30; }
+
 public slots:
     // Start rolling - captures sender() automatically to return with result
     // Shows the widget if hidden

@@ -31,6 +31,10 @@ CombatDialog::CombatDialog(Player *attackingPlayer,
     // Create rolling die widget early - needed before buttons are created
     m_rollingDie = new LAURollingDieWidget(1, this);
     m_rollingDie->hide();
+    // Use fast mode when AI is playing (shows result immediately)
+    if (m_attackingPlayer->isAI() || m_defendingPlayer->isAI()) {
+        m_rollingDie->setFastMode(true);
+    }
     connect(m_rollingDie, &LAURollingDieWidget::rollComplete, this, &CombatDialog::onRollComplete);
 
     // Get all pieces at combat territory
